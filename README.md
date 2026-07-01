@@ -140,14 +140,14 @@ Administrators can:
 
 ## 🛠️ Tech Stack
 
-- **Frontend (Mobile):** React Native, Expo
-- **Backend:** Supabase (PostgreSQL)
+- **Frontend (Mobile):** React Native (Expo)
+- **Backend:** Supabase (PostgreSQL + Row-Level Security)
 - **Authentication:** Supabase Auth
-- **Storage:** Supabase Storage
+- **Storage:** Supabase Storage (complaint images and evidence)
+- **AI/ML:** NLP-based complaint classification, prioritization, and duplicate detection
 - **Automation:** n8n AI Agent
-- **Artificial Intelligence:** NLP & Computer Vision
-- **Geospatial Services:** Geotagging & Cluster Detection
-- **Notifications:** Push Notifications
+- **Maps & Geolocation:** MapTiler, Expo Location, Geotagging
+- **Notifications:** Firebase Cloud Messaging (FCM)
 
 ---
 
