@@ -8,7 +8,7 @@ CitiSense is an AI-powered complaint management platform designed to help Local 
 
 This project aims to address common challenges faced by Local Government Units in handling citizen complaints, including delayed responses, misclassified reports, lack of prioritization, and limited monitoring capabilities.
 
-### Key Objectives
+### Key Features
 
 1. **Automated Complaint Classification**
    - Categorize complaints into appropriate departments using AI and NLP.
