@@ -279,6 +279,9 @@ export default function DepartmentHeadNotification() {
 
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
+  const notificationChannelRef = useRef(null);
+  const loadNotificationsRef = useRef(null);
+  const reloadUnreadRef = useRef(null);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -356,6 +359,14 @@ export default function DepartmentHeadNotification() {
   }, []);
 
   useEffect(() => {
+    loadNotificationsRef.current = loadNotifications;
+  }, [loadNotifications]);
+
+  useEffect(() => {
+    reloadUnreadRef.current = reloadUnreadNotificationCount;
+  }, [reloadUnreadNotificationCount]);
+
+  useEffect(() => {
     loadNotifications(true);
   }, [loadNotifications]);
 
@@ -369,29 +380,61 @@ export default function DepartmentHeadNotification() {
   useEffect(() => {
     if (!currentDepartmentHeadId) return;
 
-    const channel = supabase
-      .channel(`moderator-notifications-ui-${currentDepartmentHeadId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "moderator_notifications",
-          filter: `moderator_id=eq.${currentDepartmentHeadId}`,
-        },
-        () => {
-          loadNotifications(false);
-          reloadUnreadNotificationCount?.();
-        }
-      )
-      .subscribe((status) => {
-        console.log("Department head notifications realtime status:", status);
-      });
+    let cancelled = false;
+
+    const setupNotificationChannel = async () => {
+      if (notificationChannelRef.current) {
+        await supabase.removeChannel(notificationChannelRef.current);
+        notificationChannelRef.current = null;
+      }
+
+      const staleChannel = supabase
+        .getChannels()
+        .find(
+          (item) =>
+            item.topic ===
+            `realtime:moderator-notifications-ui-${currentDepartmentHeadId}`
+        );
+
+      if (staleChannel) {
+        await supabase.removeChannel(staleChannel);
+      }
+
+      if (cancelled) return;
+
+      const channel = supabase
+        .channel(`moderator-notifications-ui-${currentDepartmentHeadId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "moderator_notifications",
+            filter: `moderator_id=eq.${currentDepartmentHeadId}`,
+          },
+          () => {
+            loadNotificationsRef.current?.(false);
+            reloadUnreadRef.current?.();
+          }
+        )
+        .subscribe((status) => {
+          console.log("Department head notifications realtime status:", status);
+        });
+
+      notificationChannelRef.current = channel;
+    };
+
+    setupNotificationChannel();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+
+      if (notificationChannelRef.current) {
+        supabase.removeChannel(notificationChannelRef.current);
+        notificationChannelRef.current = null;
+      }
     };
-  }, [currentDepartmentHeadId, loadNotifications, reloadUnreadNotificationCount]);
+  }, [currentDepartmentHeadId]);
 
   const filteredNotifications = useMemo(() => {
     if (selectedFilter === "Unread") {
