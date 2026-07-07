@@ -42,7 +42,17 @@ import { isInsideBogoCity } from "../../lib/bogoCityBounds";
 import { HEADER_TOP_SPACING } from "../../constants/screenLayout";
 import ComplaintMapView from "../../components/ComplaintMapView";
 import { notifyDepartmentHeadsNewAssignment } from "../../lib/departmentHeadNotificationService";
+import { notifyCitizenDuplicateSubmission } from "../../lib/citizenNotificationService";
 import { isLocationUsageAllowed } from "../../lib/locationPreferences";
+import {
+  analyzeComplaint,
+  getDuplicateWarningMessage,
+  shouldWarnAboutDuplicate,
+} from "../../lib/complaintAnalysisService";
+import {
+  getComplaintRejectionMessage,
+  isComplaintAnalysisRejected,
+} from "../../lib/complaintContentModeration";
 import { supabase } from "../../lib/supabase";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -834,6 +844,7 @@ export default function CitizenSubmit() {
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [isPreparingPhotos, setIsPreparingPhotos] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [screenStartTime] = useState(new Date());
   const [currentDate, setCurrentDate] = useState(new Date());
   const [complaintCapturedAt, setComplaintCapturedAt] = useState(null);
@@ -1504,8 +1515,68 @@ export default function CitizenSubmit() {
     });
   };
 
+  const confirmDuplicateSubmission = (message) =>
+    new Promise((resolve) => {
+      Alert.alert(
+        "Similar Report Found",
+        message,
+        [
+          { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+          { text: "Submit Anyway", onPress: () => resolve(true) },
+        ],
+        { cancelable: false }
+      );
+    });
+
+  const navigateToAnalysisResult = ({
+    complaintId,
+    analysis,
+    photoUploadFailed,
+  }) => {
+    const firstPhotoUri = selectedPhotos[0]?.uri || "";
+    const duplicateStatus = shouldWarnAboutDuplicate(analysis)
+      ? "duplicate"
+      : "clear";
+
+    router.replace({
+      pathname: "/citizen/aiAnalysisResult",
+      params: {
+        complaintId: String(complaintId),
+        photoUri: firstPhotoUri,
+        complaintTitle: complaintTitle.trim(),
+        complaintDescription: complaintDescription.trim(),
+        submittedDateTime: `${formatDateTime(new Date())} ${formatTime(new Date())}`,
+        locationText,
+        complaintType: analysis.complaint_type || (analysis.is_emergency ? "Emergency" : "Non-Emergency"),
+        isEmergency: analysis.is_emergency ? "true" : "false",
+        category: analysis.category,
+        assignedOffice: analysis.assignedOffice,
+        priority: analysis.priority,
+        urgencyReason: analysis.urgency_analysis?.urgency_reason || analysis.reasoning || "",
+        severityScore: String(analysis.urgency_analysis?.severity_score ?? ""),
+        clusterStatus: analysis.cluster?.is_cluster ? "cluster" : "none",
+        clusterSummary: analysis.cluster?.summary || analysis.cluster_analysis?.priority_impact || "",
+        nearbyReportCount: String(analysis.cluster?.similar_category_count ?? 0),
+        duplicateStatus,
+        duplicateReason: analysis.duplicate?.reason || "",
+        imageRelevance:
+          analysis.image_analysis?.is_relevant === true
+            ? "relevant"
+            : analysis.image_analysis?.is_relevant === false
+              ? "not_relevant"
+              : "unknown",
+        imageSummary: analysis.image_analysis?.summary || "",
+        detectedSubject: analysis.image_analysis?.detected_subject || "",
+        mismatchReason: analysis.image_analysis?.mismatch_reason || "",
+        aiReasoning: analysis.reasoning || "",
+        aiSource: analysis.source || "gemini",
+        photoUploadFailed: photoUploadFailed ? "true" : "false",
+      },
+    });
+  };
+
   const handleSubmitComplaint = async () => {
-    if (isSubmitting || isSubmittingRef.current) return;
+    if (isSubmitting || isSubmittingRef.current || isAnalyzing) return;
 
     if (!complaintTitle || !complaintDescription || !contactNumber) {
       Alert.alert(
@@ -1564,6 +1635,7 @@ export default function CitizenSubmit() {
 
     if (isMountedRef.current) {
       setIsSubmitting(true);
+      setIsAnalyzing(true);
     }
 
     try {
@@ -1580,19 +1652,49 @@ export default function CitizenSubmit() {
         return;
       }
 
-      const finalComplaintType =
-        complaintType === "emergency" ? "Emergency" : "Non-Emergency";
+      const analysis = await analyzeComplaint({
+        title: complaintTitle.trim(),
+        description: complaintDescription.trim(),
+        locationText,
+        latitude: selectedLocation.latitude,
+        longitude: selectedLocation.longitude,
+        isEmergency: complaintType === "emergency",
+        photoUris: selectedPhotos.map((photo) => photo.uri).filter(Boolean),
+        userId: user.id,
+      });
 
-      const detectedCategory = detectComplaintCategory(
-        complaintTitle,
-        complaintDescription
-      );
+      if (isComplaintAnalysisRejected(analysis)) {
+        Alert.alert(
+          "Complaint Not Accepted",
+          getComplaintRejectionMessage(analysis)
+        );
+        return;
+      }
 
-      const assignedOffice = getAssignedOffice(detectedCategory);
+      let submittedDespiteDuplicate = false;
 
+      if (shouldWarnAboutDuplicate(analysis)) {
+        const shouldContinue = await confirmDuplicateSubmission(
+          getDuplicateWarningMessage(analysis)
+        );
+
+        if (!shouldContinue) {
+          return;
+        }
+
+        submittedDespiteDuplicate = true;
+      }
+
+      const detectedCategory = analysis.category;
+      const assignedOffice = analysis.assignedOffice;
       const defaultStatus = "Pending";
+      const resolvedEmergency = Boolean(analysis.is_emergency);
+      const finalComplaintType =
+        analysis.complaint_type ||
+        (resolvedEmergency ? "Emergency" : "Non-Emergency");
       const defaultPriority =
-        complaintType === "emergency" ? "Critical" : "Normal";
+        analysis.priority ||
+        (resolvedEmergency ? "Critical" : "Normal");
 
       const submitStamp = new Date();
       const finalSubmittedDateTime = `${formatDateTime(submitStamp)} ${formatTime(
@@ -1605,7 +1707,7 @@ export default function CitizenSubmit() {
         description: complaintDescription.trim(),
         contact_number: cleanContactNumber,
         complaint_type: finalComplaintType,
-        is_emergency: complaintType === "emergency",
+        is_emergency: resolvedEmergency,
         status: defaultStatus,
         priority: defaultPriority,
         category: detectedCategory,
@@ -1662,16 +1764,21 @@ export default function CitizenSubmit() {
         citizenName,
       });
 
-      const successMessage = photoUploadFailed
-        ? "Your complaint was saved, but one or more photos could not be uploaded. You can add photos later from My Complaints."
-        : "Your complaint was saved successfully and will now appear in My Complaints.";
+      if (submittedDespiteDuplicate) {
+        await notifyCitizenDuplicateSubmission({
+          citizenId: user.id,
+          complaintId: insertedComplaint.id,
+          shortId: insertedComplaint.id,
+          duplicateReason: analysis.duplicate?.reason,
+          similarComplaintId: analysis.duplicate?.similar_complaint_id,
+        });
+      }
 
-      Alert.alert("Complaint Submitted", successMessage, [
-        {
-          text: "Track My Complaint",
-          onPress: () => navigateToComplaintDetails(insertedComplaint.id),
-        },
-      ]);
+      navigateToAnalysisResult({
+        complaintId: insertedComplaint.id,
+        analysis,
+        photoUploadFailed,
+      });
     } catch (error) {
       console.log("Submit complaint error:", error);
       Alert.alert(
@@ -1683,6 +1790,7 @@ export default function CitizenSubmit() {
 
       if (isMountedRef.current) {
         setIsSubmitting(false);
+        setIsAnalyzing(false);
       }
     }
   };
@@ -2142,19 +2250,23 @@ export default function CitizenSubmit() {
               activeOpacity={0.75}
               style={[
                 styles.inlineSubmitButton,
-                isSubmitting && styles.inlineSubmitButtonDisabled,
+                (isSubmitting || isAnalyzing) && styles.inlineSubmitButtonDisabled,
               ]}
               onPress={handleSubmitComplaint}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isAnalyzing}
             >
-              {isSubmitting ? (
+              {isSubmitting || isAnalyzing ? (
                 <ActivityIndicator size="small" color={WHITE} />
               ) : (
                 <Ionicons name="send" size={24} color={WHITE} />
               )}
 
               <Text style={styles.inlineSubmitButtonText}>
-                {isSubmitting ? "SUBMITTING..." : "SUBMIT COMPLAINT"}
+                {isAnalyzing
+                  ? "ANALYZING..."
+                  : isSubmitting
+                    ? "SUBMITTING..."
+                    : "SUBMIT COMPLAINT"}
               </Text>
             </TouchableOpacity>
           )}
