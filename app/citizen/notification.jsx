@@ -7,7 +7,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/poppins";
 import { useFocusEffect, usePathname, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -149,7 +149,7 @@ function getNotificationStyle(type, status, metadata = {}) {
     return {
       statusBg: LIGHT_GREEN,
       statusColor: GREEN,
-      icon: "camera-check-outline",
+      icon: "clipboard-check-outline",
       iconBg: LIGHT_GREEN,
       iconColor: GREEN,
       actionLabel: "Provide Validation",
@@ -221,7 +221,7 @@ function getNotificationStyle(type, status, metadata = {}) {
     return {
       statusBg: LIGHT_GREEN,
       statusColor: GREEN,
-      icon: "camera-check-outline",
+      icon: "clipboard-check-outline",
       iconBg: LIGHT_GREEN,
       iconColor: GREEN,
       actionLabel: "View Details",
@@ -292,6 +292,7 @@ export default function CitizenNotification() {
   const [loadingNotifications, setLoadingNotifications] = useState(true);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const notificationChannelRef = useRef(null);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -409,54 +410,77 @@ export default function CitizenNotification() {
   useEffect(() => {
     if (!currentUserId) return;
 
-    const channel = supabase
-      .channel(`citizen-notifications-${currentUserId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "complaint_notifications",
-          filter: `citizen_id=eq.${currentUserId}`,
-        },
-        (payload) => {
-          const nextNotification = mapNotification(payload.new);
+    let cancelled = false;
 
-          setNotifications((prev) => {
-            const exists = prev.some((item) => item.id === nextNotification.id);
+    const setupNotificationChannel = async () => {
+      if (notificationChannelRef.current) {
+        await supabase.removeChannel(notificationChannelRef.current);
+        notificationChannelRef.current = null;
+      }
 
-            if (exists) return prev;
+      const staleChannel = supabase
+        .getChannels()
+        .find(
+          (item) =>
+            item.topic === `realtime:citizen-notifications-${currentUserId}`
+        );
 
-            return [nextNotification, ...prev];
-          });
+      if (staleChannel) {
+        await supabase.removeChannel(staleChannel);
+      }
 
-          loadUnreadNotificationCount(currentUserId);
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "complaint_notifications",
-          filter: `citizen_id=eq.${currentUserId}`,
-        },
-        (payload) => {
-          const updatedNotification = mapNotification(payload.new);
+      if (cancelled) return;
 
-          setNotifications((prev) =>
-            prev.map((item) =>
-              item.id === updatedNotification.id ? updatedNotification : item
-            )
-          );
+      const channel = supabase
+        .channel(`citizen-notifications-${currentUserId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "complaint_notifications",
+            filter: `citizen_id=eq.${currentUserId}`,
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT") {
+              const nextNotification = mapNotification(payload.new);
 
-          loadUnreadNotificationCount(currentUserId);
-        }
-      )
-      .subscribe();
+              setNotifications((prev) => {
+                const exists = prev.some(
+                  (item) => item.id === nextNotification.id
+                );
+
+                if (exists) return prev;
+
+                return [nextNotification, ...prev];
+              });
+            } else if (payload.eventType === "UPDATE") {
+              const updatedNotification = mapNotification(payload.new);
+
+              setNotifications((prev) =>
+                prev.map((item) =>
+                  item.id === updatedNotification.id ? updatedNotification : item
+                )
+              );
+            }
+
+            loadUnreadNotificationCount(currentUserId);
+          }
+        )
+        .subscribe();
+
+      notificationChannelRef.current = channel;
+    };
+
+    setupNotificationChannel();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+
+      if (notificationChannelRef.current) {
+        supabase.removeChannel(notificationChannelRef.current);
+        notificationChannelRef.current = null;
+      }
     };
   }, [currentUserId, loadUnreadNotificationCount]);
 
