@@ -303,7 +303,7 @@ async function loadCitizenProfiles(citizenIds = []) {
   try {
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, email, full_name, name, username, contact_number, phone_number, phone")
+      .select("id, email, full_name, contact_number, avatar_url")
       .in("id", citizenIds);
 
     if (error) {
@@ -350,8 +350,6 @@ function mapComplaintRow(row, profileMap = {}) {
       row.citizen_name ||
       row.full_name ||
       profile.full_name ||
-      profile.name ||
-      profile.username ||
       profile.email ||
       "Citizen",
     contact:
