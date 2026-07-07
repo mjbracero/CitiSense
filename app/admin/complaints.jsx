@@ -6,7 +6,7 @@ import {
   Poppins_700Bold,
   useFonts,
 } from "@expo-google-fonts/poppins";
-import { useFocusEffect, usePathname, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -25,6 +25,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { createCitizenNotificationAndPush } from "../../lib/citizenNotificationService";
+import { notifyDepartmentHeadsComplaintCompleted } from "../../lib/departmentHeadNotificationService";
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -41,6 +42,14 @@ const BLUE = "#315A9A";
 const ORANGE = "#F4A24C";
 
 const H_PADDING = 20;
+
+const COMPLAINT_PHOTOS_BUCKET = "complaint-photos";
+
+const STORAGE_BUCKET_PREFIXES = [
+  "validation-photos",
+  "complaint-validation-photos",
+  COMPLAINT_PHOTOS_BUCKET,
+];
 
 const emergencyPriorityLevels = ["Critical", "Urgent", "High"];
 
@@ -420,24 +429,37 @@ function normalizePhotoUrls(value) {
   if (Array.isArray(value)) return value.filter(Boolean);
 
   if (typeof value === "string") {
+    const trimmed = value.trim();
+
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      const inner = trimmed.slice(1, -1).trim();
+
+      if (!inner) return [];
+
+      return inner
+        .split(",")
+        .map((part) => part.trim().replace(/^"(.*)"$/, "$1"))
+        .filter(Boolean);
+    }
+
     try {
-      const parsed = JSON.parse(value);
+      const parsed = JSON.parse(trimmed);
 
       if (Array.isArray(parsed)) return parsed.filter(Boolean);
     } catch {
-      return value ? [value] : [];
+      return trimmed ? [trimmed] : [];
     }
   }
 
   return [];
 }
 
-function extractStoragePath(value, bucketName) {
+function extractComplaintPhotoPath(value) {
   if (!value) return null;
 
   const text = decodeURIComponent(String(value));
-  const publicMarker = `/storage/v1/object/public/${bucketName}/`;
-  const signMarker = `/storage/v1/object/sign/${bucketName}/`;
+  const publicMarker = `/storage/v1/object/public/${COMPLAINT_PHOTOS_BUCKET}/`;
+  const signMarker = `/storage/v1/object/sign/${COMPLAINT_PHOTOS_BUCKET}/`;
 
   if (text.includes(publicMarker)) {
     return text.split(publicMarker)[1]?.split("?")[0] || null;
@@ -448,39 +470,73 @@ function extractStoragePath(value, bucketName) {
   }
 
   if (!/^https?:\/\//i.test(text)) {
-    return text.replace(new RegExp(`^${bucketName}/`), "").replace(/^\/+/, "");
+    let cleaned = text.replace(/^\/+/, "");
+
+    for (const bucketName of STORAGE_BUCKET_PREFIXES) {
+      if (cleaned.startsWith(`${bucketName}/`)) {
+        cleaned = cleaned.slice(bucketName.length + 1);
+      }
+    }
+
+    return cleaned;
   }
 
   return null;
 }
 
-async function createReadableStorageUrl(bucketName, value) {
+async function createReadableComplaintPhotoUrl(value) {
   if (!value) return null;
 
   try {
+    const path = extractComplaintPhotoPath(value);
+
+    if (path) {
+      const { data: signedData, error: signedError } = await supabase.storage
+        .from(COMPLAINT_PHOTOS_BUCKET)
+        .createSignedUrl(path, 60 * 60);
+
+      if (!signedError && signedData?.signedUrl) {
+        return signedData.signedUrl;
+      }
+
+      const { data: publicData } = supabase.storage
+        .from(COMPLAINT_PHOTOS_BUCKET)
+        .getPublicUrl(path);
+
+      if (publicData?.publicUrl) {
+        return publicData.publicUrl;
+      }
+    }
+
     if (/^https?:\/\//i.test(String(value))) {
       return String(value);
     }
-
-    const path = extractStoragePath(value, bucketName);
-
-    if (!path) return null;
-
-    const { data: signedData, error: signedError } = await supabase.storage
-      .from(bucketName)
-      .createSignedUrl(path, 60 * 60);
-
-    if (!signedError && signedData?.signedUrl) {
-      return signedData.signedUrl;
-    }
-
-    const { data: publicData } = supabase.storage.from(bucketName).getPublicUrl(path);
-
-    return publicData?.publicUrl || null;
   } catch (error) {
-    console.log(`Resolve ${bucketName} storage URL error:`, error);
-    return null;
+    console.log("Resolve complaint photo error:", error);
   }
+
+  return null;
+}
+
+async function fetchCitizenProfileMap(citizenId) {
+  if (!citizenId) {
+    return {};
+  }
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, email, full_name, contact_number, avatar_url")
+    .eq("id", citizenId)
+    .maybeSingle();
+
+  if (error || !data) {
+    if (error) {
+      console.log("Load citizen profile error:", error);
+    }
+    return {};
+  }
+
+  return { [data.id]: data };
 }
 
 async function resolveComplaintPhotoUrls(row) {
@@ -495,7 +551,7 @@ async function resolveComplaintPhotoUrls(row) {
   const resolvedUrls = [];
 
   for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableStorageUrl("complaint-photos", rawUrl);
+    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
 
     if (resolvedUrl) {
       resolvedUrls.push(resolvedUrl);
@@ -507,7 +563,9 @@ async function resolveComplaintPhotoUrls(row) {
 
 async function resolveValidationPhotoUrls(row) {
   const rawUrls = normalizePhotoUrls(
-    row?.validation_photo_urls ||
+    row?.citizen_validation_photo_urls ||
+      row?.citizen_feedback_photo_urls ||
+      row?.validation_photo_urls ||
       row?.validation_photos ||
       row?.validationPhotos ||
       row?.validation_photo ||
@@ -517,24 +575,90 @@ async function resolveValidationPhotoUrls(row) {
   const resolvedUrls = [];
 
   for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableStorageUrl(
-      "complaint-validation-photos",
-      rawUrl
-    );
+    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
 
     if (resolvedUrl) {
       resolvedUrls.push(resolvedUrl);
-      continue;
-    }
-
-    const fallbackUrl = await createReadableStorageUrl("complaint-photos", rawUrl);
-
-    if (fallbackUrl) {
-      resolvedUrls.push(fallbackUrl);
     }
   }
 
   return resolvedUrls;
+}
+
+function getCitizenValidationAnswer(row) {
+  return (
+    row?.citizen_validation_answer ||
+    row?.citizen_validation_result ||
+    row?.validation_answer ||
+    row?.validation_result ||
+    null
+  );
+}
+
+function getCitizenValidationFeedback(row) {
+  return (
+    row?.citizen_validation_feedback ||
+    row?.validation_feedback ||
+    row?.citizen_feedback ||
+    row?.feedback ||
+    row?.validation_notes ||
+    ""
+  );
+}
+
+function formatCitizenValidationAnswer(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (normalized === "resolved" || normalized === "yes") {
+    return { label: "Yes", isResolved: true };
+  }
+
+  if (
+    normalized === "not_resolved" ||
+    normalized === "not resolved" ||
+    normalized === "no"
+  ) {
+    return { label: "No", isResolved: false };
+  }
+
+  if (!normalized) {
+    return null;
+  }
+
+  return { label: String(value), isResolved: null };
+}
+
+function hasCitizenValidationSubmission(row, feedback = "", validationPhotos = []) {
+  const answer = getCitizenValidationAnswer(row);
+  const trimmedFeedback = String(feedback || "").trim();
+  const validationStatus = String(
+    row?.citizen_validation_status || row?.validation_status || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  return Boolean(
+    answer ||
+      trimmedFeedback ||
+      validationPhotos.length > 0 ||
+      row?.citizen_validated_at ||
+      row?.validation_submitted_at ||
+      row?.citizen_feedback_submitted_at ||
+      row?.citizen_feedback_submitted === true ||
+      validationStatus === "validated" ||
+      validationStatus === "submitted"
+  );
+}
+
+function getComplaintSortTime(complaint) {
+  const validatedAt = complaint?.citizenValidatedAt
+    ? new Date(complaint.citizenValidatedAt).getTime()
+    : 0;
+  const createdAt = complaint?.createdAt
+    ? new Date(complaint.createdAt).getTime()
+    : 0;
+
+  return Math.max(validatedAt, createdAt);
 }
 
 function buildProfileMap(profiles = []) {
@@ -549,6 +673,14 @@ async function mapComplaintRow(row, profileMap = {}) {
   const citizenProfile = profileMap[row.citizen_id] || {};
   const uploadedPhotos = await resolveComplaintPhotoUrls(row);
   const validationPhotos = await resolveValidationPhotoUrls(row);
+  const validationAnswer = getCitizenValidationAnswer(row);
+  const validationAnswerMeta = formatCitizenValidationAnswer(validationAnswer);
+  const feedback = getCitizenValidationFeedback(row);
+  const hasCitizenValidation = hasCitizenValidationSubmission(
+    row,
+    feedback,
+    validationPhotos
+  );
   const priority = normalizePriorityValue(row.priority, row.is_emergency);
   const status = normalizeStatusValue(row.status);
   const concernType = normalizeConcernType(row.complaint_type, row.is_emergency, priority);
@@ -580,6 +712,7 @@ async function mapComplaintRow(row, profileMap = {}) {
       row.citizen_name ||
       row.full_name ||
       citizenProfile.full_name ||
+      citizenProfile.email ||
       "Citizen",
     contact:
       row.contact_number ||
@@ -594,19 +727,36 @@ async function mapComplaintRow(row, profileMap = {}) {
     uploadedPhotos,
     validationPhoto: validationPhotos[0] || row.validation_photo_url || null,
     validationPhotos,
-    feedback:
-      row.validation_feedback ||
-      row.citizen_feedback ||
-      row.feedback ||
-      row.validation_notes ||
-      null,
+    validationAnswer,
+    validationAnswerLabel: validationAnswerMeta?.label || null,
+    validationResolved: validationAnswerMeta?.isResolved ?? null,
+    hasCitizenValidation,
+    feedback: feedback.trim() || null,
+    citizenValidatedAt: row.citizen_validated_at || null,
+    needsValidationReview:
+      hasCitizenValidation &&
+      (status === "For Validation" ||
+        normalizeText(row.citizen_validation_status) === "validated" ||
+        normalizeText(row.validation_status) === "validated"),
   };
+}
+
+function getRouteParam(value) {
+  if (Array.isArray(value)) {
+    return value[0] || "";
+  }
+
+  return value || "";
 }
 
 export default function AdminComplaints() {
   const router = useRouter();
   const pathname = usePathname();
+  const params = useLocalSearchParams();
   const { unreadNotificationCount } = useAdminUnreadNotifications();
+
+  const targetComplaintId = getRouteParam(params?.complaintId) || null;
+  const shouldAutoOpenDetails = getRouteParam(params?.openDetails) === "true";
 
   const [complaints, setComplaints] = useState([]);
   const [loadingComplaints, setLoadingComplaints] = useState(true);
@@ -626,6 +776,7 @@ export default function AdminComplaints() {
   const [detailsVisible, setDetailsVisible] = useState(false);
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
+  const [autoOpenedComplaintId, setAutoOpenedComplaintId] = useState(null);
 
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
@@ -773,9 +924,7 @@ export default function AdminComplaints() {
     });
 
     return [...filtered].sort(
-      (a, b) =>
-        parseComplaintDateTime(b.date, b.time) -
-        parseComplaintDateTime(a.date, a.time)
+      (a, b) => getComplaintSortTime(b) - getComplaintSortTime(a)
     );
   }, [
     complaints,
@@ -785,12 +934,108 @@ export default function AdminComplaints() {
     selectedPriority,
   ]);
 
-  const openDetails = (complaint) => {
+  const openDetails = useCallback(async (complaint) => {
     setSelectedComplaint(complaint);
     setDetailsVisible(true);
     setPhotoViewerVisible(false);
     setSelectedPhoto(null);
-  };
+
+    const complaintId = complaint?.rawId || complaint?.id;
+
+    if (!complaintId) {
+      return;
+    }
+
+    try {
+      let { data, error } = await supabase
+        .from("complaints")
+        .select("*")
+        .eq("id", complaintId)
+        .maybeSingle();
+
+      if ((error || !data) && complaintId) {
+        const fallbackResult = await supabase
+          .from("complaints")
+          .select("*")
+          .eq("short_id", complaintId)
+          .maybeSingle();
+
+        data = fallbackResult.data;
+        error = fallbackResult.error;
+      }
+
+      if (error || !data) {
+        return;
+      }
+
+      const profileMap = await fetchCitizenProfileMap(data.citizen_id);
+      const refreshedComplaint = await mapComplaintRow(data, profileMap);
+
+      setSelectedComplaint({
+        ...refreshedComplaint,
+        citizen:
+          refreshedComplaint.citizen !== "Citizen"
+            ? refreshedComplaint.citizen
+            : complaint.citizen,
+        contact:
+          refreshedComplaint.contact !== "No contact number"
+            ? refreshedComplaint.contact
+            : complaint.contact,
+      });
+    } catch (refreshError) {
+      console.log("Refresh complaint validation photos error:", refreshError);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!shouldAutoOpenDetails || !targetComplaintId) {
+      return;
+    }
+
+    if (loadingComplaints) {
+      return;
+    }
+
+    if (autoOpenedComplaintId === targetComplaintId) {
+      return;
+    }
+
+    const openTargetComplaint = async () => {
+      const matchedComplaint = complaints.find(
+        (item) =>
+          String(item.rawId) === targetComplaintId ||
+          String(item.id) === targetComplaintId
+      );
+
+      if (matchedComplaint) {
+        await openDetails(matchedComplaint);
+        setAutoOpenedComplaintId(targetComplaintId);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("complaints")
+        .select("*")
+        .eq("id", targetComplaintId)
+        .maybeSingle();
+
+      if (!error && data) {
+        const profileMap = await fetchCitizenProfileMap(data.citizen_id);
+        const mappedComplaint = await mapComplaintRow(data, profileMap);
+        await openDetails(mappedComplaint);
+        setAutoOpenedComplaintId(targetComplaintId);
+      }
+    };
+
+    openTargetComplaint();
+  }, [
+    autoOpenedComplaintId,
+    complaints,
+    loadingComplaints,
+    openDetails,
+    shouldAutoOpenDetails,
+    targetComplaintId,
+  ]);
 
   const closeDetails = () => {
     setSelectedComplaint(null);
@@ -844,7 +1089,7 @@ export default function AdminComplaints() {
         shortId: selectedComplaint.id,
         type: "status",
         title: "Complaint Completed",
-        message: `Your complaint #${selectedComplaint.id} has been marked as completed by the department head.`,
+        message: `Your complaint #${selectedComplaint.id} has been marked as completed by the admin.`,
         status: "Completed",
         metadata: {
           old_status: oldStatus,
@@ -855,6 +1100,11 @@ export default function AdminComplaints() {
         },
       });
     }
+
+    await notifyDepartmentHeadsComplaintCompleted({
+      complaint: selectedComplaint,
+      department: selectedComplaint.department,
+    });
 
     setComplaints((prev) =>
       prev.map((item) =>
@@ -1057,6 +1307,19 @@ export default function AdminComplaints() {
                         {item.department}
                       </Text>
                     </View>
+
+                    {item.needsValidationReview ? (
+                      <View style={styles.validationReviewBanner}>
+                        <MaterialCommunityIcons
+                          name="account-check-outline"
+                          size={14}
+                          color={GREEN}
+                        />
+                        <Text style={styles.validationReviewText}>
+                          Citizen validation submitted — review required
+                        </Text>
+                      </View>
+                    ) : null}
 
                     <View style={styles.metaAndBadgeRow}>
                       <View style={styles.dateTimeColumn}>
@@ -1357,24 +1620,76 @@ export default function AdminComplaints() {
                       Citizen Validation
                     </Text>
 
-                    {selectedComplaint.feedback ? (
+                    {selectedComplaint.hasCitizenValidation ? (
                       <>
+                        <Text style={styles.validationFieldLabel}>
+                          Was the issue resolved?
+                        </Text>
+                        {selectedComplaint.validationAnswerLabel ? (
+                          <View
+                            style={[
+                              styles.validationAnswerPill,
+                              selectedComplaint.validationResolved === true &&
+                                styles.validationAnswerPillYes,
+                              selectedComplaint.validationResolved === false &&
+                                styles.validationAnswerPillNo,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.validationAnswerText,
+                                selectedComplaint.validationResolved === true &&
+                                  styles.validationAnswerTextYes,
+                                selectedComplaint.validationResolved === false &&
+                                  styles.validationAnswerTextNo,
+                              ]}
+                            >
+                              {selectedComplaint.validationAnswerLabel}
+                            </Text>
+                          </View>
+                        ) : (
+                          <Text style={styles.noValidationText}>
+                            No answer provided.
+                          </Text>
+                        )}
+
+                        <Text style={styles.validationFieldLabel}>
+                          Citizen Feedback
+                        </Text>
                         <Text style={styles.feedbackText}>
-                          {selectedComplaint.feedback}
+                          {selectedComplaint.feedback ||
+                            "No feedback provided."}
                         </Text>
 
-                        {selectedComplaint.validationPhoto && (
-                          <TouchableOpacity
-                            activeOpacity={0.8}
-                            onPress={() =>
-                              openPhotoViewer(selectedComplaint.validationPhoto)
-                            }
+                        <Text style={styles.validationFieldLabel}>
+                          Photo Evidence
+                        </Text>
+                        {selectedComplaint.validationPhotos?.length > 0 ? (
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.validationPhotoRow}
                           >
-                            <Image
-                              source={{ uri: selectedComplaint.validationPhoto }}
-                              style={styles.validationPhoto}
-                            />
-                          </TouchableOpacity>
+                            {selectedComplaint.validationPhotos.map(
+                              (photo, index) => (
+                                <TouchableOpacity
+                                  key={`validation-photo-${index}`}
+                                  activeOpacity={0.85}
+                                  onPress={() => openPhotoViewer(photo)}
+                                >
+                                  <Image
+                                    source={{ uri: photo }}
+                                    style={styles.validationPhoto}
+                                    resizeMode="cover"
+                                  />
+                                </TouchableOpacity>
+                              )
+                            )}
+                          </ScrollView>
+                        ) : (
+                          <Text style={styles.noValidationText}>
+                            No photo evidence attached.
+                          </Text>
                         )}
                       </>
                     ) : (
@@ -1656,6 +1971,26 @@ const styles = StyleSheet.create({
     fontSize: 10.6,
     color: GREEN,
     marginLeft: 6,
+  },
+
+  validationReviewBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: LIGHT_GREEN,
+    borderWidth: 1,
+    borderColor: "#CFE8C4",
+  },
+
+  validationReviewText: {
+    flex: 1,
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: 10.5,
+    color: GREEN,
   },
 
   metaAndBadgeRow: {
@@ -2079,6 +2414,45 @@ const styles = StyleSheet.create({
     marginBottom: 13,
   },
 
+  validationFieldLabel: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: 11.5,
+    color: GREEN,
+    marginBottom: 6,
+    marginTop: 2,
+  },
+
+  validationAnswerPill: {
+    alignSelf: "flex-start",
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    backgroundColor: "#EEF2F7",
+    marginBottom: 10,
+  },
+
+  validationAnswerPillYes: {
+    backgroundColor: LIGHT_GREEN,
+  },
+
+  validationAnswerPillNo: {
+    backgroundColor: "#FFF0F0",
+  },
+
+  validationAnswerText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 12,
+    color: MUTED,
+  },
+
+  validationAnswerTextYes: {
+    color: GREEN,
+  },
+
+  validationAnswerTextNo: {
+    color: RED,
+  },
+
   feedbackText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
@@ -2093,9 +2467,15 @@ const styles = StyleSheet.create({
     color: MUTED,
   },
 
+  validationPhotoRow: {
+    gap: 10,
+    paddingTop: 2,
+    paddingRight: 10,
+  },
+
   validationPhoto: {
-    width: "100%",
-    height: 150,
+    width: Math.min(185, SCREEN_WIDTH * 0.48),
+    height: 125,
     borderRadius: 13,
     backgroundColor: BG,
     borderWidth: 1,
