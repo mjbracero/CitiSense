@@ -1295,7 +1295,6 @@ const styles = StyleSheet.create({
 
   profileMainInfo: {
     flex: 1,
-    alignItems: "center",
   },
 
   profileName: {
@@ -1303,7 +1302,6 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: WHITE,
     lineHeight: 22,
-    textAlign: "center",
   },
 
   profileRole: {
@@ -1311,7 +1309,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: "rgba(255,255,255,0.85)",
     marginTop: 1,
-    textAlign: "center",
   },
 
   profileEmail: {
@@ -1319,7 +1316,6 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     color: "rgba(255,255,255,0.78)",
     marginTop: 2,
-    textAlign: "center",
   },
 
   editButton: {
