@@ -7,6 +7,9 @@ import {
   useFonts,
 } from "@expo-google-fonts/poppins";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
+import * as FileSystem from "expo-file-system/legacy";
+import { decode } from "base64-arraybuffer";
 import {
   useFocusEffect,
   useLocalSearchParams,
@@ -55,7 +58,7 @@ const MAX_PHOTO_SIZE = 10 * 1024 * 1024;
 const PHOTO_PLACEHOLDER =
   "https://placehold.co/900x600/eaf6e4/087a0d?text=CitiSense+Complaint";
 
-const VALIDATION_BUCKET = "validation-photos";
+const COMPLAINT_PHOTOS_BUCKET = "complaint-photos";
 
 const bottomTabs = [
   {
@@ -1001,7 +1004,7 @@ function getStatusStyle(status) {
     return {
       bg: LIGHT_GREEN,
       color: GREEN,
-      icon: "camera-check-outline",
+      icon: "clipboard-check-outline",
     };
   }
 
@@ -1069,16 +1072,79 @@ function isValidImageFormat(asset) {
   const uri = asset.uri?.toLowerCase() || "";
   const fileName = asset.fileName?.toLowerCase() || "";
 
-  return (
+  const validMime =
     mimeType === "image/jpeg" ||
     mimeType === "image/png" ||
+    mimeType === "image/jpg" ||
+    mimeType === "image/heic" ||
+    mimeType === "image/heif";
+
+  const validUri =
     uri.endsWith(".jpg") ||
     uri.endsWith(".jpeg") ||
     uri.endsWith(".png") ||
+    uri.endsWith(".heic") ||
+    uri.endsWith(".heif");
+
+  const validFileName =
     fileName.endsWith(".jpg") ||
     fileName.endsWith(".jpeg") ||
-    fileName.endsWith(".png")
-  );
+    fileName.endsWith(".png") ||
+    fileName.endsWith(".heic") ||
+    fileName.endsWith(".heif");
+
+  return validMime || validUri || validFileName;
+}
+
+function getValidationPhotoExtension(uri = "", mimeType = "") {
+  const cleanMime = mimeType.toLowerCase();
+
+  if (cleanMime.includes("png")) return "png";
+  if (cleanMime.includes("heic")) return "heic";
+  if (cleanMime.includes("heif")) return "heif";
+
+  const extension = uri.split(".").pop()?.toLowerCase();
+
+  if (["jpg", "jpeg", "png", "heic", "heif"].includes(extension)) {
+    return extension;
+  }
+
+  return "jpg";
+}
+
+function getValidationPhotoContentType(extension) {
+  if (extension === "png") return "image/png";
+  if (extension === "heic") return "image/heic";
+  if (extension === "heif") return "image/heif";
+  return "image/jpeg";
+}
+
+async function prepareValidationPhotoAsset(asset) {
+  if (!asset?.uri) {
+    return null;
+  }
+
+  try {
+    const manipulatedPhoto = await ImageManipulator.manipulateAsync(
+      asset.uri,
+      [{ resize: { width: 960 } }],
+      {
+        compress: 0.65,
+        format: ImageManipulator.SaveFormat.JPEG,
+      }
+    );
+
+    return {
+      id: `${manipulatedPhoto.uri}-${Date.now()}-${Math.random()}`,
+      uri: manipulatedPhoto.uri,
+      fileName: asset.fileName || "Validation photo",
+      fileSize: asset.fileSize || 0,
+      mimeType: "image/jpeg",
+    };
+  } catch (error) {
+    console.log("Prepare validation photo error:", error);
+    return null;
+  }
 }
 
 
@@ -1141,11 +1207,56 @@ function normalizeValidationPhotoUrls(value) {
 
 function getValidationFileExtension(photo) {
   const name = String(photo?.fileName || photo?.uri || "").toLowerCase();
+  const mimeType = String(photo?.mimeType || "").toLowerCase();
 
-  if (name.endsWith(".png")) return "png";
+  if (mimeType.includes("png") || name.endsWith(".png")) return "png";
+  if (mimeType.includes("heic") || name.endsWith(".heic")) return "heic";
+  if (mimeType.includes("heif") || name.endsWith(".heif")) return "heif";
   if (name.endsWith(".jpeg")) return "jpeg";
 
   return "jpg";
+}
+
+async function readValidationPhotoForUpload(photo) {
+  if (!photo?.uri) {
+    throw new Error("Selected photo has no file URI.");
+  }
+
+  const fileInfo = await FileSystem.getInfoAsync(photo.uri, {
+    size: true,
+  });
+
+  if (!fileInfo.exists) {
+    throw new Error("The selected photo could not be prepared for upload.");
+  }
+
+  if (!fileInfo.size) {
+    throw new Error("The selected photo appears to be empty.");
+  }
+
+  if (fileInfo.size > MAX_PHOTO_SIZE) {
+    throw new Error("The selected photo is too large. Maximum size is 10MB.");
+  }
+
+  const base64 = await FileSystem.readAsStringAsync(photo.uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+
+  if (!base64) {
+    throw new Error("The selected photo could not be read for upload.");
+  }
+
+  const arrayBuffer = decode(base64);
+
+  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+    throw new Error("The selected photo could not be read for upload.");
+  }
+
+  return {
+    arrayBuffer,
+    contentType: "image/jpeg",
+    extension: "jpg",
+  };
 }
 
 async function uploadValidationPhotos(complaintId, photos = []) {
@@ -1153,24 +1264,31 @@ async function uploadValidationPhotos(complaintId, photos = []) {
 
   for (let index = 0; index < photos.length; index += 1) {
     const photo = photos[index];
-    const extension = getValidationFileExtension(photo);
-    const storagePath = `${complaintId}/validation-${Date.now()}-${index}.${extension}`;
+    let preparedPhoto = null;
 
-    const response = await fetch(photo.uri);
-    const blob = await response.blob();
+    try {
+      preparedPhoto = await readValidationPhotoForUpload(photo);
+      const storagePath = `${complaintId}/validation-${
+        index + 1
+      }-${Date.now()}.jpg`;
 
-    const { error } = await supabase.storage
-      .from(VALIDATION_BUCKET)
-      .upload(storagePath, blob, {
-        contentType: photo.mimeType || "image/jpeg",
-        upsert: true,
-      });
+      const { error } = await supabase.storage
+        .from(COMPLAINT_PHOTOS_BUCKET)
+        .upload(storagePath, preparedPhoto.arrayBuffer, {
+          contentType: "image/jpeg",
+          upsert: false,
+        });
 
-    if (error) {
-      throw error;
+      if (error) {
+        throw error;
+      }
+
+      uploadedPaths.push(storagePath);
+    } finally {
+      if (preparedPhoto) {
+        preparedPhoto.arrayBuffer = null;
+      }
     }
-
-    uploadedPaths.push(storagePath);
   }
 
   return uploadedPaths;
@@ -1503,30 +1621,38 @@ export default function CitizenComplaints() {
 
     let invalidFormatCount = 0;
     let invalidSizeCount = 0;
+    let failedPrepareCount = 0;
 
-    const validAssets = result.assets
-      .filter((asset) => {
-        const validFormat = isValidImageFormat(asset);
-        const validSize =
-          !asset.fileSize || Number(asset.fileSize) <= MAX_PHOTO_SIZE;
+    const validAssets = [];
 
-        if (!validFormat) invalidFormatCount += 1;
-        if (!validSize) invalidSizeCount += 1;
+    for (const asset of result.assets) {
+      const validFormat = isValidImageFormat(asset);
+      const validSize = !asset.fileSize || Number(asset.fileSize) <= MAX_PHOTO_SIZE;
 
-        return validFormat && validSize;
-      })
-      .map((asset) => ({
-        id: `${asset.uri}-${Date.now()}-${Math.random()}`,
-        uri: asset.uri,
-        fileName: asset.fileName || "Validation photo",
-        fileSize: asset.fileSize || 0,
-        mimeType: asset.mimeType || "image/jpeg",
-      }));
+      if (!validFormat) {
+        invalidFormatCount += 1;
+        continue;
+      }
 
-    if (invalidFormatCount > 0 || invalidSizeCount > 0) {
+      if (!validSize) {
+        invalidSizeCount += 1;
+        continue;
+      }
+
+      const preparedPhoto = await prepareValidationPhotoAsset(asset);
+
+      if (!preparedPhoto) {
+        failedPrepareCount += 1;
+        continue;
+      }
+
+      validAssets.push(preparedPhoto);
+    }
+
+    if (invalidFormatCount > 0 || invalidSizeCount > 0 || failedPrepareCount > 0) {
       Alert.alert(
         "Some Photos Were Not Added",
-        "Only PNG, JPG, and JPEG files are allowed, with a maximum size of 10MB per photo."
+        "Only PNG, JPG, JPEG, HEIC, and HEIF files are allowed, with a maximum size of 10MB per photo."
       );
     }
 
@@ -1637,7 +1763,7 @@ export default function CitizenComplaints() {
       } = await supabase.auth.getUser();
       const citizenName = await getProfileDisplayName(user?.id);
 
-      await notifyAdminsCitizenValidated({
+      const notifyResult = await notifyAdminsCitizenValidated({
         complaint: {
           id: selectedComplaint.id,
           short_id: selectedComplaint.shortId,
@@ -1650,6 +1776,10 @@ export default function CitizenComplaints() {
         validationAnswer,
         citizenName,
       });
+
+      if (!notifyResult?.success) {
+        console.log("Admin validation notification error:", notifyResult);
+      }
 
       Alert.alert(
         "Validation Submitted",
@@ -2311,7 +2441,7 @@ export default function CitizenComplaints() {
                           </Text>
 
                           <Text style={styles.photoRulesText}>
-                            Up to 3 photos • Max 10MB each
+                            Up to 3 photos • JPG, PNG, HEIC • Max 10MB each
                           </Text>
                         </TouchableOpacity>
                       ) : (
