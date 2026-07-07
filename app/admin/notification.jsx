@@ -133,7 +133,7 @@ function formatTime(value) {
   });
 }
 
-function getDisplayType(type) {
+function getDisplayType(type, metadata = {}) {
   const cleanType = normalizeText(type);
 
   if (cleanType === "new_complaint" || cleanType === "new complaint") {
@@ -143,6 +143,9 @@ function getDisplayType(type) {
   if (
     cleanType === "citizen_validation" ||
     cleanType === "citizen validation" ||
+    cleanType === "citizen_validation_submitted" ||
+    cleanType === "citizen validation submitted" ||
+    cleanType === "validation_submitted" ||
     cleanType === "for_validation" ||
     cleanType === "for validation"
   ) {
@@ -157,11 +160,18 @@ function getDisplayType(type) {
     return "Reassignment";
   }
 
+  if (cleanType === "completed" || cleanType === "complete") {
+    return "Final Confirmation";
+  }
+
   if (
-    cleanType === "completed" ||
     cleanType === "final_confirmation" ||
     cleanType === "final confirmation"
   ) {
+    if (metadata.validation_answer) {
+      return "Citizen Validation";
+    }
+
     return "Final Confirmation";
   }
 
@@ -228,7 +238,7 @@ function getNotificationStyle(type) {
 
 function mapNotification(row) {
   const metadata = normalizeMetadata(row.metadata);
-  const displayType = getDisplayType(row.type);
+  const displayType = getDisplayType(row.type, metadata);
 
   return {
     id: row.id,
@@ -283,6 +293,9 @@ export default function AdminNotification() {
 
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
+  const notificationChannelRef = useRef(null);
+  const loadNotificationsRef = useRef(null);
+  const reloadUnreadRef = useRef(null);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -364,6 +377,14 @@ export default function AdminNotification() {
     }
   }, []);
 
+  useEffect(() => {
+    loadNotificationsRef.current = loadNotifications;
+  }, [loadNotifications]);
+
+  useEffect(() => {
+    reloadUnreadRef.current = reloadUnreadNotificationCount;
+  }, [reloadUnreadNotificationCount]);
+
   useFocusEffect(
     useCallback(() => {
       loadNotifications(false);
@@ -378,29 +399,60 @@ export default function AdminNotification() {
   useEffect(() => {
     if (!currentAdminId) return;
 
-    const channel = supabase
-      .channel(`admin-notifications-list-${currentAdminId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "admin_notifications",
-          filter: `admin_id=eq.${currentAdminId}`,
-        },
-        () => {
-          loadNotifications(false);
-          reloadUnreadNotificationCount();
-        }
-      )
-      .subscribe((status) => {
-        console.log("Admin notifications realtime status:", status);
-      });
+    let cancelled = false;
+
+    const setupNotificationChannel = async () => {
+      if (notificationChannelRef.current) {
+        await supabase.removeChannel(notificationChannelRef.current);
+        notificationChannelRef.current = null;
+      }
+
+      const staleChannel = supabase
+        .getChannels()
+        .find(
+          (item) =>
+            item.topic === `realtime:admin-notifications-list-${currentAdminId}`
+        );
+
+      if (staleChannel) {
+        await supabase.removeChannel(staleChannel);
+      }
+
+      if (cancelled) return;
+
+      const channel = supabase
+        .channel(`admin-notifications-list-${currentAdminId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "admin_notifications",
+            filter: `admin_id=eq.${currentAdminId}`,
+          },
+          () => {
+            loadNotificationsRef.current?.(false);
+            reloadUnreadRef.current?.();
+          }
+        )
+        .subscribe((status) => {
+          console.log("Admin notifications realtime status:", status);
+        });
+
+      notificationChannelRef.current = channel;
+    };
+
+    setupNotificationChannel();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+
+      if (notificationChannelRef.current) {
+        supabase.removeChannel(notificationChannelRef.current);
+        notificationChannelRef.current = null;
+      }
     };
-  }, [currentAdminId, loadNotifications, reloadUnreadNotificationCount]);
+  }, [currentAdminId]);
 
   const filteredNotifications = useMemo(() => {
     if (selectedFilter === "Unread") {
@@ -822,7 +874,7 @@ export default function AdminNotification() {
                     }}
                   >
                     <Text style={styles.viewComplaintButtonText}>
-                      View Overall Complaints
+                      Review Complaint
                     </Text>
                     <Feather name="arrow-right" size={17} color={WHITE} />
                   </TouchableOpacity>
