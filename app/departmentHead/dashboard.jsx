@@ -1709,7 +1709,6 @@ const styles = StyleSheet.create({
 
   greetingContainer: {
     marginBottom: 16,
-    alignItems: "center",
   },
 
   greetingSmall: {
@@ -1717,7 +1716,6 @@ const styles = StyleSheet.create({
     fontSize: 19,
     color: GREEN,
     letterSpacing: 0.4,
-    textAlign: "center",
   },
 
   greetingLarge: {
@@ -1726,7 +1724,6 @@ const styles = StyleSheet.create({
     color: GREEN,
     lineHeight: 35,
     letterSpacing: 0.3,
-    textAlign: "center",
   },
 
   officeText: {
@@ -1734,7 +1731,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: MUTED,
     marginTop: 4,
-    textAlign: "center",
+    letterSpacing: 0.4,
   },
 
   sectionRow: {
