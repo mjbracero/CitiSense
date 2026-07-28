@@ -1,0 +1,52 @@
+# Used by EAS Build upload (replaces .gitignore for upload).
+# Keep secrets out of git via .gitignore, but allow EAS to receive `.env`
+# so EXPO_PUBLIC_* keys (Gemini/Deepgram/MapTiler) are inlined into APKs.
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# Keep example only for local docs — real .env IS uploaded to EAS
+.env.*
+!.env
+!.env.example
+.env.local
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+app-example
+
+# generated native folders
+/ios
+/android
+
+# Supabase local CLI temp
+supabase/.temp/
