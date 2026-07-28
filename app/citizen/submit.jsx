@@ -6,7 +6,6 @@ import {
   Poppins_700Bold,
   useFonts,
 } from "@expo-google-fonts/poppins";
-import { Audio } from "expo-av";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -43,6 +42,8 @@ import { HEADER_TOP_SPACING } from "../../constants/screenLayout";
 import ComplaintMapView from "../../components/ComplaintMapView";
 import { notifyDepartmentHeadsNewAssignment } from "../../lib/departmentHeadNotificationService";
 import { notifyCitizenDuplicateSubmission } from "../../lib/citizenNotificationService";
+import { getDeepgramApiKey } from "../../lib/deepgramApi";
+import { getGeminiApiKey } from "../../lib/geminiApi";
 import { isLocationUsageAllowed } from "../../lib/locationPreferences";
 import {
   analyzeComplaint,
@@ -53,7 +54,13 @@ import {
   getComplaintRejectionMessage,
   isComplaintAnalysisRejected,
 } from "../../lib/complaintContentModeration";
+import {
+  hasMicrophoneConsent,
+  saveMicrophoneConsent,
+} from "../../lib/microphonePreferences";
+import { playMicStartFeedback } from "../../lib/micFeedbackSound";
 import { supabase } from "../../lib/supabase";
+import { createVoiceTranscriber } from "../../lib/voiceRecording";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -72,10 +79,74 @@ const MAX_PHOTOS = 3;
 const MAX_PHOTO_SIZE = 10 * 1024 * 1024;
 const INPUT_ABOVE_TABS_BOTTOM = Platform.OS === "ios" ? 78 : 70;
 const MESSAGE_INPUT_HEIGHT = 64;
+const INPUT_KEYBOARD_GAP = Platform.OS === "android" ? 18 : 10;
 const PH_MOBILE_REGEX = /^09\d{9}$/;
 
+const SPOKEN_DIGIT_WORDS = {
+  zero: "0",
+  oh: "0",
+  o: "0",
+  one: "1",
+  two: "2",
+  three: "3",
+  four: "4",
+  five: "5",
+  six: "6",
+  seven: "7",
+  eight: "8",
+  nine: "9",
+  // Cebuano / Filipino
+  wala: "0",
+  isa: "1",
+  uno: "1",
+  duha: "2",
+  dos: "2",
+  tulo: "3",
+  tres: "3",
+  upat: "4",
+  kuatro: "4",
+  quatro: "4",
+  lima: "5",
+  unom: "6",
+  unum: "6",
+  sais: "6",
+  pito: "7",
+  siyete: "7",
+  walo: "8",
+  otso: "8",
+  siyam: "9",
+  nuebe: "9",
+};
+
+function extractDigitsFromSpeech(text) {
+  const raw = String(text || "").toLowerCase();
+  const rawDigits = raw.replace(/\D/g, "");
+
+  if (rawDigits.length >= 10) {
+    return rawDigits;
+  }
+
+  let fromWords = "";
+  const tokens = raw
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  for (const token of tokens) {
+    if (/^\d+$/.test(token)) {
+      fromWords += token;
+    } else if (SPOKEN_DIGIT_WORDS[token] != null) {
+      fromWords += SPOKEN_DIGIT_WORDS[token];
+    }
+  }
+
+  return fromWords || rawDigits;
+}
+
 function sanitizePhilippineMobileInput(text) {
-  const digits = text.replace(/\D/g, "").slice(0, 11);
+  const digits = String(text || "")
+    .replace(/\D/g, "")
+    .slice(0, 11);
 
   if (!digits) return "";
 
@@ -92,6 +163,10 @@ function sanitizePhilippineMobileInput(text) {
   }
 
   return `09${digits}`.slice(0, 11);
+}
+
+function sanitizeSpokenContactNumber(text) {
+  return sanitizePhilippineMobileInput(extractDigitsFromSpeech(text));
 }
 
 function isValidPhilippineMobile(number) {
@@ -816,14 +891,18 @@ export default function CitizenSubmit() {
   const processedPhotoUrisRef = useRef(new Set());
   const isPreparingPhotosRef = useRef(false);
   const selectedPhotosRef = useRef([]);
+  const liveTranscriberRef = useRef(null);
+  const isStartingVoiceRef = useRef(false);
+  const isStoppingVoiceRef = useRef(false);
+  const isRecordingRef = useRef(false);
+  const messageFromVoiceRef = useRef(false);
 
   const [message, setMessage] = useState("");
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-  const [recording, setRecording] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [voiceNoteUri, setVoiceNoteUri] = useState(null);
 
   const [chatStep, setChatStep] = useState(0);
   const [isEmergency, setIsEmergency] = useState(false);
@@ -874,13 +953,16 @@ export default function CitizenSubmit() {
       : keyboardHeight;
 
   const inputBottom = isKeyboardOpen
-    ? keyboardOffset
+    ? keyboardOffset + INPUT_KEYBOARD_GAP
     : INPUT_ABOVE_TABS_BOTTOM;
 
   const scrollBottomPadding = shouldShowInput
-    ? Math.max(210, inputBottom + MESSAGE_INPUT_HEIGHT + 28)
+    ? Math.max(
+        240,
+        inputBottom + MESSAGE_INPUT_HEIGHT + (isRecording || isTranscribing ? 48 : 0) + 40
+      )
     : reviewEditField
-      ? Math.max(180, keyboardOffset + 100)
+      ? Math.max(200, keyboardOffset + 120)
       : 125;
 
   const formattedDate = useMemo(
@@ -976,10 +1058,27 @@ export default function CitizenSubmit() {
   }, []);
 
   useEffect(() => {
+    const resolveKeyboardHeight = (event) => {
+      const reported = event?.endCoordinates?.height || 0;
+      const screenY = event?.endCoordinates?.screenY;
+      const windowHeight = Dimensions.get("window").height;
+
+      // More accurate with Android edge-to-edge / gesture nav.
+      if (
+        typeof screenY === "number" &&
+        screenY > 0 &&
+        screenY < windowHeight
+      ) {
+        return Math.max(windowHeight - screenY, reported);
+      }
+
+      return reported;
+    };
+
     const showSubscription = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
       (event) => {
-        setKeyboardHeight(event.endCoordinates.height);
+        setKeyboardHeight(resolveKeyboardHeight(event));
 
         setTimeout(() => {
           scrollToBottom(true);
@@ -1006,15 +1105,49 @@ export default function CitizenSubmit() {
 
   useEffect(() => {
     return () => {
+      isMountedRef.current = false;
+
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
       }
 
-      if (recording) {
-        recording.stopAndUnloadAsync().catch(() => {});
-      }
+      liveTranscriberRef.current?.stop?.().catch(() => {});
+      liveTranscriberRef.current = null;
     };
-  }, [recording]);
+  }, []);
+
+  const askMicrophonePermission = async () => {
+    const alreadyAllowed = await hasMicrophoneConsent();
+    if (alreadyAllowed) {
+      return true;
+    }
+
+    return new Promise((resolve) => {
+      Alert.alert(
+        "Turn On Microphone",
+        "Allow CitiSense to turn on the microphone for voice input?",
+        [
+          {
+            text: "Cancel",
+            style: "cancel",
+            onPress: () => resolve(false),
+          },
+          {
+            text: "Allow",
+            onPress: async () => {
+              await saveMicrophoneConsent(true);
+              resolve(true);
+            },
+          },
+        ],
+        {
+          cancelable: true,
+          onDismiss: () => resolve(false),
+        }
+      );
+    });
+  };
 
   const updateAddressFromCoords = async (coords, shouldSetConfirmed = false) => {
     const nextAddress = await resolveCommonAddress(
@@ -1091,81 +1224,203 @@ export default function CitizenSubmit() {
     }
   };
 
-  const startVoiceRecording = async () => {
-    try {
-      Keyboard.dismiss();
-
-      const permission = await Audio.requestPermissionsAsync();
-
-      if (!permission.granted) {
-        Alert.alert(
-          "Microphone Permission Needed",
-          "Please allow microphone access so you can use voice input."
-        );
-        return;
-      }
-
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-      });
-
-      const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-
-      setRecording(newRecording);
-      setVoiceNoteUri(null);
-      setIsRecording(true);
-      setRecordingSeconds(0);
-
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingSeconds((prev) => prev + 1);
-      }, 1000);
-    } catch (error) {
-      console.log("Microphone start error:", error);
-      Alert.alert("Microphone Error", "Unable to start voice recording.");
-    }
-  };
-
   const stopVoiceRecording = async () => {
-    try {
-      if (!recording) return;
+    if (isStoppingVoiceRef.current) return;
+    isStoppingVoiceRef.current = true;
 
+    try {
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
         recordingTimerRef.current = null;
       }
 
       setIsRecording(false);
+      isRecordingRef.current = false;
+      setIsTranscribing(true);
 
-      await recording.stopAndUnloadAsync();
+      const finalText = await liveTranscriberRef.current?.stop?.();
+      liveTranscriberRef.current = null;
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-      });
+      const transcript = String(finalText || "").trim();
 
-      const audioUri = recording.getURI();
-      setRecording(null);
+      setIsTranscribing(false);
+      setRecordingSeconds(0);
 
-      if (!audioUri) {
-        Alert.alert("Recording Error", "No audio was recorded.");
+      if (!transcript) {
+        Alert.alert(
+          "No Speech Detected",
+          "We couldn't catch that. Please try speaking again, or type your message."
+        );
         return;
       }
 
-      setVoiceNoteUri(audioUri);
+      if (chatStep === 2) {
+        const phone = sanitizeSpokenContactNumber(transcript);
+
+        if (phone) {
+          messageFromVoiceRef.current = true;
+          setMessage(phone);
+          if (!isValidPhilippineMobile(phone)) {
+            Alert.alert(
+              "Check Contact Number",
+              "We heard part of your number. Clear or edit it, then tap send when the 11-digit number starting with 09 looks correct."
+            );
+          }
+        } else {
+          Alert.alert(
+            "Couldn't Catch Number",
+            "Please say your 11-digit contact number starting with 09, or type it."
+          );
+        }
+        return;
+      }
+
+      messageFromVoiceRef.current = true;
+      setMessage(transcript);
     } catch (error) {
-      console.log("Microphone stop error:", error);
-      Alert.alert("Microphone Error", "Unable to stop voice recording.");
-    } finally {
+      console.log("Stop voice transcription error:", error);
+      Alert.alert(
+        "Voice Input Error",
+        error?.message || "Unable to finish voice transcription."
+      );
+      isRecordingRef.current = false;
+      setIsRecording(false);
+      setIsTranscribing(false);
       setRecordingSeconds(0);
+      liveTranscriberRef.current = null;
+    } finally {
+      isStoppingVoiceRef.current = false;
+    }
+  };
+
+  const startVoiceRecording = async () => {
+    if (
+      isStartingVoiceRef.current ||
+      isStoppingVoiceRef.current ||
+      isRecordingRef.current
+    ) {
+      return;
+    }
+
+    isStartingVoiceRef.current = true;
+
+    try {
+      Keyboard.dismiss();
+
+      if (!getGeminiApiKey() && !getDeepgramApiKey()) {
+        Alert.alert(
+          "Voice Not Configured",
+          "Voice input needs EXPO_PUBLIC_GEMINI_API_KEY in .env (recommended for accurate Bisaya/Tagalog/English and other PH dialects).\n\nRestart Metro with cache clear after adding it, or rebuild the APK so .env is included."
+        );
+        return;
+      }
+
+      const userAllowed = await askMicrophonePermission();
+
+      if (!userAllowed) {
+        return;
+      }
+
+      if (liveTranscriberRef.current) {
+        await liveTranscriberRef.current.stop().catch(() => {});
+        liveTranscriberRef.current = null;
+      }
+
+      await playMicStartFeedback();
+      // Brief pause so the start beep fully releases before recording.
+      await new Promise((resolve) => setTimeout(resolve, 220));
+
+      const field =
+        chatStep === 2 ? "contact" : chatStep === 0 ? "title" : "description";
+
+      const transcriber = createVoiceTranscriber({
+        field,
+        deepgramMode: chatStep === 2 ? "en" : "ph",
+        onTranscript: (text) => {
+          if (!isMountedRef.current) return;
+          if (!isRecordingRef.current && !messageFromVoiceRef.current) {
+            return;
+          }
+
+          const nextText =
+            chatStep === 2 ? sanitizeSpokenContactNumber(text) : text;
+
+          messageFromVoiceRef.current = true;
+          setMessage(nextText);
+          scrollToBottom(false);
+        },
+        onStatus: (status) => {
+          if (!isMountedRef.current) return;
+          if (status === "transcribing") {
+            setIsTranscribing(true);
+            return;
+          }
+          if (status === "listening" && isRecordingRef.current) {
+            setIsTranscribing(false);
+            return;
+          }
+          if (status === "idle") {
+            setIsTranscribing(false);
+          }
+        },
+        onAutoStop: () => {
+          if (!isMountedRef.current) return;
+          if (isStoppingVoiceRef.current) return;
+          // Don't require isRecordingRef — auto-stop can fire right as start finishes.
+          stopVoiceRecording();
+        },
+        onError: (error) => {
+          console.log("Voice transcription error:", error);
+        },
+      });
+
+      liveTranscriberRef.current = transcriber;
+      messageFromVoiceRef.current = true;
+      setMessage("");
+
+      // Mark listening BEFORE start so silence auto-stop is never ignored.
+      isRecordingRef.current = true;
+      setIsRecording(true);
+      setIsTranscribing(false);
+      setRecordingSeconds(0);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+
+      await transcriber.start();
+    } catch (error) {
+      console.log("Microphone start error:", error);
+      liveTranscriberRef.current = null;
+      isRecordingRef.current = false;
+      setIsRecording(false);
+      setIsTranscribing(false);
+
+      if (
+        error?.code === "MICROPHONE_DENIED" ||
+        error?.message === "MICROPHONE_DENIED"
+      ) {
+        Alert.alert(
+          "Microphone Not Allowed",
+          "Microphone access was denied, so voice input is unavailable. You can enable it later in your device settings."
+        );
+        return;
+      }
+
+      Alert.alert(
+        "Voice Input Error",
+        error?.message || "Unable to start voice transcription."
+      );
+    } finally {
+      isStartingVoiceRef.current = false;
     }
   };
 
   const toggleVoiceRecording = () => {
+    if (isStartingVoiceRef.current || isStoppingVoiceRef.current) {
+      return;
+    }
+
     if (isRecording) {
       stopVoiceRecording();
     } else {
@@ -1174,13 +1429,15 @@ export default function CitizenSubmit() {
   };
 
   const handleSendMessage = () => {
+    if (isRecording || isTranscribing) return;
+
     let cleanMessage = message.trim();
 
     if (chatStep === 2) {
       cleanMessage = sanitizePhilippineMobileInput(cleanMessage);
     }
 
-    if ((!cleanMessage && !voiceNoteUri) || isRecording) return;
+    if (!cleanMessage) return;
 
     if (chatStep === 2 && !isValidPhilippineMobile(cleanMessage)) {
       Alert.alert("Invalid Contact Number", getContactNumberErrorMessage());
@@ -1188,13 +1445,12 @@ export default function CitizenSubmit() {
     }
 
     const newMessage = {
-      text: cleanMessage || "Voice recording attached.",
-      voiceUri: voiceNoteUri,
+      text: cleanMessage,
       time: formatTime(new Date()),
     };
 
     if (chatStep === 0) {
-      const titleText = cleanMessage || "Voice Complaint";
+      const titleText = cleanMessage;
       const detectedType = classifyComplaintTitle(titleText);
 
       setComplaintTitle(titleText);
@@ -1203,17 +1459,17 @@ export default function CitizenSubmit() {
       setIsEmergency(detectedType === "emergency");
       setChatStep(1);
     } else if (chatStep === 1) {
-      setComplaintDescription(cleanMessage || "Voice description attached.");
+      setComplaintDescription(cleanMessage);
       setDescriptionMessage(newMessage);
       setChatStep(2);
     } else if (chatStep === 2) {
-      setContactNumber(cleanMessage || "Voice contact attached.");
+      setContactNumber(cleanMessage);
       setContactMessage(newMessage);
       setChatStep(3);
     }
 
+    messageFromVoiceRef.current = false;
     setMessage("");
-    setVoiceNoteUri(null);
 
     setTimeout(() => {
       scrollToBottom(true);
@@ -1611,7 +1867,7 @@ export default function CitizenSubmit() {
 
     Keyboard.dismiss();
 
-    if (isRecording && recording) {
+    if (isRecording || isTranscribing || liveTranscriberRef.current) {
       try {
         if (recordingTimerRef.current) {
           clearInterval(recordingTimerRef.current);
@@ -1619,13 +1875,11 @@ export default function CitizenSubmit() {
         }
 
         setIsRecording(false);
-        await recording.stopAndUnloadAsync();
-        setRecording(null);
-
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-        });
+        isRecordingRef.current = false;
+        await liveTranscriberRef.current?.stop?.().catch(() => {});
+        liveTranscriberRef.current = null;
+        setIsTranscribing(false);
+        setRecordingSeconds(0);
       } catch (recordingError) {
         console.log("Stop recording before submit error:", recordingError);
       }
@@ -2276,38 +2530,43 @@ export default function CitizenSubmit() {
           <View
             style={[
               styles.keyboardWhiteCover,
-              { height: keyboardOffset + MESSAGE_INPUT_HEIGHT + 8 },
+              {
+                height:
+                  keyboardOffset +
+                  MESSAGE_INPUT_HEIGHT +
+                  INPUT_KEYBOARD_GAP +
+                  (isRecording || isTranscribing ? 44 : 0) +
+                  16,
+              },
             ]}
           />
         )}
 
         {shouldShowInput && (
-          <View style={[styles.messageInputWrapper, { bottom: inputBottom }]}>
-            {isRecording && (
+          <View
+            style={[
+              styles.messageInputWrapper,
+              isKeyboardOpen && styles.messageInputWrapperKeyboard,
+              { bottom: inputBottom },
+            ]}
+          >
+            {(isRecording || isTranscribing) && (
               <View style={styles.recordingBanner}>
                 <View style={styles.recordingDot} />
 
                 <Text style={styles.recordingText}>
-                  Microphone is on • {formatRecordingTime(recordingSeconds)}
+                  {isTranscribing
+                    ? "Transcribing..."
+                    : chatStep === 2
+                      ? `Listening for number • ${formatRecordingTime(recordingSeconds)}`
+                      : `Listening • ${formatRecordingTime(recordingSeconds)}`}
                 </Text>
 
-                <Text style={styles.recordingHint}>Tap mic again to stop</Text>
-              </View>
-            )}
-
-            {voiceNoteUri && !isRecording && (
-              <View style={styles.voiceReadyBanner}>
-                <Ionicons name="mic" size={13} color={GREEN} />
-                <Text style={styles.voiceReadyText}>
-                  Voice recording attached
+                <Text style={styles.recordingHint}>
+                  {isTranscribing
+                    ? "Please wait"
+                    : "Stops when you pause · Bisaya / Tagalog / English"}
                 </Text>
-
-                <TouchableOpacity
-                  activeOpacity={0.7}
-                  onPress={() => setVoiceNoteUri(null)}
-                >
-                  <Ionicons name="close" size={15} color={RED} />
-                </TouchableOpacity>
               </View>
             )}
 
@@ -2315,7 +2574,7 @@ export default function CitizenSubmit() {
               <View
                 style={[
                   styles.inputBox,
-                  isRecording && styles.inputBoxRecording,
+                  (isRecording || isTranscribing) && styles.inputBoxRecording,
                 ]}
               >
                 <TextInput
@@ -2333,15 +2592,18 @@ export default function CitizenSubmit() {
                         ? sanitizePhilippineMobileInput(text)
                         : text;
 
+                    messageFromVoiceRef.current = false;
                     setMessage(nextText);
                     scrollToBottom(false);
                   }}
                   onFocus={() => scrollToBottom(true)}
                   placeholder={
                     isRecording
-                      ? "Listening..."
-                      : voiceNoteUri
-                      ? "Add text or send voice..."
+                      ? chatStep === 2
+                        ? "Say your 11-digit number..."
+                        : "Speak now..."
+                      : isTranscribing
+                      ? "Transcribing accurately..."
                       : chatStep === 0
                       ? "Type your complaint title..."
                       : chatStep === 1
@@ -2352,7 +2614,7 @@ export default function CitizenSubmit() {
                   returnKeyType="send"
                   onSubmitEditing={handleSendMessage}
                   blurOnSubmit={false}
-                  editable={!isRecording}
+                  editable={!isRecording && !isTranscribing}
                   keyboardType={chatStep === 2 ? "phone-pad" : "default"}
                   inputMode={chatStep === 2 ? "tel" : "text"}
                   textContentType={
@@ -2366,8 +2628,10 @@ export default function CitizenSubmit() {
                   style={[
                     styles.micButton,
                     isRecording && styles.micButtonActive,
+                    isTranscribing && styles.micButtonDisabled,
                   ]}
                   onPress={toggleVoiceRecording}
+                  disabled={isTranscribing}
                 >
                   <Ionicons
                     name={isRecording ? "mic" : "mic-outline"}
@@ -2382,8 +2646,9 @@ export default function CitizenSubmit() {
                   styles.sendButton,
                   {
                     opacity:
-                      (message.trim().length > 0 || voiceNoteUri) &&
-                      !isRecording
+                      message.trim().length > 0 &&
+                      !isRecording &&
+                      !isTranscribing
                         ? 1
                         : 0.5,
                   },
@@ -2391,7 +2656,7 @@ export default function CitizenSubmit() {
                 activeOpacity={0.7}
                 onPress={handleSendMessage}
                 disabled={
-                  (message.trim().length === 0 && !voiceNoteUri) || isRecording
+                  message.trim().length === 0 || isRecording || isTranscribing
                 }
               >
                 <Ionicons name="send" size={23} color={WHITE} />
@@ -3286,6 +3551,12 @@ const styles = StyleSheet.create({
     elevation: 40,
   },
 
+  messageInputWrapperKeyboard: {
+    backgroundColor: WHITE,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+
   messageRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3334,6 +3605,10 @@ const styles = StyleSheet.create({
 
   micButtonActive: {
     backgroundColor: RED,
+  },
+
+  micButtonDisabled: {
+    opacity: 0.45,
   },
 
   recordingBanner: {
