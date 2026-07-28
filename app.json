@@ -16,10 +16,14 @@
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_EXTERNAL_STORAGE"
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.VIBRATE",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
       ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -32,11 +36,17 @@
     "plugins": [
       "expo-router",
       [
+        "expo-av",
+        {
+          "microphonePermission": "CitiSense needs microphone access so you can use voice input when submitting complaints."
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "CitiSense needs access to your photos so you can upload complaint evidence.",
           "cameraPermission": "CitiSense needs camera access so you can take complaint evidence photos.",
-          "microphonePermission": false
+          "microphonePermission": "CitiSense needs microphone access so you can use voice input when submitting complaints."
         }
       ],
       [
@@ -78,7 +88,10 @@
       }
     },
     "ios": {
-      "bundleIdentifier": "com.mj.nnyrs.citisense"
+      "bundleIdentifier": "com.mj.nnyrs.citisense",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "CitiSense needs microphone access so you can use voice input when submitting complaints."
+      }
     }
   }
 }
