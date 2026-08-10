@@ -25,6 +25,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { supabase } from "../../lib/supabase";
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
+import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -113,6 +114,22 @@ const concernDepartmentMap = [
     departments: ["Bantay Dagat"],
   },
   { category: "PWD Accessibility Concerns", departments: ["PDAO"] },
+  {
+    category: "Tax and Treasury Concerns",
+    departments: ["City Treasurer's Office"],
+  },
+  {
+    category: "Property Assessment Concerns",
+    departments: ["City Assessor's Office"],
+  },
+  {
+    category: "Civil Registry Concerns",
+    departments: ["City Civil Registrar's Office"],
+  },
+  {
+    category: "Business Permit and Licensing Concerns",
+    departments: ["City Business Permit and Licensing Office"],
+  },
 ];
 
 const priorityFilters = [
@@ -666,7 +683,7 @@ function createMapHtml({ latitude, longitude }) {
             const map = new maplibregl.Map({
               container: "map",
               style:
-                "https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_API_KEY}",
+                "https://api.maptiler.com/maps/hybrid/style.json?key=${MAPTILER_API_KEY}",
               center: [complaintLng, complaintLat],
               zoom: 16,
               attributionControl: true,
@@ -965,6 +982,7 @@ export default function DepartmentHeadDashboard() {
   useFocusEffect(
     useCallback(() => {
       loadAssignedComplaints(true);
+      registerPushTokenForCurrentUser();
     }, [loadAssignedComplaints])
   );
 
