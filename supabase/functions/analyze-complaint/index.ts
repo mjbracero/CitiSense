@@ -8,6 +8,40 @@ const corsHeaders = {
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_MODEL = "gemini-2.5-flash";
+const MODEL_FALLBACKS = [
+  DEFAULT_MODEL,
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-flash-latest",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-lite",
+].filter((model, index, list) => model && list.indexOf(model) === index);
+
+function getModelsToTry(preferred?: string) {
+  const preferredModel = preferred?.trim() || DEFAULT_MODEL;
+  return [
+    preferredModel,
+    ...MODEL_FALLBACKS.filter((model) => model !== preferredModel),
+  ];
+}
+
+function isRetryableModelError(message = "") {
+  const text = String(message || "").toLowerCase();
+  return (
+    text.includes("quota") ||
+    text.includes("rate limit") ||
+    text.includes("resource_exhausted") ||
+    text.includes("429") ||
+    text.includes("exceeded your current quota") ||
+    text.includes("too many requests") ||
+    text.includes("not found") ||
+    text.includes("is not supported") ||
+    text.includes("unavailable") ||
+    text.includes("overloaded") ||
+    text.includes("503") ||
+    text.includes("500")
+  );
+}
 
 const PHILIPPINE_LANGUAGE_INSTRUCTION = `Understand and classify complaints written in any Philippine language or mix of languages, including English, Tagalog, Cebuano/Bisaya, Waray, Ilocano, Hiligaynon/Ilonggo, Kapampangan, Bicolano, Chavacano, and Taglish. Interpret meaning across languages — do not rely on English keywords alone.`;
 
@@ -43,6 +77,11 @@ const DEPARTMENT_BY_CATEGORY: Record<string, string> = {
   "Peace and Order Concerns": "Bogo City Police Station / PNP",
   "Coastal and Marine Protection Concerns": "Bantay Dagat",
   "PWD Accessibility Concerns": "PDAO",
+  "Tax and Treasury Concerns": "City Treasurer's Office",
+  "Property Assessment Concerns": "City Assessor's Office",
+  "Civil Registry Concerns": "City Civil Registrar's Office",
+  "Business Permit and Licensing Concerns":
+    "City Business Permit and Licensing Office",
 };
 
 const COMPLAINT_CATEGORY_NAMES = Object.keys(DEPARTMENT_BY_CATEGORY);
@@ -108,6 +147,11 @@ Analyze the complaint using NLP for category classification, urgency and severit
 ${PHILIPPINE_LANGUAGE_INSTRUCTION}
 
 ${MODERATION_PROMPT_RULES}
+
+IMPORTANT:
+- Use AI reasoning for EVERY field below. Do not leave fields empty or generic.
+- For Non-Emergency complaints, carefully classify category, priority, duplicate risk, cluster impact, and photo relevance from the full meaning of the text and images.
+- Never rely on English keyword matching alone.
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -231,22 +275,17 @@ async function parseGeminiHttpResponse(response: Response) {
   return payload;
 }
 
-async function callGemini(
+async function callGeminiOnce(
+  apiKey: string,
+  model: string,
   prompt: string,
-  photoImages: PhotoPayload[] = []
+  photoImages: PhotoPayload[] = [],
+  maxOutputTokens = 1600
 ) {
-  const apiKey = Deno.env.get("GEMINI_API_KEY")?.trim();
-
-  if (!apiKey) {
-    throw new Error("Missing GEMINI_API_KEY secret.");
-  }
-
-  const model = Deno.env.get("GEMINI_MODEL")?.trim() || DEFAULT_MODEL;
   const endpoint = `${GEMINI_BASE_URL}/models/${model}:generateContent`;
-
   const parts: Array<Record<string, unknown>> = [{ text: prompt }];
 
-  for (const photo of photoImages.slice(0, 2)) {
+  for (const photo of photoImages.slice(0, 3)) {
     if (!photo?.data) continue;
 
     parts.push({
@@ -257,6 +296,16 @@ async function callGemini(
     });
   }
 
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0.2,
+    responseMimeType: "application/json",
+    maxOutputTokens,
+  };
+
+  if (model.includes("2.5")) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
+
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -265,20 +314,28 @@ async function callGemini(
     },
     body: JSON.stringify({
       contents: [{ role: "user", parts }],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: "application/json",
-      },
+      generationConfig,
     }),
   });
 
   const payload = await parseGeminiHttpResponse(response);
 
-  const responseText = (payload?.candidates as Array<{
-    content?: { parts?: Array<{ text?: string }> };
-  }>)?.[0]?.content?.parts
-    ?.map((part) => part.text)
-    .filter(Boolean)
+  const candidateParts =
+    (
+      payload?.candidates as Array<{
+        content?: { parts?: Array<{ text?: string; thought?: boolean }> };
+      }>
+    )?.[0]?.content?.parts || [];
+
+  const answerParts = candidateParts.filter(
+    (part) => typeof part?.text === "string" && part.text.trim() && !part.thought
+  );
+  const fallbackParts = candidateParts.filter(
+    (part) => typeof part?.text === "string" && part.text.trim()
+  );
+
+  const responseText = (answerParts.length ? answerParts : fallbackParts)
+    .map((part) => part.text)
     .join("\n");
 
   const parsed = extractJsonObject(responseText || "");
@@ -288,6 +345,56 @@ async function callGemini(
   }
 
   return parsed;
+}
+
+async function callGemini(
+  prompt: string,
+  photoImages: PhotoPayload[] = [],
+  options: { isEmergency?: boolean } = {}
+) {
+  const apiKey = Deno.env.get("GEMINI_API_KEY")?.trim();
+
+  if (!apiKey) {
+    throw new Error("Missing GEMINI_API_KEY secret.");
+  }
+
+  const preferredModel =
+    Deno.env.get("GEMINI_MODEL")?.trim() || DEFAULT_MODEL;
+  const modelsToTry = getModelsToTry(preferredModel);
+  const maxOutputTokens = options.isEmergency ? 1100 : 1800;
+  let lastError: Error | null = null;
+
+  for (const model of modelsToTry) {
+    try {
+      const parsed = await callGeminiOnce(
+        apiKey,
+        model,
+        prompt,
+        photoImages,
+        maxOutputTokens
+      );
+
+      if (model !== preferredModel) {
+        console.log(`Gemini edge fell back to model: ${model}`);
+      }
+
+      return parsed;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      const message = lastError.message;
+
+      if (isRetryableModelError(message)) {
+        console.log(
+          `Gemini edge model ${model} unavailable (${message}). Trying backup...`
+        );
+        continue;
+      }
+
+      throw lastError;
+    }
+  }
+
+  throw lastError || new Error("Gemini request failed on all backup models.");
 }
 
 Deno.serve(async (req) => {
@@ -335,7 +442,9 @@ Deno.serve(async (req) => {
     const body = (await req.json()) as AnalyzeComplaintRequest;
     const prompt = buildAnalysisPrompt(body);
     const photoImages = Array.isArray(body.photoImages) ? body.photoImages : [];
-    const analysis = await callGemini(prompt, photoImages);
+    const analysis = await callGemini(prompt, photoImages, {
+      isEmergency: Boolean(body.isEmergency),
+    });
 
     return new Response(JSON.stringify({ analysis }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
