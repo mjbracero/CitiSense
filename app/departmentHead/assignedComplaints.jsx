@@ -7,6 +7,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/poppins";
 import * as Location from "expo-location";
+import * as FileSystem from "expo-file-system/legacy";
 import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -19,6 +20,7 @@ import {
   Modal,
   Platform,
   ScrollView,
+  Share,
   StatusBar,
   StyleSheet,
   Text,
@@ -110,6 +112,22 @@ const concernDepartmentMap = [
     department: "Bantay Dagat",
   },
   { category: "PWD Accessibility Concerns", department: "PDAO" },
+  {
+    category: "Tax and Treasury Concerns",
+    department: "City Treasurer's Office",
+  },
+  {
+    category: "Property Assessment Concerns",
+    department: "City Assessor's Office",
+  },
+  {
+    category: "Civil Registry Concerns",
+    department: "City Civil Registrar's Office",
+  },
+  {
+    category: "Business Permit and Licensing Concerns",
+    department: "City Business Permit and Licensing Office",
+  },
 ];
 
 const statusFilters = [
@@ -212,7 +230,9 @@ function getStatusStyle(status) {
   const normalizedStatus = normalizeStatus(status);
 
   if (normalizedStatus === "Assigned") return { bg: "#E8EEFF", color: BLUE };
-  if (normalizedStatus === "Pending") return { bg: "#E8EEFF", color: BLUE };
+  if (normalizedStatus === "Pending" || normalizedStatus === "Assigned") {
+    return { bg: "#E8EEFF", color: BLUE };
+  }
   if (normalizedStatus === "In Progress") return { bg: "#FFF2C2", color: "#A97700" };
   if (normalizedStatus === "For Validation") return { bg: LIGHT_GREEN, color: GREEN };
   if (normalizedStatus === "Completed") return { bg: "#DFF0DF", color: GREEN };
@@ -531,6 +551,74 @@ async function mapComplaintRow(row, profileMap = {}) {
   };
 }
 
+function escapeCsvCell(value) {
+  const text = String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  return text;
+}
+
+function buildComplaintsCsv(rows = []) {
+  const headers = [
+    "Complaint ID",
+    "Title",
+    "Category",
+    "Department",
+    "Status",
+    "Priority",
+    "Citizen",
+    "Contact",
+    "Location",
+    "Geotagged Location",
+    "Latitude",
+    "Longitude",
+    "Date",
+    "Time",
+    "Description",
+  ];
+
+  const lines = [headers.map(escapeCsvCell).join(",")];
+
+  for (const row of rows) {
+    lines.push(
+      [
+        row.id,
+        row.title,
+        row.category,
+        row.department,
+        row.status,
+        row.priority,
+        row.citizen,
+        row.contact,
+        row.location,
+        row.geotaggedLocation,
+        row.latitude,
+        row.longitude,
+        row.date,
+        row.time,
+        row.description,
+      ]
+        .map(escapeCsvCell)
+        .join(",")
+    );
+  }
+
+  return `\uFEFF${lines.join("\n")}`;
+}
+
+function isCenroDepartment(department = "") {
+  return String(department || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .includes("cenro");
+}
+
 function createMapHtml({ latitude, longitude }) {
   const complaintLat = Number(latitude);
   const complaintLng = Number(longitude);
@@ -696,7 +784,7 @@ function createMapHtml({ latitude, longitude }) {
 
           const map = new maplibregl.Map({
             container: "map",
-            style: "https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_API_KEY}",
+            style: "https://api.maptiler.com/maps/hybrid/style.json?key=${MAPTILER_API_KEY}",
             center: [complaintLng, complaintLat],
             zoom: 16,
             pitch: 0,
@@ -907,6 +995,7 @@ export default function DepartmentHeadAssignedComplaints() {
   const [statusModalVisible, setStatusModalVisible] = useState(false);
   const [reassignModalVisible, setReassignModalVisible] = useState(false);
   const [actionComplaint, setActionComplaint] = useState(null);
+  const [updatingStatusId, setUpdatingStatusId] = useState(null);
   const [selectedReassignTarget, setSelectedReassignTarget] = useState(null);
   const [reassignmentReason, setReassignmentReason] = useState("");
   const [submittingReassignment, setSubmittingReassignment] = useState(false);
@@ -1395,6 +1484,52 @@ export default function DepartmentHeadAssignedComplaints() {
     );
   }, [complaints, departmentHeadDepartment, selectedCategory, selectedStatus, selectedPriority]);
 
+  const canExportCsv = isCenroDepartment(departmentHeadDepartment);
+
+  const exportComplaintsToCsv = async () => {
+    if (!canExportCsv) {
+      return;
+    }
+
+    if (filteredComplaints.length === 0) {
+      Alert.alert(
+        "Nothing to Export",
+        "There are no complaints matching the current filters."
+      );
+      return;
+    }
+
+    try {
+      const csv = buildComplaintsCsv(filteredComplaints);
+      const dateStamp = new Date().toISOString().slice(0, 10);
+      const fileUri = `${FileSystem.cacheDirectory}cenro-complaints-${dateStamp}.csv`;
+
+      await FileSystem.writeAsStringAsync(fileUri, csv, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+
+      const shareResult = await Share.share(
+        Platform.OS === "ios"
+          ? {
+              url: fileUri,
+              title: "Export CENRO Complaints CSV",
+            }
+          : {
+              message: csv,
+              title: "Export CENRO Complaints CSV",
+              url: fileUri,
+            }
+      );
+
+      if (shareResult.action === Share.dismissedAction) {
+        return;
+      }
+    } catch (error) {
+      console.log("CSV export error:", error);
+      Alert.alert("Export Failed", "Unable to export complaints to CSV.");
+    }
+  };
+
   const selectedMapHtml = useMemo(() => {
     if (!selectedComplaint) return "";
 
@@ -1464,6 +1599,7 @@ export default function DepartmentHeadAssignedComplaints() {
     setStatusModalVisible(false);
     setReassignModalVisible(false);
     setActionComplaint(null);
+    setUpdatingStatusId(null);
     setSelectedReassignTarget(null);
     setReassignmentReason("");
     setSubmittingReassignment(false);
@@ -1531,7 +1667,7 @@ export default function DepartmentHeadAssignedComplaints() {
   };
 
   const openUpdateStatusModal = (complaint) => {
-    if (complaint.status === "Completed") {
+    if (normalizeStatus(complaint.status) === "Completed") {
       Alert.alert(
         "Status Locked",
         "Completed complaints can no longer be updated by the department head. The admin is responsible for marking complaints as completed after reviewing citizen feedback."
@@ -1544,7 +1680,12 @@ export default function DepartmentHeadAssignedComplaints() {
   };
 
   const selectStatus = async (nextStatus) => {
-    if (!actionComplaint) return;
+    if (!actionComplaint || updatingStatusId) {
+      return;
+    }
+
+    const complaint = actionComplaint;
+    const oldStatus = normalizeStatus(complaint.status);
 
     if (nextStatus === "Completed") {
       Alert.alert(
@@ -1554,7 +1695,7 @@ export default function DepartmentHeadAssignedComplaints() {
       return;
     }
 
-    if (actionComplaint.status === "Completed") {
+    if (oldStatus === "Completed") {
       Alert.alert(
         "Status Locked",
         "Completed complaints can no longer be updated by the department head."
@@ -1564,37 +1705,58 @@ export default function DepartmentHeadAssignedComplaints() {
       return;
     }
 
-    if (nextStatus === actionComplaint.status) {
-      setStatusModalVisible(false);
-      setActionComplaint(null);
+    // Close chooser immediately so the tap feels responsive.
+    setStatusModalVisible(false);
+    setActionComplaint(null);
+
+    if (nextStatus === oldStatus) {
       return;
     }
 
-    try {
-      const oldStatus = actionComplaint.status;
+    setUpdatingStatusId(complaint.rawId);
 
+    // Optimistic UI — badge updates right away.
+    setComplaints((prev) =>
+      prev.map((item) =>
+        item.rawId === complaint.rawId ? { ...item, status: nextStatus } : item
+      )
+    );
+
+    if (selectedComplaint?.rawId === complaint.rawId) {
+      setSelectedComplaint((prev) =>
+        prev ? { ...prev, status: nextStatus } : prev
+      );
+    }
+
+    try {
       const { data: updatedComplaint, error } = await supabase
         .from("complaints")
         .update({
           status: nextStatus,
         })
-        .eq("id", actionComplaint.rawId)
+        .eq("id", complaint.rawId)
         .select("id, short_id, citizen_id, status")
         .maybeSingle();
 
       if (error) {
-        Alert.alert("Update Failed", error.message);
-        return;
+        throw error;
       }
 
       if (!updatedComplaint) {
-        Alert.alert(
-          "Update Failed",
+        throw new Error(
           "No complaint row was updated. Please check your department head update policy."
         );
-        return;
       }
 
+      setUpdatingStatusId(null);
+
+      // Confirm right after the DB write — don't wait for push/notifications.
+      Alert.alert(
+        "Status Updated",
+        `Complaint status changed to ${nextStatus}.`
+      );
+
+      // Notify citizen/admins in the background.
       const notificationType =
         oldStatus === "In Progress" && nextStatus === "For Validation"
           ? "validation"
@@ -1607,72 +1769,72 @@ export default function DepartmentHeadAssignedComplaints() {
 
       const notificationMessage =
         notificationType === "validation"
-          ? `Your complaint #${actionComplaint.id} is now for validation. Please review it and provide feedback.`
-          : `Your complaint #${actionComplaint.id} status changed from ${oldStatus} to ${nextStatus}.`;
+          ? `Your complaint #${complaint.id} is now for validation. Please review it and provide feedback.`
+          : `Your complaint #${complaint.id} status changed from ${oldStatus} to ${nextStatus}.`;
 
-      const notificationCreated = (
-        await createCitizenNotificationAndPush({
-          citizenId: actionComplaint.citizenId,
-          complaintId: actionComplaint.rawId,
-          shortId: actionComplaint.id,
-          type: notificationType,
-          title: notificationTitle,
-          message: notificationMessage,
-          status: nextStatus,
-          metadata: {
-            old_status: oldStatus,
-            new_status: nextStatus,
-            updated_by: currentUserId,
-            assigned_office: actionComplaint.department,
-            title: actionComplaint.title,
-            category: actionComplaint.category,
-          },
-        })
-      ).success;
-
-      if (nextStatus === "For Validation") {
-        await notifyAdminsValidationRequired({
-          complaint: {
-            id: actionComplaint.rawId,
-            short_id: actionComplaint.id,
-            title: actionComplaint.title,
-            category: actionComplaint.category,
-            assigned_office: actionComplaint.department,
-            location_text:
-              actionComplaint.geotaggedLocation || actionComplaint.location,
+      Promise.resolve()
+        .then(async () => {
+          await createCitizenNotificationAndPush({
+            citizenId: complaint.citizenId,
+            complaintId: complaint.rawId,
+            shortId: complaint.id,
+            type: notificationType,
+            title: notificationTitle,
+            message: notificationMessage,
             status: nextStatus,
-          },
+            metadata: {
+              old_status: oldStatus,
+              new_status: nextStatus,
+              updated_by: currentUserId,
+              assigned_office: complaint.department,
+              title: complaint.title,
+              category: complaint.category,
+            },
+          });
+
+          if (nextStatus === "For Validation") {
+            await notifyAdminsValidationRequired({
+              complaint: {
+                id: complaint.rawId,
+                short_id: complaint.id,
+                title: complaint.title,
+                category: complaint.category,
+                assigned_office: complaint.department,
+                location_text:
+                  complaint.geotaggedLocation || complaint.location,
+                status: nextStatus,
+              },
+            });
+          }
+
+          loadAssignedComplaints(false);
+        })
+        .catch((notifyError) => {
+          console.log("Status update notification error:", notifyError);
+          loadAssignedComplaints(false);
         });
-      }
+    } catch (error) {
+      console.log("Update status error:", error);
 
       setComplaints((prev) =>
         prev.map((item) =>
-          item.rawId === actionComplaint.rawId
-            ? { ...item, status: nextStatus }
+          item.rawId === complaint.rawId
+            ? { ...item, status: oldStatus }
             : item
         )
       );
 
-      if (selectedComplaint?.rawId === actionComplaint.rawId) {
+      if (selectedComplaint?.rawId === complaint.rawId) {
         setSelectedComplaint((prev) =>
-          prev ? { ...prev, status: nextStatus } : prev
+          prev ? { ...prev, status: oldStatus } : prev
         );
       }
 
-      setStatusModalVisible(false);
-      setActionComplaint(null);
-
+      setUpdatingStatusId(null);
       Alert.alert(
-        "Status Updated",
-        notificationCreated
-          ? `Complaint status changed to ${nextStatus}. The citizen has been notified and will receive a push alert.`
-          : `Complaint status changed to ${nextStatus}, but the citizen notification could not be created. Check your complaint_notifications insert policy.`
+        "Update Failed",
+        error?.message || "Unable to update complaint status."
       );
-
-      loadAssignedComplaints(false);
-    } catch (error) {
-      console.log("Update status error:", error);
-      Alert.alert("Update Failed", "Unable to update complaint status.");
     }
   };
 
@@ -1864,10 +2026,25 @@ export default function DepartmentHeadAssignedComplaints() {
           contentContainerStyle={styles.scrollContent}
         >
           <View style={styles.headerContainer}>
-            <Text style={styles.headerTitle}>Assigned Complaints</Text>
-            <Text style={styles.headerSubtitle}>
-              {departmentHeadDepartment || "No department assigned in database"}
-            </Text>
+            <View style={styles.headerTitleRow}>
+              <View style={styles.headerTextWrap}>
+                <Text style={styles.headerTitle}>Assigned Complaints</Text>
+                <Text style={styles.headerSubtitle}>
+                  {departmentHeadDepartment || "No department assigned in database"}
+                </Text>
+              </View>
+
+              {canExportCsv ? (
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  style={styles.exportCsvButton}
+                  onPress={exportComplaintsToCsv}
+                >
+                  <Ionicons name="download-outline" size={16} color={WHITE} />
+                  <Text style={styles.exportCsvButtonText}>CSV</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
 
           <View style={styles.filterGrid}>
@@ -2023,17 +2200,32 @@ export default function DepartmentHeadAssignedComplaints() {
 
                     <View style={styles.cardActionRow}>
                       <TouchableOpacity
-                        activeOpacity={0.8}
-                        style={styles.updateStatusButton}
+                        activeOpacity={0.85}
+                        style={[
+                          styles.updateStatusButton,
+                          (updatingStatusId === item.rawId ||
+                            normalizeStatus(item.status) === "Completed") &&
+                            styles.updateStatusButtonDisabled,
+                        ]}
+                        disabled={
+                          updatingStatusId === item.rawId ||
+                          normalizeStatus(item.status) === "Completed"
+                        }
                         onPress={() => openUpdateStatusModal(item)}
                       >
-                        <MaterialCommunityIcons
-                          name="progress-check"
-                          size={15}
-                          color={WHITE}
-                        />
+                        {updatingStatusId === item.rawId ? (
+                          <ActivityIndicator size="small" color={WHITE} />
+                        ) : (
+                          <MaterialCommunityIcons
+                            name="progress-check"
+                            size={15}
+                            color={WHITE}
+                          />
+                        )}
                         <Text style={styles.updateStatusButtonText}>
-                          Update Status
+                          {updatingStatusId === item.rawId
+                            ? "Updating..."
+                            : "Update Status"}
                         </Text>
                       </TouchableOpacity>
 
@@ -2790,6 +2982,17 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
 
+  headerTitleRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+
+  headerTextWrap: {
+    flex: 1,
+  },
+
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 29,
@@ -2803,6 +3006,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: MUTED,
     marginTop: 2,
+  },
+
+  exportCsvButton: {
+    marginTop: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: GREEN,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+
+  exportCsvButtonText: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: 12,
+    color: WHITE,
   },
 
   filterGrid: {
@@ -3016,6 +3236,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
+    paddingHorizontal: 8,
+  },
+
+  updateStatusButtonDisabled: {
+    backgroundColor: "#9BB89C",
   },
 
   updateStatusButtonText: {
