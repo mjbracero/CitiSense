@@ -130,6 +130,11 @@ const CATEGORY_DEPARTMENT_MAP = {
   "Peace and Order Concerns": "Bogo City Police Station / PNP",
   "Coastal and Marine Protection Concerns": "Bantay Dagat",
   "PWD Accessibility Concerns": "PDAO",
+  "Tax and Treasury Concerns": "City Treasurer's Office",
+  "Property Assessment Concerns": "City Assessor's Office",
+  "Civil Registry Concerns": "City Civil Registrar's Office",
+  "Business Permit and Licensing Concerns":
+    "City Business Permit and Licensing Office",
 };
 
 const CATEGORY_ALIASES = {
