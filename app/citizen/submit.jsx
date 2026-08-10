@@ -211,6 +211,11 @@ const departmentByCategory = {
   "Peace and Order Concerns": "Bogo City Police Station / PNP",
   "Coastal and Marine Protection Concerns": "Bantay Dagat",
   "PWD Accessibility Concerns": "PDAO",
+  "Tax and Treasury Concerns": "City Treasurer's Office",
+  "Property Assessment Concerns": "City Assessor's Office",
+  "Civil Registry Concerns": "City Civil Registrar's Office",
+  "Business Permit and Licensing Concerns":
+    "City Business Permit and Licensing Office",
 };
 
 const categoryKeywords = [
@@ -1625,16 +1630,40 @@ export default function CitizenSubmit() {
     }
   };
 
-  const pickPhotos = async () => {
-    if (selectedPhotosRef.current.length >= MAX_PHOTOS) {
-      Alert.alert("Photo Limit Reached", `You can only upload up to ${MAX_PHOTOS} photos.`);
-      return;
-    }
+  const openCameraForPhotos = async () => {
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
 
-    if (isPreparingPhotosRef.current) {
-      return;
-    }
+      if (!permission.granted) {
+        Alert.alert(
+          "Permission Needed",
+          "Please allow camera access so you can take evidence photos."
+        );
+        return;
+      }
 
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        quality: 0.8,
+        base64: false,
+        exif: false,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      await addPickedPhotoAssets(result.assets);
+    } catch (error) {
+      console.log("Camera picker error:", error);
+      Alert.alert(
+        "Camera Error",
+        "The app could not open the camera. Please try again or choose a photo from your gallery."
+      );
+    }
+  };
+
+  const openGalleryForPhotos = async () => {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
@@ -1669,6 +1698,27 @@ export default function CitizenSubmit() {
         "The app could not open or load the selected photo. Please try choosing another photo."
       );
     }
+  };
+
+  const pickPhotos = () => {
+    if (selectedPhotosRef.current.length >= MAX_PHOTOS) {
+      Alert.alert("Photo Limit Reached", `You can only upload up to ${MAX_PHOTOS} photos.`);
+      return;
+    }
+
+    if (isPreparingPhotosRef.current) {
+      return;
+    }
+
+    Alert.alert(
+      "Add Photo Evidence",
+      "Take a photo with your camera or choose from your gallery.",
+      [
+        { text: "Take Photo", onPress: () => openCameraForPhotos() },
+        { text: "Choose from Gallery", onPress: () => openGalleryForPhotos() },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
   };
 
   useEffect(() => {
@@ -2369,7 +2419,7 @@ export default function CitizenSubmit() {
                     ) : (
                       <Text style={styles.chooseButtonText}>
                         {selectedPhotos.length === 0
-                          ? "Choose Photo"
+                          ? "Add Photo"
                           : "Add More Photos"}
                       </Text>
                     )}
@@ -2377,6 +2427,7 @@ export default function CitizenSubmit() {
                 )}
 
                 <Text style={styles.uploadFormats}>
+                  Take a photo or choose from your gallery.{"\n"}
                   You can upload up to {MAX_PHOTOS} photos.{"\n\n"}
                   Accepted Format: JPG, JPEG, PNG, HEIC, HEIF{"\n"}
                   Max size: 10MB per photo
