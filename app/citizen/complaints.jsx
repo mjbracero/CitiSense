@@ -121,6 +121,11 @@ const CATEGORY_DEPARTMENT_MAP = {
   "Peace and Order Concerns": "Bogo City Police Station / PNP",
   "Coastal and Marine Protection Concerns": "Bantay Dagat",
   "PWD Accessibility Concerns": "PDAO",
+  "Tax and Treasury Concerns": "City Treasurer's Office",
+  "Property Assessment Concerns": "City Assessor's Office",
+  "Civil Registry Concerns": "City Civil Registrar's Office",
+  "Business Permit and Licensing Concerns":
+    "City Business Permit and Licensing Office",
 };
 
 const CATEGORY_ALIASES = {
@@ -1587,9 +1592,7 @@ export default function CitizenComplaints() {
     setValidationVisible(true);
   };
 
-  const pickValidationPhoto = async () => {
-    Keyboard.dismiss();
-
+  const addValidationPhotoAssets = async (assets = []) => {
     const remainingSlots = MAX_VALIDATION_PHOTOS - validationPhotos.length;
 
     if (remainingSlots <= 0) {
@@ -1600,32 +1603,13 @@ export default function CitizenComplaints() {
       return;
     }
 
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-    if (permission.status !== "granted") {
-      Alert.alert(
-        "Permission Needed",
-        "Please allow photo access so you can upload validation evidence."
-      );
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsMultipleSelection: true,
-      selectionLimit: remainingSlots,
-      quality: 0.9,
-    });
-
-    if (result.canceled) return;
-
     let invalidFormatCount = 0;
     let invalidSizeCount = 0;
     let failedPrepareCount = 0;
 
     const validAssets = [];
 
-    for (const asset of result.assets) {
+    for (const asset of assets.slice(0, remainingSlots)) {
       const validFormat = isValidImageFormat(asset);
       const validSize = !asset.fileSize || Number(asset.fileSize) <= MAX_PHOTO_SIZE;
 
@@ -1660,6 +1644,101 @@ export default function CitizenComplaints() {
 
     setValidationPhotos((prev) =>
       [...prev, ...validAssets].slice(0, MAX_VALIDATION_PHOTOS)
+    );
+  };
+
+  const openCameraForValidationPhoto = async () => {
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+
+      if (permission.status !== "granted") {
+        Alert.alert(
+          "Permission Needed",
+          "Please allow camera access so you can take validation evidence photos."
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.9,
+      });
+
+      if (result.canceled || !result.assets?.length) return;
+
+      await addValidationPhotoAssets(result.assets);
+    } catch (error) {
+      console.log("Validation camera error:", error);
+      Alert.alert(
+        "Camera Error",
+        "The app could not open the camera. Please try again or choose a photo from your gallery."
+      );
+    }
+  };
+
+  const openGalleryForValidationPhoto = async () => {
+    try {
+      const remainingSlots = MAX_VALIDATION_PHOTOS - validationPhotos.length;
+
+      if (remainingSlots <= 0) {
+        Alert.alert(
+          "Photo Limit Reached",
+          "You can only upload up to 3 validation photos."
+        );
+        return;
+      }
+
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (permission.status !== "granted") {
+        Alert.alert(
+          "Permission Needed",
+          "Please allow photo access so you can upload validation evidence."
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        selectionLimit: remainingSlots,
+        quality: 0.9,
+      });
+
+      if (result.canceled || !result.assets?.length) return;
+
+      await addValidationPhotoAssets(result.assets);
+    } catch (error) {
+      console.log("Validation gallery error:", error);
+      Alert.alert(
+        "Photo Error",
+        "The app could not open or load the selected photo. Please try again."
+      );
+    }
+  };
+
+  const pickValidationPhoto = () => {
+    Keyboard.dismiss();
+
+    if (validationPhotos.length >= MAX_VALIDATION_PHOTOS) {
+      Alert.alert(
+        "Photo Limit Reached",
+        "You can only upload up to 3 validation photos."
+      );
+      return;
+    }
+
+    Alert.alert(
+      "Add Validation Photo",
+      "Take a photo with your camera or choose from your gallery.",
+      [
+        { text: "Take Photo", onPress: () => openCameraForValidationPhoto() },
+        {
+          text: "Choose from Gallery",
+          onPress: () => openGalleryForValidationPhoto(),
+        },
+        { text: "Cancel", style: "cancel" },
+      ]
     );
   };
 
@@ -2437,11 +2516,12 @@ export default function CitizenComplaints() {
                           <Ionicons name="camera" size={32} color={GREEN} />
 
                           <Text style={styles.photoUploadText}>
-                            Upload validation photo
+                            Add validation photo
                           </Text>
 
                           <Text style={styles.photoRulesText}>
-                            Up to 3 photos • JPG, PNG, HEIC • Max 10MB each
+                            Camera or gallery • Up to 3 photos • JPG, PNG, HEIC •
+                            Max 10MB each
                           </Text>
                         </TouchableOpacity>
                       ) : (
