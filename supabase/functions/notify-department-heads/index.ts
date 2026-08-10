@@ -70,7 +70,13 @@ Deno.serve(async (request) => {
     const message = String(body.message || "There is a new department update.").trim();
     const excludeDepartmentHeadId = body.excludeDepartmentHeadId || null;
 
-    if (!department || !complaintId) {
+    // Support dual routing e.g. "BFP Bogo City Fire Station & CDRRMO"
+    const departments = department
+      .split(/\s*&\s*/)
+      .map((part) => part.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    if (departments.length === 0 || !complaintId) {
       return new Response(
         JSON.stringify({ error: "Missing department or complaint id." }),
         {
@@ -87,15 +93,19 @@ Deno.serve(async (request) => {
         .from("profiles")
         .select("id")
         .eq("role", "moderator")
-        .eq("department", department);
+        .in("department", departments);
 
     if (departmentHeadsError) {
       throw departmentHeadsError;
     }
 
-    const departmentHeadIds = (departmentHeads || [])
-      .map((profile) => profile.id)
-      .filter((id) => id && id !== excludeDepartmentHeadId);
+    const departmentHeadIds = [
+      ...new Set(
+        (departmentHeads || [])
+          .map((profile) => profile.id)
+          .filter((id) => id && id !== excludeDepartmentHeadId)
+      ),
+    ];
 
     if (departmentHeadIds.length === 0) {
       return new Response(
