@@ -1229,6 +1229,54 @@ export default function CitizenSubmit() {
     }
   };
 
+  const sendChatMessage = (rawText) => {
+    let cleanMessage = String(rawText || "").trim();
+
+    if (chatStep === 2) {
+      cleanMessage = sanitizePhilippineMobileInput(cleanMessage);
+    }
+
+    if (!cleanMessage) return false;
+
+    if (chatStep === 2 && !isValidPhilippineMobile(cleanMessage)) {
+      Alert.alert("Invalid Contact Number", getContactNumberErrorMessage());
+      return false;
+    }
+
+    const newMessage = {
+      text: cleanMessage,
+      time: formatTime(new Date()),
+    };
+
+    if (chatStep === 0) {
+      const titleText = cleanMessage;
+      const detectedType = classifyComplaintTitle(titleText);
+
+      setComplaintTitle(titleText);
+      setTitleMessage(newMessage);
+      setComplaintType(detectedType);
+      setIsEmergency(detectedType === "emergency");
+      setChatStep(1);
+    } else if (chatStep === 1) {
+      setComplaintDescription(cleanMessage);
+      setDescriptionMessage(newMessage);
+      setChatStep(2);
+    } else if (chatStep === 2) {
+      setContactNumber(cleanMessage);
+      setContactMessage(newMessage);
+      setChatStep(3);
+    }
+
+    messageFromVoiceRef.current = false;
+    setMessage("");
+
+    setTimeout(() => {
+      scrollToBottom(true);
+    }, 120);
+
+    return true;
+  };
+
   const stopVoiceRecording = async () => {
     if (isStoppingVoiceRef.current) return;
     isStoppingVoiceRef.current = true;
@@ -1262,26 +1310,32 @@ export default function CitizenSubmit() {
       if (chatStep === 2) {
         const phone = sanitizeSpokenContactNumber(transcript);
 
-        if (phone) {
-          messageFromVoiceRef.current = true;
-          setMessage(phone);
-          if (!isValidPhilippineMobile(phone)) {
-            Alert.alert(
-              "Check Contact Number",
-              "We heard part of your number. Clear or edit it, then tap send when the 11-digit number starting with 09 looks correct."
-            );
-          }
-        } else {
+        if (!phone) {
           Alert.alert(
             "Couldn't Catch Number",
             "Please say your 11-digit contact number starting with 09, or type it."
           );
+          return;
         }
+
+        messageFromVoiceRef.current = true;
+        setMessage(phone);
+
+        if (!isValidPhilippineMobile(phone)) {
+          Alert.alert(
+            "Check Contact Number",
+            "We heard part of your number. Clear or edit it, then tap send when the 11-digit number starting with 09 looks correct."
+          );
+          return;
+        }
+
+        sendChatMessage(phone);
         return;
       }
 
       messageFromVoiceRef.current = true;
       setMessage(transcript);
+      sendChatMessage(transcript);
     } catch (error) {
       console.log("Stop voice transcription error:", error);
       Alert.alert(
@@ -1332,8 +1386,8 @@ export default function CitizenSubmit() {
       }
 
       await playMicStartFeedback();
-      // Brief pause so the start beep fully releases before recording.
-      await new Promise((resolve) => setTimeout(resolve, 220));
+      // Extra pause so Expo Go releases the player before recording prepares.
+      await new Promise((resolve) => setTimeout(resolve, 320));
 
       const field =
         chatStep === 2 ? "contact" : chatStep === 0 ? "title" : "description";
@@ -1435,50 +1489,7 @@ export default function CitizenSubmit() {
 
   const handleSendMessage = () => {
     if (isRecording || isTranscribing) return;
-
-    let cleanMessage = message.trim();
-
-    if (chatStep === 2) {
-      cleanMessage = sanitizePhilippineMobileInput(cleanMessage);
-    }
-
-    if (!cleanMessage) return;
-
-    if (chatStep === 2 && !isValidPhilippineMobile(cleanMessage)) {
-      Alert.alert("Invalid Contact Number", getContactNumberErrorMessage());
-      return;
-    }
-
-    const newMessage = {
-      text: cleanMessage,
-      time: formatTime(new Date()),
-    };
-
-    if (chatStep === 0) {
-      const titleText = cleanMessage;
-      const detectedType = classifyComplaintTitle(titleText);
-
-      setComplaintTitle(titleText);
-      setTitleMessage(newMessage);
-      setComplaintType(detectedType);
-      setIsEmergency(detectedType === "emergency");
-      setChatStep(1);
-    } else if (chatStep === 1) {
-      setComplaintDescription(cleanMessage);
-      setDescriptionMessage(newMessage);
-      setChatStep(2);
-    } else if (chatStep === 2) {
-      setContactNumber(cleanMessage);
-      setContactMessage(newMessage);
-      setChatStep(3);
-    }
-
-    messageFromVoiceRef.current = false;
-    setMessage("");
-
-    setTimeout(() => {
-      scrollToBottom(true);
-    }, 120);
+    sendChatMessage(message);
   };
 
   const startReviewEdit = (field) => {
@@ -2713,50 +2724,6 @@ export default function CitizenSubmit() {
                 <Ionicons name="send" size={23} color={WHITE} />
               </TouchableOpacity>
             </View>
-          </View>
-        )}
-
-        {!isKeyboardOpen && (
-          <View style={styles.bottomNav}>
-            {bottomTabs.map((tab) => {
-              const isActive =
-                pathname?.includes(tab.activePath) ||
-                (tab.label === "Submit" && pathname?.includes("citizenSubmit"));
-
-              return (
-                <TouchableOpacity
-                  key={tab.label}
-                  style={[styles.navItem, { flex: tab.flex }]}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    if (isActive) return;
-                    router.replace(tab.route);
-                  }}
-                >
-                  <Ionicons
-                    name={isActive ? tab.activeIcon : tab.inactiveIcon}
-                    size={26}
-                    color={isActive ? GREEN : "#000000"}
-                  />
-
-                  <Text
-                    style={[
-                      styles.navLabel,
-                      {
-                        color: isActive ? GREEN : "#000000",
-                        fontFamily: isActive
-                          ? "Poppins_600SemiBold"
-                          : "Poppins_500Medium",
-                      },
-                    ]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                  >
-                    {tab.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
           </View>
         )}
 
