@@ -26,6 +26,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { createCitizenNotificationAndPush } from "../../lib/citizenNotificationService";
 import { notifyDepartmentHeadsComplaintCompleted } from "../../lib/departmentHeadNotificationService";
+import {
+  buildResolutionValidationDbPayload,
+  validateResolutionWithGemini,
+} from "../../lib/geminiResolutionValidation";
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -733,6 +737,16 @@ async function mapComplaintRow(row, profileMap = {}) {
     hasCitizenValidation,
     feedback: feedback.trim() || null,
     citizenValidatedAt: row.citizen_validated_at || null,
+    aiValidationStatus: row.ai_validation_status || null,
+    aiValidationApproved:
+      typeof row.ai_validation_approved === "boolean"
+        ? row.ai_validation_approved
+        : null,
+    aiValidationConfidence: row.ai_validation_confidence ?? null,
+    aiValidationSummary: row.ai_validation_summary || null,
+    aiValidationReason: row.ai_validation_reason || null,
+    aiValidationRecommendation: row.ai_validation_recommendation || null,
+    aiValidatedAt: row.ai_validated_at || null,
     needsValidationReview:
       hasCitizenValidation &&
       (status === "For Validation" ||
@@ -777,6 +791,7 @@ export default function AdminComplaints() {
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
   const [autoOpenedComplaintId, setAutoOpenedComplaintId] = useState(null);
+  const [runningAiValidation, setRunningAiValidation] = useState(false);
 
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
@@ -1058,6 +1073,84 @@ export default function AdminComplaints() {
     }, 160);
   };
 
+  const applyAiValidationToComplaint = (complaintId, aiValidation) => {
+    const patch = {
+      aiValidationStatus: aiValidation?.status || null,
+      aiValidationApproved:
+        typeof aiValidation?.approved === "boolean"
+          ? aiValidation.approved
+          : null,
+      aiValidationConfidence: aiValidation?.confidence ?? null,
+      aiValidationSummary: aiValidation?.summary || null,
+      aiValidationReason: aiValidation?.reason || null,
+      aiValidationRecommendation: aiValidation?.recommendation || null,
+      aiValidatedAt: aiValidation?.validated_at || new Date().toISOString(),
+    };
+
+    setComplaints((prev) =>
+      prev.map((item) =>
+        (item.rawId || item.id) === complaintId ? { ...item, ...patch } : item
+      )
+    );
+
+    setSelectedComplaint((prev) =>
+      prev && (prev.rawId || prev.id) === complaintId
+        ? { ...prev, ...patch }
+        : prev
+    );
+  };
+
+  const runAiValidationForComplaint = async (complaint = selectedComplaint) => {
+    if (!complaint?.hasCitizenValidation) {
+      Alert.alert(
+        "Citizen validation required",
+        "AI can only validate after the citizen submits validation evidence."
+      );
+      return null;
+    }
+
+    if (runningAiValidation) return null;
+
+    const complaintId = complaint.rawId || complaint.id;
+
+    try {
+      setRunningAiValidation(true);
+
+      const aiValidation = await validateResolutionWithGemini({
+        title: complaint.title,
+        description: complaint.description,
+        category: complaint.category,
+        locationText: complaint.geotaggedLocation,
+        citizenAnswer: complaint.validationAnswer,
+        citizenFeedback: complaint.feedback,
+        originalPhotoUris: complaint.uploadedPhotos || [],
+        validationPhotoUris: complaint.validationPhotos || [],
+      });
+
+      const { error } = await supabase
+        .from("complaints")
+        .update(buildResolutionValidationDbPayload(aiValidation))
+        .eq("id", complaintId);
+
+      if (error) {
+        Alert.alert("AI Validation Failed", error.message);
+        return null;
+      }
+
+      applyAiValidationToComplaint(complaintId, aiValidation);
+      return aiValidation;
+    } catch (error) {
+      console.log("Admin AI validation error:", error);
+      Alert.alert(
+        "AI Validation Failed",
+        error?.message || "Unable to run AI validation right now."
+      );
+      return null;
+    } finally {
+      setRunningAiValidation(false);
+    }
+  };
+
   const markAsComplete = async () => {
     if (!selectedComplaint) return;
 
@@ -1065,6 +1158,66 @@ export default function AdminComplaints() {
       Alert.alert(
         "Action unavailable",
         "Only complaints under For Validation can be marked as completed."
+      );
+      return;
+    }
+
+    if (!selectedComplaint.hasCitizenValidation) {
+      Alert.alert(
+        "Citizen validation required",
+        "Wait for the citizen to submit validation feedback and photos before marking this complaint complete."
+      );
+      return;
+    }
+
+    if (selectedComplaint.validationResolved === false) {
+      Alert.alert(
+        "Cannot mark complete",
+        "The citizen reported the issue as not resolved. Return the complaint for review instead."
+      );
+      return;
+    }
+
+    let aiApproved = selectedComplaint.aiValidationApproved === true;
+
+    if (!aiApproved) {
+      const aiStatus = String(
+        selectedComplaint.aiValidationStatus || ""
+      ).toLowerCase();
+
+      if (aiStatus === "rejected") {
+        Alert.alert(
+          "AI validation rejected",
+          selectedComplaint.aiValidationReason ||
+            "AI did not approve the citizen validation evidence. Return the complaint for review or re-run AI validation."
+        );
+        return;
+      }
+
+      Alert.alert(
+        "AI validation required",
+        "AI must approve the citizen validation evidence before this complaint can be marked complete. Run AI validation now?",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Run AI Validation",
+            onPress: async () => {
+              const result = await runAiValidationForComplaint(selectedComplaint);
+              if (result?.approved) {
+                Alert.alert(
+                  "AI Approved",
+                  "AI approved the validation evidence. Tap Mark Complete again to finish."
+                );
+              } else if (result) {
+                Alert.alert(
+                  "AI Rejected",
+                  result.reason ||
+                    "AI did not approve the evidence. Return the complaint for review."
+                );
+              }
+            },
+          },
+        ]
       );
       return;
     }
@@ -1101,10 +1254,17 @@ export default function AdminComplaints() {
       });
     }
 
-    await notifyDepartmentHeadsComplaintCompleted({
+    const deptHeadNotify = await notifyDepartmentHeadsComplaintCompleted({
       complaint: selectedComplaint,
       department: selectedComplaint.department,
     });
+
+    if (!deptHeadNotify?.notifiedCount) {
+      console.log(
+        "Department head completion thank-you not sent:",
+        deptHeadNotify
+      );
+    }
 
     setComplaints((prev) =>
       prev.map((item) =>
@@ -1118,7 +1278,12 @@ export default function AdminComplaints() {
       prev ? { ...prev, status: "Completed" } : prev
     );
 
-    Alert.alert("Complaint Completed", "The complaint has been marked complete.");
+    Alert.alert(
+      "Complaint Completed",
+      deptHeadNotify?.notifiedCount
+        ? "The complaint has been marked as completed. A completion acknowledgment has been sent to the assigned department head."
+        : "The complaint has been marked as completed."
+    );
     loadAllComplaints(false);
   };
 
@@ -1396,58 +1561,6 @@ export default function AdminComplaints() {
           </View>
         </ScrollView>
 
-        <View style={styles.bottomNav}>
-          {bottomTabs.map((tab) => {
-            const isActive =
-              pathname?.includes(tab.activePath) ||
-              (tab.label === "Home" &&
-                (pathname === "/" || pathname?.includes("admin/dashboard")));
-
-            return (
-              <TouchableOpacity
-                key={tab.label}
-                style={[styles.navItem, { flex: tab.flex }]}
-                activeOpacity={0.7}
-                onPress={() => smoothNavigate(tab.route, isActive)}
-              >
-                <View style={styles.navIconWrap}>
-                  <Ionicons
-                    name={isActive ? tab.activeIcon : tab.inactiveIcon}
-                    size={25}
-                    color={isActive ? GREEN : TEXT}
-                  />
-
-                  {tab.label === "Notifications" &&
-                    unreadNotificationCount > 0 && (
-                      <View style={styles.notificationNavBadge}>
-                        <Text style={styles.notificationNavBadgeText}>
-                          {unreadNotificationCount > 99
-                            ? "99+"
-                            : unreadNotificationCount}
-                        </Text>
-                      </View>
-                    )}
-                </View>
-
-                <Text
-                  style={[
-                    styles.navLabel,
-                    {
-                      color: isActive ? GREEN : TEXT,
-                      fontFamily: isActive
-                        ? "Poppins_600SemiBold"
-                        : "Poppins_500Medium",
-                    },
-                  ]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                >
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
 
         <DropdownModal
           visible={concernTypeDropdownVisible}
@@ -1691,6 +1804,92 @@ export default function AdminComplaints() {
                             No photo evidence attached.
                           </Text>
                         )}
+
+                        <Text style={styles.validationFieldLabel}>
+                          AI Validation
+                        </Text>
+                        <View
+                          style={[
+                            styles.aiValidationBox,
+                            selectedComplaint.aiValidationApproved === true &&
+                              styles.aiValidationBoxApproved,
+                            selectedComplaint.aiValidationStatus === "rejected" &&
+                              styles.aiValidationBoxRejected,
+                            selectedComplaint.aiValidationStatus === "error" &&
+                              styles.aiValidationBoxPending,
+                            (!selectedComplaint.aiValidationStatus ||
+                              selectedComplaint.aiValidationStatus ===
+                                "pending") &&
+                              styles.aiValidationBoxPending,
+                          ]}
+                        >
+                          <Text style={styles.aiValidationStatusText}>
+                            {selectedComplaint.aiValidationApproved === true
+                              ? "Approved"
+                              : selectedComplaint.aiValidationStatus ===
+                                  "rejected"
+                                ? "Rejected"
+                                : selectedComplaint.aiValidationStatus ===
+                                    "error"
+                                  ? "Needs human review"
+                                  : "Pending"}
+                          </Text>
+                          <Text style={styles.aiValidationSummaryText}>
+                            {selectedComplaint.aiValidationSummary ||
+                              selectedComplaint.aiValidationReason ||
+                              "AI has not finished validating this evidence yet."}
+                          </Text>
+                          {selectedComplaint.aiValidationReason &&
+                          selectedComplaint.aiValidationSummary &&
+                          selectedComplaint.aiValidationReason !==
+                            selectedComplaint.aiValidationSummary ? (
+                            <Text style={styles.aiValidationReasonText}>
+                              {selectedComplaint.aiValidationReason}
+                            </Text>
+                          ) : null}
+                        </View>
+
+                        {selectedComplaint.status === "For Validation" ? (
+                          <TouchableOpacity
+                            activeOpacity={0.8}
+                            style={[
+                              styles.runAiValidationButton,
+                              runningAiValidation &&
+                                styles.runAiValidationButtonDisabled,
+                            ]}
+                            disabled={runningAiValidation}
+                            onPress={async () => {
+                              const result =
+                                await runAiValidationForComplaint(
+                                  selectedComplaint
+                                );
+                              if (!result) return;
+                              Alert.alert(
+                                result.approved
+                                  ? "AI Approved"
+                                  : "AI Rejected",
+                                result.summary || result.reason
+                              );
+                            }}
+                          >
+                            {runningAiValidation ? (
+                              <ActivityIndicator size="small" color={WHITE} />
+                            ) : (
+                              <MaterialCommunityIcons
+                                name="robot-outline"
+                                size={16}
+                                color={WHITE}
+                              />
+                            )}
+                            <Text style={styles.runAiValidationButtonText}>
+                              {runningAiValidation
+                                ? "Running AI..."
+                                : selectedComplaint.aiValidationStatus
+                                  ? "Re-run AI Validation"
+                                  : "Run AI Validation"}
+                            </Text>
+                          </TouchableOpacity>
+                        ) : null}
                       </>
                     ) : (
                       <Text style={styles.noValidationText}>
@@ -2465,6 +2664,74 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins_500Medium",
     fontSize: 11.5,
     color: MUTED,
+  },
+
+  aiValidationBox: {
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+
+  aiValidationBoxApproved: {
+    backgroundColor: LIGHT_GREEN,
+    borderColor: "#B7DFB4",
+  },
+
+  aiValidationBoxRejected: {
+    backgroundColor: "#FFF0F0",
+    borderColor: "#F0C0C0",
+  },
+
+  aiValidationBoxPending: {
+    backgroundColor: "#FFF8EB",
+    borderColor: "#F0D9A8",
+  },
+
+  aiValidationStatusText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 12,
+    color: TEXT,
+    marginBottom: 4,
+  },
+
+  aiValidationSummaryText: {
+    fontFamily: "Poppins_400Regular",
+    fontSize: 11.5,
+    color: "#333333",
+    lineHeight: 17,
+  },
+
+  aiValidationReasonText: {
+    fontFamily: "Poppins_400Regular",
+    fontSize: 11,
+    color: MUTED,
+    lineHeight: 16,
+    marginTop: 6,
+  },
+
+  runAiValidationButton: {
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: BLUE,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+    marginBottom: 4,
+    paddingHorizontal: 12,
+  },
+
+  runAiValidationButtonDisabled: {
+    opacity: 0.7,
+  },
+
+  runAiValidationButtonText: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: 12,
+    color: WHITE,
   },
 
   validationPhotoRow: {
