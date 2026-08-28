@@ -546,7 +546,16 @@ async function mapComplaintRow(row, profileMap = {}) {
   };
 }
 
-function createMapHtml({ latitude, longitude }) {
+function escapeHtml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function createMapHtml({ latitude, longitude, address = "", title = "" }) {
   const complaintLat = Number(latitude);
   const complaintLng = Number(longitude);
 
@@ -587,6 +596,18 @@ function createMapHtml({ latitude, longitude }) {
     `;
   }
 
+  const safeAddress =
+    String(address || "").trim() || "Exact address unavailable";
+  const safeTitle = String(title || "").trim() || "Complaint Location";
+  const popupHtml = `
+    <div class="popup-card">
+      <div class="popup-title">${escapeHtml(safeTitle)}</div>
+      <div class="popup-label">Exact Address</div>
+      <div class="popup-address">${escapeHtml(safeAddress)}</div>
+      <div class="popup-coords">${complaintLat.toFixed(6)}, ${complaintLng.toFixed(6)}</div>
+    </div>
+  `.replace(/\n/g, "");
+
   return `
     <!DOCTYPE html>
     <html>
@@ -619,29 +640,52 @@ function createMapHtml({ latitude, longitude }) {
           .maplibregl-popup-content {
             font-family: Arial, sans-serif;
             font-size: 12px;
-            border-radius: 10px;
-            padding: 8px 10px;
+            border-radius: 12px;
+            padding: 10px 12px;
+            max-width: 240px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+          }
+
+          .popup-card .popup-title {
+            font-size: 12px;
+            font-weight: 800;
+            color: #171717;
+            margin-bottom: 6px;
+          }
+
+          .popup-card .popup-label {
+            font-size: 10px;
+            font-weight: 700;
+            color: #087A0D;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            margin-bottom: 2px;
+          }
+
+          .popup-card .popup-address {
+            font-size: 12px;
+            color: #333;
+            line-height: 1.35;
+            margin-bottom: 6px;
+          }
+
+          .popup-card .popup-coords {
+            font-size: 10px;
+            color: #6f776f;
           }
 
           .complaint-marker {
-            width: 32px;
-            height: 32px;
-            background: #d71920;
-            border-radius: 50% 50% 50% 0;
-            transform: rotate(-45deg);
-            border: 3px solid white;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.28);
+            width: 28px;
+            height: 40px;
+            display: block;
+            background: transparent;
           }
 
-          .complaint-marker::after {
-            content: "";
-            width: 10px;
-            height: 10px;
-            background: white;
-            position: absolute;
-            border-radius: 50%;
-            left: 8px;
-            top: 8px;
+          .complaint-marker svg {
+            display: block;
+            width: 28px;
+            height: 40px;
+            overflow: visible;
           }
 
           .map-error {
@@ -673,6 +717,7 @@ function createMapHtml({ latitude, longitude }) {
 
           const complaintLng = ${complaintLng};
           const complaintLat = ${complaintLat};
+          const popupHtml = ${JSON.stringify(popupHtml)};
 
           const showMapError = () => {
             mapContainer.style.display = "none";
@@ -692,16 +737,25 @@ function createMapHtml({ latitude, longitude }) {
             map.on("load", () => {
               const complaintMarkerElement = document.createElement("div");
               complaintMarkerElement.className = "complaint-marker";
+              complaintMarkerElement.innerHTML =
+                '<svg viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+                '<path d="M14 1.5C7.65 1.5 2.5 6.65 2.5 13c0 8.75 11.5 25.5 11.5 25.5S25.5 21.75 25.5 13C25.5 6.65 20.35 1.5 14 1.5z" fill="#d71920" stroke="#ffffff" stroke-width="2.5" stroke-linejoin="round"/>' +
+                '<circle cx="14" cy="13" r="4.2" fill="#ffffff"/>' +
+                "</svg>";
 
               new maplibregl.Marker({
                 element: complaintMarkerElement,
                 anchor: "bottom",
+                pitchAlignment: "map",
+                rotationAlignment: "map",
               })
                 .setLngLat([complaintLng, complaintLat])
                 .setPopup(
-                  new maplibregl.Popup({ offset: 24 }).setText(
-                    "Pinned Complaint Location"
-                  )
+                  new maplibregl.Popup({
+                    offset: 24,
+                    maxWidth: "260px",
+                    closeButton: true,
+                  }).setHTML(popupHtml)
                 )
                 .addTo(map)
                 .togglePopup();
@@ -1076,6 +1130,11 @@ export default function DepartmentHeadDashboard() {
     return createMapHtml({
       latitude: selectedComplaint.latitude,
       longitude: selectedComplaint.longitude,
+      address:
+        selectedComplaint.geotaggedLocation ||
+        selectedComplaint.location ||
+        "",
+      title: selectedComplaint.title || "Complaint Location",
     });
   }, [selectedComplaint]);
 
