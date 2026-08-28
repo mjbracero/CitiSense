@@ -186,6 +186,42 @@ const DEFAULT_REGION = {
   longitudeDelta: 0.012,
 };
 
+/**
+ * Detects whether coordinates still match the default Bogo City map center.
+ * Used to prevent complaints from being submitted without a real GPS capture.
+ */
+function isDefaultMapRegion(coords = {}) {
+  const lat = Number(coords.latitude);
+  const lng = Number(coords.longitude);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return true;
+  }
+
+  return (
+    Math.abs(lat - DEFAULT_REGION.latitude) < 0.00001 &&
+    Math.abs(lng - DEFAULT_REGION.longitude) < 0.00001
+  );
+}
+
+/**
+ * Captures the device's current GPS position with navigation-grade accuracy.
+ * Returns coordinates suitable for geotagging a complaint at submission time.
+ */
+async function getFreshDeviceLocation() {
+  const currentPosition = await Location.getCurrentPositionAsync({
+    accuracy: Location.Accuracy.BestForNavigation,
+  });
+
+  return {
+    latitude: currentPosition.coords.latitude,
+    longitude: currentPosition.coords.longitude,
+    latitudeDelta: 0.004,
+    longitudeDelta: 0.004,
+    accuracy: currentPosition.coords.accuracy,
+  };
+}
+
 
 const departmentByCategory = {
   "Water Concerns": "Bogo Water District",
@@ -1177,37 +1213,47 @@ export default function CitizenSubmit() {
   const locateUser = async () => {
     try {
       setIsLocating(true);
+      setConfirmedLocation(false);
 
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (!user?.id || !(await isLocationUsageAllowed(user.id))) {
-        setComplaintCapturedAt(new Date());
-        setIsLocating(false);
-        setConfirmedLocation(true);
+      if (!user?.id) {
+        Alert.alert(
+          "Location Required",
+          "Please log in again before capturing the complaint location."
+        );
         return;
+      }
+
+      if (!(await isLocationUsageAllowed(user.id))) {
+        const permission = await Location.requestForegroundPermissionsAsync();
+
+        if (permission.status !== "granted") {
+          Alert.alert(
+            "Location Permission Needed",
+            "Turn on location permission so the complaint pin matches your real spot on the map."
+          );
+          return;
+        }
       }
 
       const permission = await Location.getForegroundPermissionsAsync();
 
       if (permission.status !== "granted") {
-        setComplaintCapturedAt(new Date());
-        setIsLocating(false);
-        setConfirmedLocation(true);
-        return;
+        const requested = await Location.requestForegroundPermissionsAsync();
+
+        if (requested.status !== "granted") {
+          Alert.alert(
+            "Location Permission Needed",
+            "Turn on location permission so the complaint pin matches your real spot on the map."
+          );
+          return;
+        }
       }
 
-      const currentPosition = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
-
-      const nextRegion = {
-        latitude: currentPosition.coords.latitude,
-        longitude: currentPosition.coords.longitude,
-        latitudeDelta: 0.004,
-        longitudeDelta: 0.004,
-      };
+      const nextRegion = await getFreshDeviceLocation();
 
       if (!isInsideBogoCity(nextRegion.latitude, nextRegion.longitude)) {
         if (!bogoWarningShownRef.current) {
@@ -1221,9 +1267,13 @@ export default function CitizenSubmit() {
 
       setSelectedLocation(nextRegion);
       await updateAddressFromCoords(nextRegion, true);
-    } catch {
-      setComplaintCapturedAt(new Date());
-      setConfirmedLocation(true);
+    } catch (error) {
+      console.log("Locate user error:", error);
+      setConfirmedLocation(false);
+      Alert.alert(
+        "Location Error",
+        "Unable to capture your current GPS location. Please try again."
+      );
     } finally {
       setIsLocating(false);
     }
@@ -1918,6 +1968,15 @@ export default function CitizenSubmit() {
       return;
     }
 
+    if (isDefaultMapRegion(selectedLocation)) {
+      Alert.alert(
+        "Exact Location Needed",
+        "Your complaint is still on the default city pin. Capture your current GPS location before submitting."
+      );
+      await locateUser();
+      return;
+    }
+
     if (selectedPhotos.length === 0) {
       Alert.alert(
         "Photo Required",
@@ -1967,12 +2026,43 @@ export default function CitizenSubmit() {
         return;
       }
 
+      let submitLocation = {
+        latitude: Number(selectedLocation.latitude),
+        longitude: Number(selectedLocation.longitude),
+      };
+
+      try {
+        if (await isLocationUsageAllowed(user.id)) {
+          const freshLocation = await getFreshDeviceLocation();
+          submitLocation = {
+            latitude: freshLocation.latitude,
+            longitude: freshLocation.longitude,
+          };
+          setSelectedLocation(freshLocation);
+          await updateAddressFromCoords(freshLocation, true);
+        }
+      } catch (locationError) {
+        console.log("Fresh submit location error:", locationError);
+      }
+
+      if (
+        !Number.isFinite(submitLocation.latitude) ||
+        !Number.isFinite(submitLocation.longitude) ||
+        isDefaultMapRegion(submitLocation)
+      ) {
+        Alert.alert(
+          "Exact Location Needed",
+          "Unable to use a precise GPS pin for this complaint. Please capture your location again."
+        );
+        return;
+      }
+
       const analysis = await analyzeComplaint({
         title: complaintTitle.trim(),
         description: complaintDescription.trim(),
         locationText,
-        latitude: selectedLocation.latitude,
-        longitude: selectedLocation.longitude,
+        latitude: submitLocation.latitude,
+        longitude: submitLocation.longitude,
         isEmergency: complaintType === "emergency",
         photoUris: selectedPhotos.map((photo) => photo.uri).filter(Boolean),
         userId: user.id,
@@ -2028,8 +2118,8 @@ export default function CitizenSubmit() {
         category: detectedCategory,
         assigned_office: assignedOffice,
         location_text: locationText,
-        latitude: selectedLocation.latitude,
-        longitude: selectedLocation.longitude,
+        latitude: submitLocation.latitude,
+        longitude: submitLocation.longitude,
         submitted_date_time: finalSubmittedDateTime,
         photo_urls: [],
         created_at: new Date().toISOString(),
