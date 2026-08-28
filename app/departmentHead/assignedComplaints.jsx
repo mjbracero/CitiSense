@@ -529,8 +529,9 @@ async function mapComplaintRow(row, profileMap = {}) {
       row.geotagged_location ||
       row.location ||
       "Pinned location not available",
-    latitude: row.latitude ? String(row.latitude) : "",
-    longitude: row.longitude ? String(row.longitude) : "",
+    latitude: row.latitude != null && row.latitude !== "" ? String(row.latitude).trim() : "",
+    longitude:
+      row.longitude != null && row.longitude !== "" ? String(row.longitude).trim() : "",
     date: formatDbDate(createdAt),
     time: formatDbTime(createdAt),
     createdAt,
@@ -619,9 +620,32 @@ function isCenroDepartment(department = "") {
     .includes("cenro");
 }
 
-function createMapHtml({ latitude, longitude }) {
-  const complaintLat = Number(latitude);
-  const complaintLng = Number(longitude);
+function escapeHtml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeJsString(value = "") {
+  return String(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r");
+}
+
+function createMapHtml({
+  latitude,
+  longitude,
+  address = "",
+  title = "",
+}) {
+  const complaintLat = Number(String(latitude ?? "").trim());
+  const complaintLng = Number(String(longitude ?? "").trim());
 
   if (!Number.isFinite(complaintLat) || !Number.isFinite(complaintLng)) {
     return `
@@ -634,144 +658,121 @@ function createMapHtml({ latitude, longitude }) {
     `;
   }
 
+  const safeAddress =
+    String(address || "").trim() || "Exact address unavailable";
+  const safeTitle = String(title || "").trim() || "Complaint Location";
+  const popupHtml = `
+    <div class="popup-card">
+      <div class="popup-title">${escapeHtml(safeTitle)}</div>
+      <div class="popup-label">Exact Address</div>
+      <div class="popup-address">${escapeHtml(safeAddress)}</div>
+      <div class="popup-coords">${complaintLat.toFixed(6)}, ${complaintLng.toFixed(6)}</div>
+      <div class="popup-hint">Double tap pin for Street View</div>
+    </div>
+  `.replace(/\n/g, "");
+
   return `
     <!DOCTYPE html>
     <html>
       <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
         <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
         <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-
         <style>
           html, body, #map {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background: #f7faf6;
-            overflow: hidden;
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background: #f7faf6; overflow: hidden; font-family: Arial, sans-serif;
           }
-
           .complaint-marker {
-            width: 32px;
-            height: 32px;
-            background: #d71920;
-            border-radius: 50% 50% 50% 0;
-            transform: rotate(-45deg);
-            border: 3px solid white;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.28);
+            width: 28px; height: 40px; display: block; background: transparent;
           }
-
-          .complaint-marker::after {
-            content: "";
-            width: 10px;
-            height: 10px;
-            background: white;
-            position: absolute;
-            border-radius: 50%;
-            left: 8px;
-            top: 8px;
+          .complaint-marker svg {
+            display: block; width: 28px; height: 40px; overflow: visible;
           }
-
           .moderator-marker-wrap {
-            width: 48px;
-            height: 48px;
-            position: relative;
+            width: 22px; height: 22px; position: relative;
           }
-
           .moderator-pulse {
-            position: absolute;
-            width: 42px;
-            height: 42px;
-            left: 3px;
-            top: 3px;
-            border-radius: 50%;
-            background: rgba(49, 90, 154, 0.22);
+            position: absolute; width: 36px; height: 36px; left: -7px; top: -7px;
+            border-radius: 50%; background: rgba(49, 90, 154, 0.22);
             animation: pulse 1.5s ease-out infinite;
+            pointer-events: none;
           }
-
           .moderator-dot {
-            position: absolute;
-            width: 24px;
-            height: 24px;
-            left: 12px;
-            top: 12px;
-            border-radius: 50%;
-            background: #315a9a;
-            border: 4px solid #ffffff;
+            position: absolute; width: 22px; height: 22px; left: 0; top: 0;
+            border-radius: 50%; background: #315a9a; border: 3px solid #ffffff;
             box-shadow: 0 2px 8px rgba(0,0,0,0.28);
           }
-
           .moderator-arrow {
-            position: absolute;
-            left: 18px;
-            top: 0px;
-            width: 0;
-            height: 0;
-            border-left: 6px solid transparent;
-            border-right: 6px solid transparent;
-            border-bottom: 16px solid #315a9a;
-            transform-origin: 6px 24px;
+            position: absolute; left: 5px; top: -16px; width: 0; height: 0;
+            border-left: 6px solid transparent; border-right: 6px solid transparent;
+            border-bottom: 14px solid #315a9a; transform-origin: 6px 27px;
             filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
+            pointer-events: none;
           }
-
           @keyframes pulse {
             0% { transform: scale(0.65); opacity: 0.8; }
             100% { transform: scale(1.35); opacity: 0; }
           }
-
           .map-controls {
-            position: absolute;
-            right: 10px;
-            top: 10px;
-            z-index: 999;
-            display: flex;
-            flex-direction: column;
-            gap: 7px;
+            position: absolute; right: 10px; top: 10px; z-index: 999;
+            display: flex; flex-direction: column; gap: 7px;
           }
-
           .control-btn {
-            width: 39px;
-            height: 39px;
-            border-radius: 12px;
-            border: 1px solid rgba(0,0,0,0.12);
-            background: white;
-            color: #171717;
-            font-size: 20px;
-            font-weight: 800;
-            box-shadow: 0 2px 7px rgba(0,0,0,0.18);
+            width: 42px; min-height: 39px; border-radius: 12px;
+            border: 1px solid rgba(0,0,0,0.12); background: white; color: #171717;
+            font-size: 20px; font-weight: 800; box-shadow: 0 2px 7px rgba(0,0,0,0.18); padding: 4px;
           }
-
-          .pov-btn {
-            width: 39px;
-            height: 39px;
-            border-radius: 12px;
-            border: 1px solid rgba(0,0,0,0.12);
-            background: #087A0D;
-            color: white;
-            font-size: 10px;
-            font-weight: 800;
-            box-shadow: 0 2px 7px rgba(0,0,0,0.18);
+          .maplibregl-popup-content {
+            border-radius: 12px; padding: 10px 12px; max-width: 240px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.18);
           }
-
-          .pov-btn.active { background: #315a9a; }
+          .popup-card .popup-title { font-size: 12px; font-weight: 800; color: #171717; margin-bottom: 6px; }
+          .popup-card .popup-label { font-size: 10px; font-weight: 700; color: #087A0D; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 2px; }
+          .popup-card .popup-address { font-size: 12px; color: #333; line-height: 1.35; margin-bottom: 6px; }
+          .popup-card .popup-coords { font-size: 10px; color: #6f776f; margin-bottom: 4px; }
+          .popup-card .popup-hint { font-size: 10px; color: #087A0D; font-weight: 700; }
+          #streetPanel {
+            position: absolute; left: 0; right: 0; bottom: 0; height: 48%; z-index: 1100;
+            display: none; background: #000; border-top-left-radius: 16px; border-top-right-radius: 16px;
+            overflow: hidden; box-shadow: 0 -6px 18px rgba(0,0,0,0.25);
+          }
+          #streetPanel.visible { display: block; }
+          #streetPanel iframe { width: 100%; height: 100%; border: 0; }
+          .street-header {
+            position: absolute; top: 8px; left: 10px; right: 10px; z-index: 2;
+            display: flex; justify-content: space-between; align-items: center; gap: 8px;
+          }
+          .street-chip {
+            background: rgba(255,255,255,0.92); color: #171717; font-size: 11px; font-weight: 700;
+            padding: 6px 10px; border-radius: 999px;
+          }
+          .street-close {
+            background: #d71920; color: white; border: 0; border-radius: 999px;
+            padding: 6px 12px; font-size: 11px; font-weight: 800;
+          }
         </style>
       </head>
-
       <body>
         <div id="map"></div>
-
         <div class="map-controls">
           <button class="control-btn" onclick="window.zoomIn()">+</button>
           <button class="control-btn" onclick="window.zoomOut()">−</button>
           <button class="control-btn" onclick="window.tiltUp()">↑</button>
           <button class="control-btn" onclick="window.tiltDown()">↓</button>
-          <button id="povBtn" class="pov-btn" onclick="window.toggleFirstPov()">POV</button>
         </div>
-
+        <div id="streetPanel">
+          <div class="street-header">
+            <div class="street-chip">Street-level view</div>
+            <button class="street-close" onclick="window.closeStreetView()">Close</button>
+          </div>
+          <iframe id="streetFrame" allowfullscreen allow="accelerometer; gyroscope; fullscreen" referrerpolicy="no-referrer-when-downgrade"></iframe>
+        </div>
         <script>
           const complaintLng = ${complaintLng};
           const complaintLat = ${complaintLat};
+          const popupHtml = ${JSON.stringify(popupHtml)};
+          const hybridStyle = "https://api.maptiler.com/maps/hybrid/style.json?key=${MAPTILER_API_KEY}";
 
           let mapLoaded = false;
           let moderatorMarker = null;
@@ -779,30 +780,126 @@ function createMapHtml({ latitude, longitude }) {
           let latestModeratorLng = null;
           let latestModeratorLat = null;
           let latestHeading = 0;
-          let firstPovEnabled = false;
           let pendingModeratorPosition = null;
+          let complaintPopup = null;
+          let complaintMarker = null;
+          let lastMarkerTapAt = 0;
 
           const map = new maplibregl.Map({
             container: "map",
-            style: "https://api.maptiler.com/maps/hybrid/style.json?key=${MAPTILER_API_KEY}",
+            style: hybridStyle,
             center: [complaintLng, complaintLat],
             zoom: 16,
             pitch: 0,
             bearing: 0,
+            maxPitch: 85,
             attributionControl: true,
           });
 
-          map.on("load", () => {
-            mapLoaded = true;
+          function openStreetView() {
+            const panel = document.getElementById("streetPanel");
+            const frame = document.getElementById("streetFrame");
+            if (!panel || !frame) return;
+            frame.src =
+              "https://maps.google.com/maps?q=&layer=c&cbll=" +
+              complaintLat + "," + complaintLng +
+              "&cbp=12,0,0,0,0&hl=en&output=svembed";
+            panel.classList.add("visible");
+            setTimeout(function() { map.resize(); }, 220);
+          }
 
-            const complaintMarkerElement = document.createElement("div");
-            complaintMarkerElement.className = "complaint-marker";
+          window.closeStreetView = function() {
+            const panel = document.getElementById("streetPanel");
+            const frame = document.getElementById("streetFrame");
+            if (panel) panel.classList.remove("visible");
+            if (frame) frame.src = "";
+            setTimeout(function() { map.resize(); }, 220);
+          };
 
-            new maplibregl.Marker({ element: complaintMarkerElement, anchor: "bottom" })
+          function bindComplaintMarkerDoubleTap(markerElement) {
+            if (!markerElement) return;
+            markerElement.style.cursor = "pointer";
+            markerElement.title = "Double tap for Street View";
+
+            function handleDoubleTap(event) {
+              if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+              openStreetView();
+            }
+
+            markerElement.addEventListener("dblclick", handleDoubleTap);
+            markerElement.addEventListener("touchend", function(event) {
+              const now = Date.now();
+              if (now - lastMarkerTapAt < 320) {
+                lastMarkerTapAt = 0;
+                handleDoubleTap(event);
+                return;
+              }
+              lastMarkerTapAt = now;
+            }, { passive: false });
+          }
+
+          function createComplaintMarkerElement() {
+            const element = document.createElement("div");
+            element.className = "complaint-marker";
+            element.innerHTML =
+              '<svg viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+              '<path d="M14 1.5C7.65 1.5 2.5 6.65 2.5 13c0 8.75 11.5 25.5 11.5 25.5S25.5 21.75 25.5 13C25.5 6.65 20.35 1.5 14 1.5z" fill="#d71920" stroke="#ffffff" stroke-width="2.5" stroke-linejoin="round"/>' +
+              '<circle cx="14" cy="13" r="4.2" fill="#ffffff"/>' +
+              "</svg>";
+            return element;
+          }
+
+          function placeComplaintMarker() {
+            if (complaintMarker) {
+              try { complaintMarker.remove(); } catch (e) {}
+              complaintMarker = null;
+            }
+
+            const complaintMarkerElement = createComplaintMarkerElement();
+            bindComplaintMarkerDoubleTap(complaintMarkerElement);
+
+            complaintPopup = new maplibregl.Popup({
+              offset: 24,
+              maxWidth: "260px",
+              closeButton: true,
+              closeOnClick: false,
+            }).setHTML(popupHtml);
+
+            complaintMarker = new maplibregl.Marker({
+              element: complaintMarkerElement,
+              anchor: "bottom",
+              pitchAlignment: "map",
+              rotationAlignment: "map",
+            })
               .setLngLat([complaintLng, complaintLat])
-              .setPopup(new maplibregl.Popup({ offset: 24 }).setText("Pinned Complaint Location"))
+              .setPopup(complaintPopup)
               .addTo(map);
 
+            complaintMarker.togglePopup();
+          }
+
+          function createModeratorMarkerElement() {
+            const wrapper = document.createElement("div");
+            wrapper.className = "moderator-marker-wrap";
+            const pulse = document.createElement("div");
+            pulse.className = "moderator-pulse";
+            const arrow = document.createElement("div");
+            arrow.className = "moderator-arrow";
+            const dot = document.createElement("div");
+            dot.className = "moderator-dot";
+            wrapper.appendChild(pulse);
+            wrapper.appendChild(arrow);
+            wrapper.appendChild(dot);
+            moderatorArrowElement = arrow;
+            return wrapper;
+          }
+
+          map.on("load", function() {
+            mapLoaded = true;
+            placeComplaintMarker();
             if (pendingModeratorPosition) {
               window.updateModeratorPosition(
                 pendingModeratorPosition.lat,
@@ -810,42 +907,17 @@ function createMapHtml({ latitude, longitude }) {
                 pendingModeratorPosition.heading
               );
             }
-
-            setTimeout(() => map.resize(), 300);
+            setTimeout(function() { map.resize(); }, 300);
           });
-
-          function createModeratorMarkerElement() {
-            const wrapper = document.createElement("div");
-            wrapper.className = "moderator-marker-wrap";
-
-            const pulse = document.createElement("div");
-            pulse.className = "moderator-pulse";
-
-            const arrow = document.createElement("div");
-            arrow.className = "moderator-arrow";
-
-            const dot = document.createElement("div");
-            dot.className = "moderator-dot";
-
-            wrapper.appendChild(pulse);
-            wrapper.appendChild(arrow);
-            wrapper.appendChild(dot);
-
-            moderatorArrowElement = arrow;
-
-            return wrapper;
-          }
 
           window.updateModeratorPosition = function(lat, lng, heading) {
             const parsedLat = Number(lat);
             const parsedLng = Number(lng);
             const parsedHeading = Number(heading);
-
             if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng)) return;
 
             latestModeratorLat = parsedLat;
             latestModeratorLng = parsedLng;
-
             if (Number.isFinite(parsedHeading) && parsedHeading >= 0) {
               latestHeading = parsedHeading;
             }
@@ -856,12 +928,54 @@ function createMapHtml({ latitude, longitude }) {
             }
 
             if (!moderatorMarker) {
-              const moderatorMarkerElement = createModeratorMarkerElement();
-
-              moderatorMarker = new maplibregl.Marker({ element: moderatorMarkerElement, anchor: "center" })
+              moderatorMarker = new maplibregl.Marker({
+                element: createModeratorMarkerElement(),
+                anchor: "center",
+                pitchAlignment: "map",
+                rotationAlignment: "map",
+              })
                 .setLngLat([parsedLng, parsedLat])
                 .setPopup(new maplibregl.Popup().setText("Department Head Location"))
                 .addTo(map);
+
+              // On first placement, frame both pins so a wrong city-center
+              // complaint pin vs live GPS is obvious, and nearby pins stay close.
+              try {
+                const bounds = new maplibregl.LngLatBounds(
+                  [complaintLng, complaintLat],
+                  [parsedLng, parsedLat]
+                );
+                const toRad = Math.PI / 180;
+                const dLat = (parsedLat - complaintLat) * toRad;
+                const dLng = (parsedLng - complaintLng) * toRad;
+                const a =
+                  Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                  Math.cos(complaintLat * toRad) *
+                    Math.cos(parsedLat * toRad) *
+                    Math.sin(dLng / 2) *
+                    Math.sin(dLng / 2);
+                const distanceMeters =
+                  2 * 6371000 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+                if (distanceMeters < 25) {
+                  map.easeTo({
+                    center: [
+                      (complaintLng + parsedLng) / 2,
+                      (complaintLat + parsedLat) / 2,
+                    ],
+                    zoom: Math.max(map.getZoom(), 18),
+                    duration: 450,
+                  });
+                } else if (distanceMeters < 8000) {
+                  map.fitBounds(bounds, {
+                    padding: 70,
+                    maxZoom: 19,
+                    duration: 550,
+                  });
+                }
+              } catch (fitError) {
+                console.log("Fit both markers error", fitError);
+              }
             } else {
               moderatorMarker.setLngLat([parsedLng, parsedLat]);
             }
@@ -869,71 +983,38 @@ function createMapHtml({ latitude, longitude }) {
             if (moderatorArrowElement) {
               moderatorArrowElement.style.transform = "rotate(" + latestHeading + "deg)";
             }
-
-            if (firstPovEnabled) {
-              map.easeTo({ center: [parsedLng, parsedLat], zoom: Math.max(map.getZoom(), 18), pitch: 65, bearing: latestHeading, duration: 550 });
-            }
           };
 
           window.zoomIn = function() {
             if (!mapLoaded) return;
             map.easeTo({ zoom: map.getZoom() + 1, duration: 280 });
           };
-
           window.zoomOut = function() {
             if (!mapLoaded) return;
             map.easeTo({ zoom: map.getZoom() - 1, duration: 280 });
           };
-
           window.tiltUp = function() {
             if (!mapLoaded) return;
-            map.easeTo({ pitch: Math.min(75, map.getPitch() + 12), duration: 280 });
+            map.easeTo({ pitch: Math.min(85, map.getPitch() + 12), duration: 280 });
           };
-
           window.tiltDown = function() {
             if (!mapLoaded) return;
             map.easeTo({ pitch: Math.max(0, map.getPitch() - 12), duration: 280 });
           };
 
-          window.toggleFirstPov = function() {
-            if (!mapLoaded) return;
-
-            firstPovEnabled = !firstPovEnabled;
-
-            const povBtn = document.getElementById("povBtn");
-
-            if (povBtn) {
-              if (firstPovEnabled) povBtn.classList.add("active");
-              else povBtn.classList.remove("active");
-            }
-
-            if (firstPovEnabled && latestModeratorLat && latestModeratorLng) {
-              map.easeTo({ center: [latestModeratorLng, latestModeratorLat], zoom: 18, pitch: 65, bearing: latestHeading, duration: 650 });
-            }
-
-            if (!firstPovEnabled) {
-              map.easeTo({ center: [complaintLng, complaintLat], zoom: 16, pitch: 0, bearing: 0, duration: 650 });
-            }
-          };
-
           window.drawRouteToComplaint = async function(lat, lng) {
             const parsedLat = Number(lat);
             const parsedLng = Number(lng);
-
-            if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng)) return;
-            if (!mapLoaded) return;
-
+            if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng) || !mapLoaded) return;
             try {
               const url =
                 "https://router.project-osrm.org/route/v1/driving/" +
                 parsedLng + "," + parsedLat + ";" +
                 complaintLng + "," + complaintLat +
                 "?overview=full&geometries=geojson";
-
               const response = await fetch(url);
               const data = await response.json();
               const route = data && data.routes && data.routes[0] && data.routes[0].geometry;
-
               if (!route) return;
 
               if (map.getSource("route-to-complaint")) {
@@ -943,7 +1024,6 @@ function createMapHtml({ latitude, longitude }) {
                   type: "geojson",
                   data: { type: "Feature", geometry: route },
                 });
-
                 map.addLayer({
                   id: "route-to-complaint-line",
                   type: "line",
@@ -954,11 +1034,9 @@ function createMapHtml({ latitude, longitude }) {
               }
 
               const coordinates = route.coordinates;
-              const bounds = coordinates.reduce(
-                function(bounds, coord) { return bounds.extend(coord); },
-                new maplibregl.LngLatBounds(coordinates[0], coordinates[0])
-              );
-
+              const bounds = coordinates.reduce(function(b, coord) {
+                return b.extend(coord);
+              }, new maplibregl.LngLatBounds(coordinates[0], coordinates[0]));
               map.fitBounds(bounds, { padding: 60, duration: 900 });
             } catch (error) {
               console.log("Route error", error);
@@ -1370,7 +1448,7 @@ export default function DepartmentHeadAssignedComplaints() {
       }
 
       const currentLocation = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
+        accuracy: Location.Accuracy.BestForNavigation,
       });
 
       setDepartmentHeadLocation({
@@ -1397,7 +1475,7 @@ export default function DepartmentHeadAssignedComplaints() {
 
       locationWatcherRef.current = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.High,
+          accuracy: Location.Accuracy.BestForNavigation,
           timeInterval: 1000,
           distanceInterval: 1,
         },
@@ -1536,6 +1614,11 @@ export default function DepartmentHeadAssignedComplaints() {
     return createMapHtml({
       latitude: selectedComplaint.latitude,
       longitude: selectedComplaint.longitude,
+      address:
+        selectedComplaint.geotaggedLocation ||
+        selectedComplaint.location ||
+        "",
+      title: selectedComplaint.title || "Complaint Location",
     });
   }, [selectedComplaint]);
 
