@@ -39,17 +39,25 @@ const ComplaintMapView = forwardRef(function ComplaintMapView(
   const isInteractive = interactive || panEnabled || panZoomEnabled;
   const styleUrl = useMemo(() => getMaplibreStyleUrl(), []);
 
-  const initialCoordinateRef = useRef(coordinate);
-
   const html = useMemo(
     () =>
       createMaplibreMapHtml({
-        latitude: initialCoordinateRef.current.latitude,
-        longitude: initialCoordinateRef.current.longitude,
+        latitude: Number.isFinite(coordinate.latitude)
+          ? coordinate.latitude
+          : 11.0517,
+        longitude: Number.isFinite(coordinate.longitude)
+          ? coordinate.longitude
+          : 124.0055,
         styleUrl,
         interactive: isInteractive,
       }),
-    [isInteractive, styleUrl]
+    [
+      isInteractive,
+      styleUrl,
+      // Preview maps remount when the captured GPS pin changes.
+      isInteractive ? null : coordinate.latitude,
+      isInteractive ? null : coordinate.longitude,
+    ]
   );
 
   const syncMarkerPosition = useCallback(() => {
