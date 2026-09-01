@@ -1,4 +1,5 @@
-import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -10,7 +11,6 @@ import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from "ex
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Dimensions,
   Image,
   Modal,
@@ -23,14 +23,32 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { ComplaintListSkeleton, PageSkeleton } from "../../components/skeletons";
+import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
+import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
+import { markComplaintFeedbackReturned } from "../../lib/complaintFeedbackService";
 import { supabase } from "../../lib/supabase";
-import { createCitizenNotificationAndPush } from "../../lib/citizenNotificationService";
-import { notifyDepartmentHeadsComplaintCompleted } from "../../lib/departmentHeadNotificationService";
+import { notify } from "../../lib/toast";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import {
+  createCitizenNotificationAndPush,
+  notifyCitizenAiValidationResult,
+} from "../../lib/citizenNotificationService";
+import { notifyDepartmentHeadsComplaintCompleted, notifyDepartmentHeadsReturnedForWork } from "../../lib/departmentHeadNotificationService";
+import { writeAuditLog } from "../../lib/auditLogService";
 import {
   buildResolutionValidationDbPayload,
   validateResolutionWithGemini,
 } from "../../lib/geminiResolutionValidation";
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
+import {
+  applyComplaintOffsetFilters,
+  applyOffsetPagination,
+  COMPLAINTS_PAGE_SIZE,
+  isNearContentBottom,
+  mergeComplaintPages,
+} from "../../lib/complaintPagination";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -46,6 +64,16 @@ const BLUE = "#315A9A";
 const ORANGE = "#F4A24C";
 
 const H_PADDING = 20;
+const ADMIN_COMPLAINTS_LAST_FILTER_KEY = "admin.complaints.lastFilter";
+
+function adminComplaintsCacheKey({
+  concernType,
+  category,
+  status,
+  priority,
+}) {
+  return `admin.complaints:${concernType}:${category}:${status}:${priority}`;
+}
 
 const COMPLAINT_PHOTOS_BUCKET = "complaint-photos";
 
@@ -264,8 +292,8 @@ function getConcernTypeStyle(type) {
 
 function getStatusStyle(status) {
   if (status === "Pending") return { bg: "#E8EEFF", color: BLUE };
-  if (status === "In Progress") return { bg: "#FFF2C2", color: "#A97700" };
-  if (status === "For Validation") return { bg: LIGHT_GREEN, color: GREEN };
+  if (status === "In Progress") return { bg: "#FFF8D6", color: "#C9A000" };
+  if (status === "For Validation") return { bg: "#F3EAFF", color: "#7A3EA8" };
   if (status === "Completed") return { bg: "#DFF0DF", color: GREEN };
   if (status === "Returned") return { bg: "#FFF0F0", color: RED };
 
@@ -763,6 +791,17 @@ function getRouteParam(value) {
   return value || "";
 }
 
+function buildReturnReasonFromAi(complaint) {
+  const summary = String(complaint?.aiValidationSummary || "").trim();
+  const reason = String(complaint?.aiValidationReason || "").trim();
+
+  if (summary && reason && summary !== reason) {
+    return `${summary}\n\n${reason}`.trim();
+  }
+
+  return reason || summary || "";
+}
+
 export default function AdminComplaints() {
   const router = useRouter();
   const pathname = usePathname();
@@ -772,13 +811,39 @@ export default function AdminComplaints() {
   const targetComplaintId = getRouteParam(params?.complaintId) || null;
   const shouldAutoOpenDetails = getRouteParam(params?.openDetails) === "true";
 
-  const [complaints, setComplaints] = useState([]);
-  const [loadingComplaints, setLoadingComplaints] = useState(true);
-  const [selectedConcernType, setSelectedConcernType] =
-    useState("All Concerns");
-  const [selectedCategory, setSelectedCategory] = useState("All Category");
-  const [selectedStatus, setSelectedStatus] = useState("All Status");
-  const [selectedPriority, setSelectedPriority] = useState("All Priority");
+  const lastAdminFilter = getPageCache(ADMIN_COMPLAINTS_LAST_FILTER_KEY) || {};
+  const selectedConcernTypeInit = lastAdminFilter.concernType || "All Concerns";
+  const selectedCategoryInit = lastAdminFilter.category || "All Category";
+  const selectedStatusInit = lastAdminFilter.status || "All Status";
+  const selectedPriorityInit = lastAdminFilter.priority || "All Priority";
+  const cachedAdminComplaints = getPageCache(
+    adminComplaintsCacheKey({
+      concernType: selectedConcernTypeInit,
+      category: selectedCategoryInit,
+      status: selectedStatusInit,
+      priority: selectedPriorityInit,
+    })
+  );
+
+  const [complaints, setComplaints] = useState(
+    cachedAdminComplaints?.complaints ?? []
+  );
+  const [complaintsTotal, setComplaintsTotal] = useState(
+    cachedAdminComplaints?.total ?? 0
+  );
+  const [loadingComplaints, setLoadingComplaints] = useState(
+    !cachedAdminComplaints
+  );
+  const [loadingMoreComplaints, setLoadingMoreComplaints] = useState(false);
+  const [hasMoreComplaints, setHasMoreComplaints] = useState(
+    cachedAdminComplaints?.hasMore !== false
+  );
+  const [selectedConcernType, setSelectedConcernType] = useState(
+    selectedConcernTypeInit
+  );
+  const [selectedCategory, setSelectedCategory] = useState(selectedCategoryInit);
+  const [selectedStatus, setSelectedStatus] = useState(selectedStatusInit);
+  const [selectedPriority, setSelectedPriority] = useState(selectedPriorityInit);
 
   const [concernTypeDropdownVisible, setConcernTypeDropdownVisible] =
     useState(false);
@@ -792,9 +857,16 @@ export default function AdminComplaints() {
   const [selectedPhoto, setSelectedPhoto] = useState(null);
   const [autoOpenedComplaintId, setAutoOpenedComplaintId] = useState(null);
   const [runningAiValidation, setRunningAiValidation] = useState(false);
+  const [returningComplaint, setReturningComplaint] = useState(false);
+
+  useHideBottomNav(detailsVisible);
 
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
+  const complaintsRef = useRef(cachedAdminComplaints?.complaints ?? []);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(cachedAdminComplaints?.hasMore !== false);
+  const listViewportHeightRef = useRef(0);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -832,23 +904,78 @@ export default function AdminComplaints() {
     };
   }, []);
 
-  const loadAllComplaints = useCallback(async (showLoader = true) => {
+  const loadAllComplaints = useCallback(async (showLoader = true, append = false) => {
+    const cacheKey = adminComplaintsCacheKey({
+      concernType: selectedConcernType,
+      category: selectedCategory,
+      status: selectedStatus,
+      priority: selectedPriority,
+    });
+    const cached = !append ? getPageCache(cacheKey) : null;
+
+    if (!append && cached?.complaints) {
+      complaintsRef.current = cached.complaints;
+      setComplaints(cached.complaints);
+      setComplaintsTotal(cached.total ?? cached.complaints.length);
+      hasMoreRef.current = cached.hasMore !== false;
+      setHasMoreComplaints(cached.hasMore !== false);
+    }
+
+    if (append) {
+      if (loadingMoreRef.current || !hasMoreRef.current) return;
+      loadingMoreRef.current = true;
+      setLoadingMoreComplaints(true);
+    } else {
+      hasMoreRef.current = cached?.hasMore !== false;
+    }
+
     try {
-      if (showLoader) {
+      if (showLoader && !append && shouldShowPageLoader(cacheKey)) {
         setLoadingComplaints(true);
       }
 
-      const { data, error } = await supabase
+      const offset = append ? complaintsRef.current.length : 0;
+      const pageSize = append
+        ? COMPLAINTS_PAGE_SIZE
+        : Math.max(COMPLAINTS_PAGE_SIZE, cached?.complaints?.length || 0);
+
+      let listQuery = supabase
         .from("complaints")
-        .select("*")
+        .select("*", { count: "exact" })
         .order("created_at", { ascending: false });
+
+      listQuery = applyComplaintOffsetFilters(listQuery, {
+        status: selectedStatus === "All Status" ? undefined : selectedStatus,
+        category:
+          selectedCategory === "All Category" ? undefined : selectedCategory,
+        priority:
+          selectedPriority === "All Priority" ? undefined : selectedPriority,
+        priorityIn:
+          selectedConcernType === "Emergency"
+            ? ["Critical", "Urgent", "High"]
+            : selectedConcernType === "Non-Emergency"
+              ? ["Normal", "Low"]
+              : undefined,
+      });
+
+      listQuery = applyOffsetPagination(listQuery, offset, pageSize);
+
+      const { data, error, count } = await listQuery;
 
       if (error) {
         console.log("Admin complaints load error:", error);
-        Alert.alert("Load Failed", error.message);
-        setComplaints([]);
+        if (!cached) {
+          notify("Load Failed", error.message);
+        }
+        if (!append && !cached) {
+          setComplaints([]);
+          setComplaintsTotal(0);
+        }
         return;
       }
+
+      const total = count ?? 0;
+      setComplaintsTotal(total);
 
       const citizenIds = Array.from(
         new Set((data || []).map((row) => row.citizen_id).filter(Boolean))
@@ -873,17 +1000,81 @@ export default function AdminComplaints() {
         (data || []).map((row) => mapComplaintRow(row, profileMap))
       );
 
-      setComplaints(mappedComplaints);
+      const nextComplaints = append
+        ? mergeComplaintPages(complaintsRef.current, mappedComplaints)
+        : mappedComplaints;
+
+      complaintsRef.current = nextComplaints;
+      setComplaints(nextComplaints);
+
+      if (mappedComplaints.length === 0) {
+        hasMoreRef.current = false;
+        setHasMoreComplaints(false);
+      } else {
+        const more = nextComplaints.length < total;
+        hasMoreRef.current = more;
+        setHasMoreComplaints(more);
+      }
+
+      setPageCache(cacheKey, {
+        complaints: nextComplaints,
+        total,
+        hasMore: mappedComplaints.length === 0 ? false : nextComplaints.length < total,
+      });
+      setPageCache(ADMIN_COMPLAINTS_LAST_FILTER_KEY, {
+        concernType: selectedConcernType,
+        category: selectedCategory,
+        status: selectedStatus,
+        priority: selectedPriority,
+      });
     } catch (error) {
       console.log("Admin complaints load catch error:", error);
-      Alert.alert("Load Failed", "Unable to load complaints.");
-      setComplaints([]);
+      if (!append && !cached) {
+        notify("Load Failed", "Unable to load complaints.");
+        setComplaints([]);
+      }
     } finally {
-      if (showLoader) {
-        setLoadingComplaints(false);
+      setLoadingComplaints(false);
+
+      if (append) {
+        loadingMoreRef.current = false;
+        setLoadingMoreComplaints(false);
       }
     }
-  }, []);
+  }, [
+    selectedCategory,
+    selectedConcernType,
+    selectedPriority,
+    selectedStatus,
+  ]);
+
+  const loadAllComplaintsRef = useRef(loadAllComplaints);
+  loadAllComplaintsRef.current = loadAllComplaints;
+
+  const loadMoreComplaints = useCallback(() => {
+    loadAllComplaints(false, true);
+  }, [loadAllComplaints]);
+
+  const handleComplaintsScroll = ({ nativeEvent }) => {
+    if (isNearContentBottom(nativeEvent)) {
+      loadMoreComplaints();
+    }
+  };
+
+  const maybeFillViewport = (contentHeight) => {
+    if (
+      hasMoreRef.current &&
+      !loadingMoreRef.current &&
+      listViewportHeightRef.current > 0 &&
+      contentHeight < listViewportHeightRef.current + 80
+    ) {
+      loadMoreComplaints();
+    }
+  };
+
+  useEffect(() => {
+    complaintsRef.current = complaints;
+  }, [complaints]);
 
   useEffect(() => {
     loadAllComplaints(true);
@@ -906,7 +1097,7 @@ export default function AdminComplaints() {
           table: "complaints",
         },
         () => {
-          loadAllComplaints(false);
+          loadAllComplaintsRef.current?.(false);
         }
       )
       .subscribe((status) => {
@@ -916,7 +1107,7 @@ export default function AdminComplaints() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadAllComplaints]);
+  }, []);
 
   const filteredComplaints = useMemo(() => {
     const filtered = complaints.filter((item) => {
@@ -1061,6 +1252,12 @@ export default function AdminComplaints() {
 
   const openPhotoViewer = (uri) => {
     if (!uri) return;
+    if (
+      String(uri).includes("placehold.co") ||
+      String(uri).includes("placeholder")
+    ) {
+      return;
+    }
     setSelectedPhoto(uri);
     setPhotoViewerVisible(true);
   };
@@ -1102,7 +1299,7 @@ export default function AdminComplaints() {
 
   const runAiValidationForComplaint = async (complaint = selectedComplaint) => {
     if (!complaint?.hasCitizenValidation) {
-      Alert.alert(
+      notify(
         "Citizen validation required",
         "AI can only validate after the citizen submits validation evidence."
       );
@@ -1133,15 +1330,53 @@ export default function AdminComplaints() {
         .eq("id", complaintId);
 
       if (error) {
-        Alert.alert("AI Validation Failed", error.message);
+        notify("AI Validation Failed", error.message);
         return null;
       }
 
       applyAiValidationToComplaint(complaintId, aiValidation);
+      writeAuditLog({
+        action: "ai_validation",
+        title: "AI Validation Run",
+        description: `AI validation ${
+          aiValidation?.approved ? "approved" : aiValidation?.status || "completed"
+        } complaint #${complaint.id}.`,
+        entityType: "complaint",
+        entityId: complaintId,
+        actorRole: "admin",
+        metadata: {
+          ai_status: aiValidation?.status,
+          approved: aiValidation?.approved,
+        },
+      });
+
+      const aiStatus = String(aiValidation?.status || "").toLowerCase();
+
+      if (
+        complaint.citizenId &&
+        (aiStatus === "approved" || aiStatus === "rejected")
+      ) {
+        const citizenNotifyResult = await notifyCitizenAiValidationResult({
+          citizenId: complaint.citizenId,
+          complaintId,
+          shortId: complaint.id,
+          approved: aiStatus === "approved",
+          reason: aiValidation?.reason,
+          summary: aiValidation?.summary,
+        });
+
+        if (!citizenNotifyResult?.success) {
+          console.log(
+            "Citizen AI validation notification error:",
+            citizenNotifyResult
+          );
+        }
+      }
+
       return aiValidation;
     } catch (error) {
       console.log("Admin AI validation error:", error);
-      Alert.alert(
+      notify(
         "AI Validation Failed",
         error?.message || "Unable to run AI validation right now."
       );
@@ -1155,7 +1390,7 @@ export default function AdminComplaints() {
     if (!selectedComplaint) return;
 
     if (selectedComplaint.status !== "For Validation") {
-      Alert.alert(
+      notify(
         "Action unavailable",
         "Only complaints under For Validation can be marked as completed."
       );
@@ -1163,7 +1398,7 @@ export default function AdminComplaints() {
     }
 
     if (!selectedComplaint.hasCitizenValidation) {
-      Alert.alert(
+      notify(
         "Citizen validation required",
         "Wait for the citizen to submit validation feedback and photos before marking this complaint complete."
       );
@@ -1171,7 +1406,7 @@ export default function AdminComplaints() {
     }
 
     if (selectedComplaint.validationResolved === false) {
-      Alert.alert(
+      notify(
         "Cannot mark complete",
         "The citizen reported the issue as not resolved. Return the complaint for review instead."
       );
@@ -1186,7 +1421,7 @@ export default function AdminComplaints() {
       ).toLowerCase();
 
       if (aiStatus === "rejected") {
-        Alert.alert(
+        notify(
           "AI validation rejected",
           selectedComplaint.aiValidationReason ||
             "AI did not approve the citizen validation evidence. Return the complaint for review or re-run AI validation."
@@ -1194,7 +1429,7 @@ export default function AdminComplaints() {
         return;
       }
 
-      Alert.alert(
+      notify(
         "AI validation required",
         "AI must approve the citizen validation evidence before this complaint can be marked complete. Run AI validation now?",
         [
@@ -1204,12 +1439,12 @@ export default function AdminComplaints() {
             onPress: async () => {
               const result = await runAiValidationForComplaint(selectedComplaint);
               if (result?.approved) {
-                Alert.alert(
+                notify(
                   "AI Approved",
                   "AI approved the validation evidence. Tap Mark Complete again to finish."
                 );
               } else if (result) {
-                Alert.alert(
+                notify(
                   "AI Rejected",
                   result.reason ||
                     "AI did not approve the evidence. Return the complaint for review."
@@ -1231,7 +1466,7 @@ export default function AdminComplaints() {
       .eq("id", complaintId);
 
     if (error) {
-      Alert.alert("Update Failed", error.message);
+      notify("Update Failed", error.message);
       return;
     }
 
@@ -1278,22 +1513,53 @@ export default function AdminComplaints() {
       prev ? { ...prev, status: "Completed" } : prev
     );
 
-    Alert.alert(
+    notify(
       "Complaint Completed",
       deptHeadNotify?.notifiedCount
         ? "The complaint has been marked as completed. A completion acknowledgment has been sent to the assigned department head."
         : "The complaint has been marked as completed."
     );
+    writeAuditLog({
+      action: "complaint_complete",
+      title: "Complaint Completed",
+      description: `Complaint #${selectedComplaint.id} was marked as completed.`,
+      entityType: "complaint",
+      entityId: complaintId,
+      actorRole: "admin",
+      metadata: {
+        assigned_office: selectedComplaint.department,
+        category: selectedComplaint.category,
+      },
+    });
     loadAllComplaints(false);
   };
 
   const returnForReview = async () => {
-    if (!selectedComplaint) return;
+    if (!selectedComplaint || returningComplaint) return;
 
     if (selectedComplaint.status !== "For Validation") {
-      Alert.alert(
+      notify(
         "Action unavailable",
-        "Only complaints under For Validation can be returned for review."
+        "Only complaints under For Validation can be returned to the department."
+      );
+      return;
+    }
+
+    const reason = buildReturnReasonFromAi(selectedComplaint);
+
+    if (!reason) {
+      notify(
+        "AI validation needed",
+        "Run AI validation first so the department head receives the AI reason for the return.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Run AI Validation",
+            onPress: async () => {
+              await runAiValidationForComplaint(selectedComplaint);
+            },
+          },
+        ]
       );
       return;
     }
@@ -1301,57 +1567,92 @@ export default function AdminComplaints() {
     const complaintId = selectedComplaint.rawId || selectedComplaint.id;
     const oldStatus = selectedComplaint.status;
 
-    const { error } = await supabase
-      .from("complaints")
-      .update({ status: "Returned" })
-      .eq("id", complaintId);
+    setReturningComplaint(true);
 
-    if (error) {
-      Alert.alert("Update Failed", error.message);
-      return;
-    }
+    try {
+      const { error } = await supabase
+        .from("complaints")
+        .update({ status: "In Progress" })
+        .eq("id", complaintId);
 
-    if (selectedComplaint.citizenId) {
-      await createCitizenNotificationAndPush({
-        citizenId: selectedComplaint.citizenId,
-        complaintId,
-        shortId: selectedComplaint.id,
-        type: "status",
-        title: "Complaint Returned for Review",
-        message: `Your complaint #${selectedComplaint.id} was returned for review by the department head.`,
-        status: "Returned",
+      if (error) {
+        notify("Update Failed", error.message);
+        return;
+      }
+
+      await markComplaintFeedbackReturned(complaintId);
+
+      const deptHeadNotify = await notifyDepartmentHeadsReturnedForWork({
+        complaint: selectedComplaint,
+        department: selectedComplaint.department,
+        reason,
+      });
+
+      if (selectedComplaint.citizenId) {
+        await createCitizenNotificationAndPush({
+          citizenId: selectedComplaint.citizenId,
+          complaintId,
+          shortId: selectedComplaint.id,
+          type: "status",
+          title: "Complaint Returned to Department",
+          message: `Your complaint #${selectedComplaint.id} was returned to the assigned office for further action.`,
+          status: "In Progress",
+          metadata: {
+            old_status: oldStatus,
+            new_status: "In Progress",
+            assigned_office: selectedComplaint.department,
+            title: selectedComplaint.title,
+            category: selectedComplaint.category,
+            return_reason: reason,
+          },
+        });
+      }
+
+      setComplaints((prev) =>
+        prev.map((item) =>
+          (item.rawId || item.id) === complaintId
+            ? { ...item, status: "In Progress" }
+            : item
+        )
+      );
+
+      setSelectedComplaint((prev) =>
+        prev ? { ...prev, status: "In Progress" } : prev
+      );
+
+      notify(
+        "Returned to Department",
+        deptHeadNotify?.notifiedCount
+          ? "The department head was notified with the AI validation reason. The complaint is In Progress again."
+          : "The complaint is In Progress again so the department can continue work."
+      );
+      writeAuditLog({
+        action: "complaint_return",
+        title: "Complaint Returned",
+        description: `Complaint #${selectedComplaint.id} was returned to the department: ${reason}`,
+        entityType: "complaint",
+        entityId: complaintId,
+        actorRole: "admin",
         metadata: {
-          old_status: oldStatus,
-          new_status: "Returned",
+          return_reason: reason,
           assigned_office: selectedComplaint.department,
-          title: selectedComplaint.title,
-          category: selectedComplaint.category,
+          ai_validation_status: selectedComplaint.aiValidationStatus,
         },
       });
+      loadAllComplaints(false);
+    } catch (returnError) {
+      console.log("Return complaint error:", returnError);
+      notify(
+        "Update Failed",
+        returnError?.message || "Could not return this complaint."
+      );
+    } finally {
+      setReturningComplaint(false);
     }
-
-    setComplaints((prev) =>
-      prev.map((item) =>
-        (item.rawId || item.id) === complaintId
-          ? { ...item, status: "Returned" }
-          : item
-      )
-    );
-
-    setSelectedComplaint((prev) =>
-      prev ? { ...prev, status: "Returned" } : prev
-    );
-
-    Alert.alert("Returned for Review", "The complaint has been returned.");
-    loadAllComplaints(false);
   };
 
   if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+    return <PageSkeleton variant="list" />;
   }
 
   return (
@@ -1359,10 +1660,7 @@ export default function AdminComplaints() {
       <StatusBar barStyle="dark-content" backgroundColor={BG} />
 
       <View style={styles.mainContainer}>
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
+        <View style={styles.stickyHeader}>
           <View style={styles.headerContainer}>
             <Text style={styles.headerTitle}>Overall Complaints</Text>
           </View>
@@ -1416,16 +1714,22 @@ export default function AdminComplaints() {
               </TouchableOpacity>
             </View>
           </View>
+        </View>
 
+        <ScrollView
+          style={styles.listScroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+          scrollEventThrottle={16}
+          onScroll={handleComplaintsScroll}
+          onLayout={(event) => {
+            listViewportHeightRef.current = event.nativeEvent.layout.height;
+          }}
+          onContentSizeChange={(_, height) => maybeFillViewport(height)}
+        >
           <View style={styles.complaintsList}>
             {loadingComplaints && complaints.length === 0 ? (
-              <View style={styles.emptyCard}>
-                <ActivityIndicator size="large" color={GREEN} />
-                <Text style={styles.emptyTitle}>Loading complaints...</Text>
-                <Text style={styles.emptyText}>
-                  Fetching all submitted complaints across departments.
-                </Text>
-              </View>
+              <ComplaintListSkeleton count={COMPLAINTS_PAGE_SIZE} />
             ) : filteredComplaints.length === 0 ? (
               <View style={styles.emptyCard}>
                 <Ionicons name="document-text-outline" size={30} color={MUTED} />
@@ -1559,8 +1863,9 @@ export default function AdminComplaints() {
               })
             )}
           </View>
-        </ScrollView>
 
+          <ComplaintsLoadMoreFooter loading={loadingMoreComplaints} />
+        </ScrollView>
 
         <DropdownModal
           visible={concernTypeDropdownVisible}
@@ -1864,7 +2169,7 @@ export default function AdminComplaints() {
                                   selectedComplaint
                                 );
                               if (!result) return;
-                              Alert.alert(
+                              notify(
                                 result.approved
                                   ? "AI Approved"
                                   : "AI Rejected",
@@ -1917,15 +2222,21 @@ export default function AdminComplaints() {
 
                       <TouchableOpacity
                         activeOpacity={0.8}
-                        style={styles.returnButton}
+                        style={[
+                          styles.returnButton,
+                          returningComplaint && styles.returnButtonDisabled,
+                        ]}
                         onPress={returnForReview}
+                        disabled={returningComplaint}
                       >
                         <MaterialCommunityIcons
                           name="reply-outline"
                           size={16}
                           color={GREEN}
                         />
-                        <Text style={styles.returnButtonText}>Return</Text>
+                        <Text style={styles.returnButtonText}>
+                          Return to Department
+                        </Text>
                       </TouchableOpacity>
                     </View>
                   )}
@@ -1933,22 +2244,20 @@ export default function AdminComplaints() {
               )}
             </View>
 
-            {photoViewerVisible && selectedPhoto && (
-              <TouchableOpacity
-                activeOpacity={1}
-                style={styles.photoViewerOverlay}
-                onPress={closePhotoViewer}
-              >
-                <Image
-                  pointerEvents="none"
-                  source={{ uri: selectedPhoto }}
-                  style={styles.fullscreenPhoto}
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-            )}
+            <FullscreenPhotoViewer
+              variant="overlay"
+              visible={photoViewerVisible && detailsVisible}
+              uri={selectedPhoto}
+              onClose={closePhotoViewer}
+            />
           </View>
         </Modal>
+
+        <FullscreenPhotoViewer
+          visible={photoViewerVisible && !detailsVisible}
+          uri={selectedPhoto}
+          onClose={closePhotoViewer}
+        />
       </View>
     </SafeAreaView>
   );
@@ -2044,6 +2353,20 @@ const styles = StyleSheet.create({
     backgroundColor: BG,
   },
 
+  stickyHeader: {
+    backgroundColor: BG,
+    paddingHorizontal: H_PADDING,
+    paddingTop: 4,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+    zIndex: 2,
+  },
+
+  listScroll: {
+    flex: 1,
+  },
+
   loader: {
     flex: 1,
     backgroundColor: BG,
@@ -2053,12 +2376,12 @@ const styles = StyleSheet.create({
 
   scrollContent: {
     paddingHorizontal: H_PADDING,
-    paddingTop: 4,
-    paddingBottom: 116,
+    paddingTop: 12,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   headerContainer: {
-    marginBottom: 12,
+    marginBottom: 10,
   },
 
   headerTitle: {
@@ -2071,7 +2394,7 @@ const styles = StyleSheet.create({
 
   filterGrid: {
     gap: 8,
-    marginBottom: 14,
+    marginBottom: 0,
   },
 
   filterPillFull: {
@@ -2784,6 +3107,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     flexDirection: "row",
     gap: 6,
+  },
+
+  returnButtonDisabled: {
+    opacity: 0.65,
   },
 
   returnButtonText: {
