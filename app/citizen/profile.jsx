@@ -1,4 +1,5 @@
-import { Feather, Ionicons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -13,10 +14,8 @@ import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Keyboard,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -30,7 +29,14 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import AuditLogsModal from "../../components/AuditLogsModal";
+import { PageSkeleton } from "../../components/skeletons";
+import { writeAuditLog } from "../../lib/auditLogService";
+import { clearPageCache, getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { setProfileAvatarUrl } from "../../lib/profileAvatarStore";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
 import {
   loadLocationPreference,
   saveLocationPreference,
@@ -41,6 +47,7 @@ import {
   removePushTokensForUser,
   updatePushEnabled,
 } from "../../lib/pushNotifications";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const GREEN = "#087A0D";
 const LIGHT_GREEN = "#EAF6E4";
@@ -55,8 +62,11 @@ const BLUE = "#315A9A";
 
 const H_PADDING = 20;
 const AVATAR_BUCKET = "avatars";
+const CITIZEN_PROFILE_CACHE_KEY = "citizen.profile";
 
 const MAIN_LOGO = require("../../assets/images/mainlogo.png");
+
+let cachedLocationEnabled = false;
 
 const fallbackBarangays = [
   "Anonang Norte",
@@ -156,15 +166,21 @@ export default function CitizenProfile() {
   const router = useRouter();
   const pathname = usePathname();
 
-  const [user, setUser] = useState(null);
-  const [loadingUser, setLoadingUser] = useState(true);
+  const cachedProfile = getPageCache(CITIZEN_PROFILE_CACHE_KEY);
+  const [user, setUser] = useState(cachedProfile?.user ?? null);
+  const [loadingUser, setLoadingUser] = useState(!cachedProfile);
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
 
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
+  const [auditLogsVisible, setAuditLogsVisible] = useState(false);
   const [barangayModalVisible, setBarangayModalVisible] = useState(false);
+
+  useHideBottomNav(
+    editModalVisible || passwordModalVisible || barangayModalVisible
+  );
 
   const [barangays, setBarangays] = useState(fallbackBarangays);
 
@@ -176,8 +192,12 @@ export default function CitizenProfile() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
-  const [pushEnabled, setPushEnabled] = useState(true);
-  const [locationEnabled, setLocationEnabled] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(
+    cachedProfile?.pushEnabled ?? true
+  );
+  const [locationEnabled, setLocationEnabled] = useState(
+    cachedProfile?.locationEnabled ?? cachedLocationEnabled
+  );
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -213,7 +233,9 @@ export default function CitizenProfile() {
 
   const loadUser = async () => {
     try {
-      setLoadingUser(true);
+      if (shouldShowPageLoader(CITIZEN_PROFILE_CACHE_KEY)) {
+        setLoadingUser(true);
+      }
 
       const {
         data: { user: currentUser },
@@ -221,18 +243,37 @@ export default function CitizenProfile() {
       } = await supabase.auth.getUser();
 
       if (error) {
-        setUser(null);
+        if (shouldShowPageLoader(CITIZEN_PROFILE_CACHE_KEY)) {
+          setUser(null);
+        }
         return;
       }
 
       setUser(currentUser);
 
+      const loadedAvatar = currentUser?.user_metadata?.avatar_url || null;
+      if (loadedAvatar) {
+        setProfileAvatarUrl(loadedAvatar);
+      }
+
+      let enabled = getPageCache(CITIZEN_PROFILE_CACHE_KEY)?.pushEnabled ?? true;
       if (currentUser?.id) {
-        const enabled = await loadPushEnabled(currentUser.id);
+        enabled = await loadPushEnabled(currentUser.id);
         setPushEnabled(enabled);
       }
+
+      const previousCache = getPageCache(CITIZEN_PROFILE_CACHE_KEY) || {};
+      setPageCache(CITIZEN_PROFILE_CACHE_KEY, {
+        ...previousCache,
+        user: currentUser,
+        pushEnabled: enabled,
+        locationEnabled:
+          previousCache.locationEnabled ?? cachedLocationEnabled,
+      });
     } catch {
-      setUser(null);
+      if (shouldShowPageLoader(CITIZEN_PROFILE_CACHE_KEY)) {
+        setUser(null);
+      }
     } finally {
       setLoadingUser(false);
     }
@@ -241,14 +282,20 @@ export default function CitizenProfile() {
   const checkLocationPermission = async () => {
     try {
       if (!user?.id) {
-        setLocationEnabled(false);
         return;
       }
 
       const enabled = await loadLocationPreference(user.id);
+      cachedLocationEnabled = enabled;
       setLocationEnabled(enabled);
+
+      const previousCache = getPageCache(CITIZEN_PROFILE_CACHE_KEY) || {};
+      setPageCache(CITIZEN_PROFILE_CACHE_KEY, {
+        ...previousCache,
+        locationEnabled: enabled,
+      });
     } catch {
-      setLocationEnabled(false);
+      setLocationEnabled(cachedLocationEnabled);
     }
   };
 
@@ -311,31 +358,51 @@ export default function CitizenProfile() {
         const permission = await Location.requestForegroundPermissionsAsync();
 
         if (permission.status === "granted") {
+          cachedLocationEnabled = true;
           setLocationEnabled(true);
 
           if (user?.id) {
             await saveLocationPreference(user.id, true);
           }
 
-          Alert.alert(
+          const previousCache = getPageCache(CITIZEN_PROFILE_CACHE_KEY) || {};
+          setPageCache(CITIZEN_PROFILE_CACHE_KEY, {
+            ...previousCache,
+            locationEnabled: true,
+          });
+
+          notify(
             "Location Services Enabled",
             "CitiSense can now use your location to help attach accurate location details when submitting complaints."
           );
+          writeAuditLog({
+            action: "location_preference",
+            title: "Location Services Enabled",
+            description: "Location access was turned on for complaint geotagging.",
+            actorRole: "citizen",
+          });
         } else {
+          cachedLocationEnabled = false;
           setLocationEnabled(false);
 
           if (user?.id) {
             await saveLocationPreference(user.id, false);
           }
 
-          Alert.alert(
+          const previousCache = getPageCache(CITIZEN_PROFILE_CACHE_KEY) || {};
+          setPageCache(CITIZEN_PROFILE_CACHE_KEY, {
+            ...previousCache,
+            locationEnabled: false,
+          });
+
+          notify(
             "Location Permission Denied",
             "Location access was not allowed. You can enable it later in your phone settings."
           );
         }
       } catch {
-        setLocationEnabled(false);
-        Alert.alert(
+        setLocationEnabled(cachedLocationEnabled);
+        notify(
           "Location Error",
           "Unable to request location permission right now."
         );
@@ -344,29 +411,42 @@ export default function CitizenProfile() {
       return;
     }
 
+    cachedLocationEnabled = false;
     setLocationEnabled(false);
 
     if (user?.id) {
       await saveLocationPreference(user.id, false);
     }
 
-    Alert.alert(
+    const previousCache = getPageCache(CITIZEN_PROFILE_CACHE_KEY) || {};
+    setPageCache(CITIZEN_PROFILE_CACHE_KEY, {
+      ...previousCache,
+      locationEnabled: false,
+    });
+
+    notify(
       "Location Services",
       "Location access is turned off in the app. To fully disable phone permission, turn off CitiSense location access in your phone settings."
     );
+    writeAuditLog({
+      action: "location_preference",
+      title: "Location Services Disabled",
+      description: "Location access was turned off in the app.",
+      actorRole: "citizen",
+    });
   };
 
   const pickProfilePhoto = async () => {
     try {
       if (!user?.id) {
-        Alert.alert("Account Required", "Please sign in again.");
+        notify("Account Required", "Please sign in again.");
         return;
       }
 
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (permission.status !== "granted") {
-        Alert.alert(
+        notify(
           "Permission Needed",
           "Please allow photo access so you can change your profile picture."
         );
@@ -386,7 +466,7 @@ export default function CitizenProfile() {
       const asset = result.assets[0];
 
       if (!asset.base64) {
-        Alert.alert(
+        notify(
           "Upload Failed",
           "The selected image could not be prepared for upload. Please choose another photo."
         );
@@ -409,7 +489,7 @@ export default function CitizenProfile() {
         });
 
       if (uploadError) {
-        Alert.alert(
+        notify(
           "Upload Failed",
           "Please make sure the Supabase Storage bucket named avatars exists and has the correct upload policies."
         );
@@ -430,7 +510,7 @@ export default function CitizenProfile() {
       });
 
       if (error) {
-        Alert.alert("Update Failed", error.message);
+        notify("Update Failed", error.message);
         return;
       }
 
@@ -449,9 +529,22 @@ export default function CitizenProfile() {
       }
 
       setUser(data?.user || user);
-      Alert.alert("Profile Picture Updated", "Your picture has been changed.");
+      setProfileAvatarUrl(publicUrl);
+      const prevDashboard = getPageCache("citizen.dashboard") || {};
+      setPageCache("citizen.dashboard", {
+        ...prevDashboard,
+        currentUserId: user.id,
+        profilePhotoUrl: publicUrl,
+      });
+      notify("Profile Picture Updated", "Your picture has been changed.");
+      await writeAuditLog({
+        action: "avatar_update",
+        title: "Profile Picture Updated",
+        description: "Citizen profile picture was changed.",
+        actorRole: "citizen",
+      });
     } catch {
-      Alert.alert("Upload Failed", "Unable to update your profile picture.");
+      notify("Upload Failed", "Unable to update your profile picture.");
     } finally {
       setUploadingAvatar(false);
     }
@@ -464,17 +557,17 @@ export default function CitizenProfile() {
     const cleanBarangay = barangayDraft.trim();
 
     if (!cleanName) {
-      Alert.alert("Name Required", "Please enter your full name.");
+      notify("Name Required", "Please enter your full name.");
       return;
     }
 
     if (!cleanEmail) {
-      Alert.alert("Email Required", "Please enter your email address.");
+      notify("Email Required", "Please enter your email address.");
       return;
     }
 
     if (!cleanBarangay) {
-      Alert.alert("Barangay Required", "Please select your barangay.");
+      notify("Barangay Required", "Please select your barangay.");
       return;
     }
 
@@ -493,7 +586,7 @@ export default function CitizenProfile() {
       });
 
       if (error) {
-        Alert.alert("Update Failed", error.message);
+        notify("Update Failed", error.message);
         return;
       }
 
@@ -522,22 +615,30 @@ export default function CitizenProfile() {
         });
 
         if (emailError) {
-          Alert.alert("Email Update Failed", emailError.message);
+          notify("Email Update Failed", emailError.message);
           return;
         }
 
-        Alert.alert(
+        notify(
           "Confirm New Email",
           "We sent a confirmation link to your new email address. Open Gmail or your email inbox and confirm it before the email change becomes complete."
         );
       } else {
-        Alert.alert("Profile Updated", "Your account information was saved.");
+        notify("Profile Updated", "Your account information was saved.");
       }
+
+      await writeAuditLog({
+        action: "profile_update",
+        title: "Profile Updated",
+        description: "Citizen account information was updated.",
+        actorRole: "citizen",
+        actorName: cleanName,
+      });
 
       setEditModalVisible(false);
       loadUser();
     } catch {
-      Alert.alert("Update Failed", "Unable to save your profile changes.");
+      notify("Update Failed", "Unable to save your profile changes.");
     } finally {
       setSavingProfile(false);
     }
@@ -545,12 +646,12 @@ export default function CitizenProfile() {
 
   const handleChangePassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
-      Alert.alert("Password Required", "Please enter and confirm your password.");
+      notify("Password Required", "Please enter and confirm your password.");
       return;
     }
 
     if (newPassword.length < 6) {
-      Alert.alert(
+      notify(
         "Weak Password",
         "Your new password must be at least 6 characters."
       );
@@ -558,7 +659,7 @@ export default function CitizenProfile() {
     }
 
     if (newPassword !== confirmPassword) {
-      Alert.alert("Password Mismatch", "Your passwords do not match.");
+      notify("Password Mismatch", "Your passwords do not match.");
       return;
     }
 
@@ -570,18 +671,25 @@ export default function CitizenProfile() {
       });
 
       if (error) {
-        Alert.alert("Password Update Failed", error.message);
+        notify("Password Update Failed", error.message);
         return;
       }
 
-      Alert.alert(
+      notify(
         "Password Changed",
         "Your password has been updated successfully."
       );
 
+      await writeAuditLog({
+        action: "password_change",
+        title: "Password Changed",
+        description: "Citizen account password was updated.",
+        actorRole: "citizen",
+      });
+
       closePasswordModal();
     } catch {
-      Alert.alert("Password Update Failed", "Unable to change your password.");
+      notify("Password Update Failed", "Unable to change your password.");
     } finally {
       setChangingPassword(false);
     }
@@ -596,7 +704,7 @@ export default function CitizenProfile() {
     const { error } = await updatePushEnabled(user.id, value);
 
     if (error) {
-      Alert.alert(
+      notify(
         "Push Notifications",
         "Unable to update push notification preference."
       );
@@ -605,13 +713,22 @@ export default function CitizenProfile() {
 
     setPushEnabled(value);
 
+    writeAuditLog({
+      action: "push_preference",
+      title: value ? "Push Notifications Enabled" : "Push Notifications Disabled",
+      description: value
+        ? "Push notifications were turned on."
+        : "Push notifications were turned off.",
+      actorRole: "citizen",
+    });
+
     if (value) {
       await registerDevicePushToken(user.id);
     }
   };
 
   const handlePrivacy = () => {
-    Alert.alert(
+    notify(
       "Privacy & Security",
       "CitiSense protects your account and complaint records by allowing only authorized users to access submitted reports.\n\n" +
         "Your account information such as name, email, contact number, barangay, and profile photo is used only for identification, complaint updates, and LGU communication.\n\n" +
@@ -622,7 +739,7 @@ export default function CitizenProfile() {
   };
 
   const handleLogout = () => {
-    Alert.alert("Log Out", "Are you sure you want to log out?", [
+    notify("Log Out", "Are you sure you want to log out?", [
       {
         text: "Cancel",
         style: "cancel",
@@ -631,13 +748,22 @@ export default function CitizenProfile() {
         text: "Log Out",
         style: "destructive",
         onPress: async () => {
+          await writeAuditLog({
+            action: "logout",
+            title: "Signed Out",
+            description: "Citizen signed out of CitiSense.",
+            actorRole: "citizen",
+          });
           await removePushTokensForUser(user?.id);
           const { error } = await supabase.auth.signOut();
 
           if (error) {
-            Alert.alert("Logout Failed", error.message);
+            notify("Logout Failed", error.message);
             return;
           }
+
+          clearPageCache();
+          cachedLocationEnabled = false;
 
           setUser(null);
           router.replace("/auth/login");
@@ -646,12 +772,8 @@ export default function CitizenProfile() {
     ]);
   };
 
-  if (!fontsLoaded || loadingUser) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  if ((!fontsLoaded && !cachedProfile) || (loadingUser && !user)) {
+    return <PageSkeleton variant="profile" />;
   }
 
   return (
@@ -781,6 +903,14 @@ export default function CitizenProfile() {
               />
 
               <ActionRow
+                icon="activity"
+                iconColor={BLUE}
+                title="Audit Logs"
+                subtitle="View your recent account activity."
+                onPress={() => setAuditLogsVisible(true)}
+              />
+
+              <ActionRow
                 icon="shield"
                 iconColor={GREEN}
                 title="Privacy & Security"
@@ -801,7 +931,6 @@ export default function CitizenProfile() {
           </TouchableOpacity>
         </ScrollView>
 
-
         <Modal
           visible={editModalVisible}
           animationType="slide"
@@ -810,10 +939,6 @@ export default function CitizenProfile() {
         >
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <View style={styles.modalOverlay}>
-              <KeyboardAvoidingView
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
-                style={styles.keyboardView}
-              >
                 <View style={styles.editSheet}>
                   <View style={styles.modalHandle} />
 
@@ -829,9 +954,9 @@ export default function CitizenProfile() {
                     </TouchableOpacity>
                   </View>
 
-                  <ScrollView
+                  <KeyboardAwareScrollView
+                    modal
                     showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="handled"
                     contentContainerStyle={styles.modalScrollContent}
                   >
                     <Text style={styles.inputLabel}>Full Name</Text>
@@ -894,9 +1019,8 @@ export default function CitizenProfile() {
                         <Text style={styles.saveButtonText}>Save Changes</Text>
                       )}
                     </TouchableOpacity>
-                  </ScrollView>
+                  </KeyboardAwareScrollView>
                 </View>
-              </KeyboardAvoidingView>
             </View>
           </TouchableWithoutFeedback>
         </Modal>
@@ -909,10 +1033,6 @@ export default function CitizenProfile() {
         >
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <View style={styles.modalOverlay}>
-              <KeyboardAvoidingView
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
-                style={styles.keyboardView}
-              >
                 <View style={styles.passwordSheet}>
                   <View style={styles.modalHandle} />
 
@@ -928,6 +1048,11 @@ export default function CitizenProfile() {
                     </TouchableOpacity>
                   </View>
 
+                  <KeyboardAwareScrollView
+                    modal
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.modalScrollContent}
+                  >
                   <Text style={styles.inputLabel}>New Password</Text>
                   <TextInput
                     style={styles.input}
@@ -960,8 +1085,8 @@ export default function CitizenProfile() {
                       <Text style={styles.saveButtonText}>Update Password</Text>
                     )}
                   </TouchableOpacity>
+                  </KeyboardAwareScrollView>
                 </View>
-              </KeyboardAvoidingView>
             </View>
           </TouchableWithoutFeedback>
         </Modal>
@@ -1020,6 +1145,11 @@ export default function CitizenProfile() {
             </View>
           </View>
         </Modal>
+
+        <AuditLogsModal
+          visible={auditLogsVisible}
+          onClose={() => setAuditLogsVisible(false)}
+        />
       </View>
     </SafeAreaView>
   );
@@ -1143,7 +1273,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: H_PADDING,
     paddingTop: 0,
-    paddingBottom: 116,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   profileHeroCard: {
