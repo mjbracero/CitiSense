@@ -1,4 +1,5 @@
-import { Feather, FontAwesome5, Ionicons } from "@expo/vector-icons";
+import {
+  Feather, FontAwesome5, Ionicons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -11,11 +12,10 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Image as ExpoImage } from "expo-image";
 import * as Location from "expo-location";
-import { usePathname, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect, usePathname, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   AppState,
   Dimensions,
   Image,
@@ -23,7 +23,6 @@ import {
   Keyboard,
   Linking,
   Platform,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -32,6 +31,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { PageSkeleton } from "../../components/skeletons";
 import { resolveCommonAddress } from "../../lib/addressUtils";
 import {
   getProfileDisplayName,
@@ -40,7 +40,16 @@ import {
 import { isInsideBogoCity } from "../../lib/bogoCityBounds";
 import { HEADER_TOP_SPACING } from "../../constants/screenLayout";
 import ComplaintMapView from "../../components/ComplaintMapView";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import { useKeyboardInset } from "../../hooks/useKeyboardInset";
+import {
+  BOTTOM_NAV_CONTENT_INSET,
+  BOTTOM_NAV_DOCK_PAD,
+  BOTTOM_NAV_PILL_HEIGHT,
+} from "../../components/PersistentBottomNav";
+import { getKeyboardLift } from "../../lib/platformUi";
 import { notifyDepartmentHeadsNewAssignment } from "../../lib/departmentHeadNotificationService";
+import { writeAuditLog } from "../../lib/auditLogService";
 import { notifyCitizenDuplicateSubmission } from "../../lib/citizenNotificationService";
 import { getDeepgramApiKey } from "../../lib/deepgramApi";
 import { getGeminiApiKey } from "../../lib/geminiApi";
@@ -60,8 +69,11 @@ import {
 } from "../../lib/microphonePreferences";
 import { playMicStartFeedback } from "../../lib/micFeedbackSound";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
+import { getPageCache, setPageCache } from "../../lib/pageDataCache";
 import { createVoiceTranscriber } from "../../lib/voiceRecording";
 
+const SUBMIT_KEYBOARD_OFFSET = 124;
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 const GREEN = "#087A0D";
@@ -77,9 +89,13 @@ const BORDER = "#E2E7E0";
 const H_PADDING = 18;
 const MAX_PHOTOS = 3;
 const MAX_PHOTO_SIZE = 10 * 1024 * 1024;
-const INPUT_ABOVE_TABS_BOTTOM = Platform.OS === "ios" ? 78 : 70;
+const CITIZEN_SUBMIT_CACHE_KEY = "citizen.submit";
+const CITIZEN_PROFILE_CACHE_KEY = "citizen.profile";
+/** Floating chat composer height used for keyboard scroll offsets. */
 const MESSAGE_INPUT_HEIGHT = 64;
 const INPUT_KEYBOARD_GAP = Platform.OS === "android" ? 18 : 10;
+const SUBMIT_ANDROID_NAV_FLOOR = 48;
+const SUBMIT_COMPOSER_GAP = 4;
 const PH_MOBILE_REGEX = /^09\d{9}$/;
 
 const SPOKEN_DIGIT_WORDS = {
@@ -173,6 +189,55 @@ function isValidPhilippineMobile(number) {
   return PH_MOBILE_REGEX.test(String(number || "").replace(/\D/g, ""));
 }
 
+function getValidStoredContact(...candidates) {
+  for (const candidate of candidates) {
+    const digits = String(candidate || "").replace(/\D/g, "");
+
+    if (!digits || digits === "00000000000") continue;
+    if (PH_MOBILE_REGEX.test(digits)) return digits;
+    if (/^9\d{9}$/.test(digits)) return `0${digits}`;
+    if (/^\d{11}$/.test(digits)) return digits;
+  }
+
+  return "";
+}
+
+function getCachedProfileContact() {
+  const cachedUser = getPageCache(CITIZEN_PROFILE_CACHE_KEY)?.user;
+  return getValidStoredContact(cachedUser?.user_metadata?.contact_number);
+}
+
+async function fetchCitizenProfileContact(user) {
+  if (!user) return "";
+
+  let resolved = getValidStoredContact(user.user_metadata?.contact_number);
+
+  if (resolved) return resolved;
+
+  const [{ data: profile }, { data: citizenProfile }] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select("contact_number")
+      .eq("id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("citizen_profiles")
+      .select("contact_number")
+      .eq("id", user.id)
+      .maybeSingle(),
+  ]);
+
+  return getValidStoredContact(
+    profile?.contact_number,
+    citizenProfile?.contact_number
+  );
+}
+
+function isAcceptableContactNumber(number) {
+  const digits = String(number || "").replace(/\D/g, "");
+  return PH_MOBILE_REGEX.test(digits) || /^\d{11}$/.test(digits);
+}
+
 function getContactNumberErrorMessage() {
   return "Contact number must start with 09 and be exactly 11 digits.";
 }
@@ -221,7 +286,6 @@ async function getFreshDeviceLocation() {
     accuracy: currentPosition.coords.accuracy,
   };
 }
-
 
 const departmentByCategory = {
   "Water Concerns": "Bogo Water District",
@@ -792,7 +856,7 @@ function dialHotline(phoneNumber) {
   const dialNumber = phoneNumber.replace(/\s/g, "");
 
   Linking.openURL(`tel:${dialNumber}`).catch(() => {
-    Alert.alert("Call Failed", "Unable to open the phone dialer.");
+    notify("Call Failed", "Unable to open the phone dialer.");
   });
 }
 
@@ -922,6 +986,7 @@ export default function CitizenSubmit() {
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
+  const cachedSubmit = getPageCache(CITIZEN_SUBMIT_CACHE_KEY);
 
   const scrollViewRef = useRef(null);
   const recordingTimerRef = useRef(null);
@@ -939,7 +1004,8 @@ export default function CitizenSubmit() {
   const messageFromVoiceRef = useRef(false);
 
   const [message, setMessage] = useState("");
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const { keyboardHeight, androidNeedsManualPadding } =
+    useKeyboardInset();
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -951,7 +1017,10 @@ export default function CitizenSubmit() {
 
   const [complaintTitle, setComplaintTitle] = useState("");
   const [complaintDescription, setComplaintDescription] = useState("");
-  const [contactNumber, setContactNumber] = useState("");
+  const [contactNumber, setContactNumber] = useState(() => getCachedProfileContact());
+  const [usedProfileContact, setUsedProfileContact] = useState(false);
+  const profileContactRef = useRef(getCachedProfileContact());
+  const chatStepRef = useRef(0);
 
   const [titleMessage, setTitleMessage] = useState(null);
   const [descriptionMessage, setDescriptionMessage] = useState(null);
@@ -977,34 +1046,57 @@ export default function CitizenSubmit() {
 
   const hasSelectedPhotos = selectedPhotos.length > 0;
   const shouldShowInput = chatStep < 3;
+  const isKeyboardOpen = keyboardHeight > 0;
 
   useEffect(() => {
     selectedPhotosRef.current = selectedPhotos;
   }, [selectedPhotos]);
-  const isKeyboardOpen = keyboardHeight > 0;
+
+  useEffect(() => {
+    chatStepRef.current = chatStep;
+  }, [chatStep]);
+
+  const keyboardVerticalOffset = insets.top + SUBMIT_KEYBOARD_OFFSET;
+  const submitBottomLimit = useMemo(() => {
+    const systemNavInset = Math.max(
+      insets.bottom,
+      Platform.OS === "android" ? SUBMIT_ANDROID_NAV_FLOOR : 0
+    );
+    const composerPadding =
+      BOTTOM_NAV_DOCK_PAD +
+      BOTTOM_NAV_PILL_HEIGHT +
+      SUBMIT_COMPOSER_GAP;
+
+    return {
+      systemNavInset,
+      composerPadding,
+      scrollPadding: BOTTOM_NAV_CONTENT_INSET,
+    };
+  }, [insets.bottom]);
+
+  const composerDockPadding = isKeyboardOpen
+    ? getKeyboardLift(keyboardHeight, INPUT_KEYBOARD_GAP, insets.bottom, {
+        androidNeedsManualPadding,
+      })
+    : submitBottomLimit.composerPadding;
+
+  const scrollBottomPadding = shouldShowInput
+    ? 16
+    : reviewEditField
+      ? getKeyboardLift(keyboardHeight, 24, insets.bottom, {
+          androidNeedsManualPadding,
+        }) + 160
+      : submitBottomLimit.scrollPadding;
+
+  const profileContactForUpdates = useMemo(
+    () => getValidStoredContact(contactNumber, profileContactRef.current) || "",
+    [contactNumber]
+  );
 
   const submittedDateTime = useMemo(() => {
     const stamp = complaintCapturedAt || currentDate;
     return `${formatDateTime(stamp)} ${formatTime(stamp)}`;
   }, [complaintCapturedAt, currentDate]);
-
-  const keyboardOffset =
-    Platform.OS === "ios"
-      ? Math.max(keyboardHeight - insets.bottom, 0)
-      : keyboardHeight;
-
-  const inputBottom = isKeyboardOpen
-    ? keyboardOffset + INPUT_KEYBOARD_GAP
-    : INPUT_ABOVE_TABS_BOTTOM;
-
-  const scrollBottomPadding = shouldShowInput
-    ? Math.max(
-        240,
-        inputBottom + MESSAGE_INPUT_HEIGHT + (isRecording || isTranscribing ? 48 : 0) + 40
-      )
-    : reviewEditField
-      ? Math.max(200, keyboardOffset + 120)
-      : 125;
 
   const formattedDate = useMemo(
     () => getFormattedDate(currentDate),
@@ -1053,10 +1145,61 @@ export default function CitizenSubmit() {
     Poppins_700Bold,
   });
 
+  useEffect(() => {
+    setPageCache(CITIZEN_SUBMIT_CACHE_KEY, { visited: true });
+  }, []);
+
   const scrollToBottom = (animated = true) => {
     requestAnimationFrame(() => {
       scrollViewRef.current?.scrollToEnd({ animated });
     });
+  };
+
+  const applyProfileContact = (resolved, { advanceToPhotoStep = false } = {}) => {
+    const normalized = getValidStoredContact(resolved);
+    if (!normalized) return false;
+
+    profileContactRef.current = normalized;
+    setContactNumber(normalized);
+    setUsedProfileContact(true);
+    setContactMessage({
+      text: normalized,
+      time: formatTime(new Date()),
+    });
+
+    if (advanceToPhotoStep && chatStepRef.current < 3) {
+      setChatStep(3);
+    }
+
+    return true;
+  };
+
+  const syncProfileContact = async () => {
+    try {
+      const cached = getCachedProfileContact();
+      if (cached) {
+        profileContactRef.current = cached;
+        setContactNumber((prev) => prev || cached);
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (!user) return;
+
+      const resolved = await fetchCitizenProfileContact(user);
+      if (!resolved) return;
+
+      profileContactRef.current = resolved;
+      setContactNumber((prev) => prev || resolved);
+
+      if (chatStepRef.current === 2) {
+        applyProfileContact(resolved, { advanceToPhotoStep: true });
+      }
+    } catch {
+      // Chat will still ask for a number if the profile value is missing.
+    }
   };
 
   useEffect(() => {
@@ -1066,6 +1209,16 @@ export default function CitizenSubmit() {
       isMountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    syncProfileContact();
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      syncProfileContact();
+    }, [])
+  );
 
   useEffect(() => {
     if (hasSelectedPhotos) {
@@ -1099,50 +1252,16 @@ export default function CitizenSubmit() {
   }, []);
 
   useEffect(() => {
-    const resolveKeyboardHeight = (event) => {
-      const reported = event?.endCoordinates?.height || 0;
-      const screenY = event?.endCoordinates?.screenY;
-      const windowHeight = Dimensions.get("window").height;
+    if (reviewEditField) {
+      scrollToBottom(false);
+    }
+  }, [scrollBottomPadding, reviewEditField]);
 
-      // More accurate with Android edge-to-edge / gesture nav.
-      if (
-        typeof screenY === "number" &&
-        screenY > 0 &&
-        screenY < windowHeight
-      ) {
-        return Math.max(windowHeight - screenY, reported);
-      }
-
-      return reported;
-    };
-
-    const showSubscription = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
-      (event) => {
-        setKeyboardHeight(resolveKeyboardHeight(event));
-
-        setTimeout(() => {
-          scrollToBottom(true);
-        }, Platform.OS === "ios" ? 120 : 180);
-      }
-    );
-
-    const hideSubscription = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
-      () => {
-        setKeyboardHeight(0);
-
-        setTimeout(() => {
-          scrollToBottom(false);
-        }, 120);
-      }
-    );
-
-    return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
-    };
-  }, []);
+  useEffect(() => {
+    if (shouldShowInput) {
+      scrollToBottom(false);
+    }
+  }, [chatStep, shouldShowInput]);
 
   useEffect(() => {
     return () => {
@@ -1165,7 +1284,7 @@ export default function CitizenSubmit() {
     }
 
     return new Promise((resolve) => {
-      Alert.alert(
+      notify(
         "Turn On Microphone",
         "Allow CitiSense to turn on the microphone for voice input?",
         [
@@ -1220,7 +1339,7 @@ export default function CitizenSubmit() {
       } = await supabase.auth.getUser();
 
       if (!user?.id) {
-        Alert.alert(
+        notify(
           "Location Required",
           "Please log in again before capturing the complaint location."
         );
@@ -1231,7 +1350,7 @@ export default function CitizenSubmit() {
         const permission = await Location.requestForegroundPermissionsAsync();
 
         if (permission.status !== "granted") {
-          Alert.alert(
+          notify(
             "Location Permission Needed",
             "Turn on location permission so the complaint pin matches your real spot on the map."
           );
@@ -1245,7 +1364,7 @@ export default function CitizenSubmit() {
         const requested = await Location.requestForegroundPermissionsAsync();
 
         if (requested.status !== "granted") {
-          Alert.alert(
+          notify(
             "Location Permission Needed",
             "Turn on location permission so the complaint pin matches your real spot on the map."
           );
@@ -1258,7 +1377,7 @@ export default function CitizenSubmit() {
       if (!isInsideBogoCity(nextRegion.latitude, nextRegion.longitude)) {
         if (!bogoWarningShownRef.current) {
           bogoWarningShownRef.current = true;
-          Alert.alert(
+          notify(
             "Outside Bogo City",
             "Your current location is outside Bogo City, Cebu. Complaints can only be filed within Bogo City."
           );
@@ -1270,7 +1389,7 @@ export default function CitizenSubmit() {
     } catch (error) {
       console.log("Locate user error:", error);
       setConfirmedLocation(false);
-      Alert.alert(
+      notify(
         "Location Error",
         "Unable to capture your current GPS location. Please try again."
       );
@@ -1289,7 +1408,7 @@ export default function CitizenSubmit() {
     if (!cleanMessage) return false;
 
     if (chatStep === 2 && !isValidPhilippineMobile(cleanMessage)) {
-      Alert.alert("Invalid Contact Number", getContactNumberErrorMessage());
+      notify("Invalid Contact Number", getContactNumberErrorMessage());
       return false;
     }
 
@@ -1310,7 +1429,18 @@ export default function CitizenSubmit() {
     } else if (chatStep === 1) {
       setComplaintDescription(cleanMessage);
       setDescriptionMessage(newMessage);
-      setChatStep(2);
+
+      const savedContact = getValidStoredContact(
+        profileContactRef.current,
+        contactNumber
+      );
+
+      if (savedContact) {
+        applyProfileContact(savedContact, { advanceToPhotoStep: true });
+      } else {
+        setUsedProfileContact(false);
+        setChatStep(2);
+      }
     } else if (chatStep === 2) {
       setContactNumber(cleanMessage);
       setContactMessage(newMessage);
@@ -1350,7 +1480,7 @@ export default function CitizenSubmit() {
       setRecordingSeconds(0);
 
       if (!transcript) {
-        Alert.alert(
+        notify(
           "No Speech Detected",
           "We couldn't catch that. Please try speaking again, or type your message."
         );
@@ -1361,7 +1491,7 @@ export default function CitizenSubmit() {
         const phone = sanitizeSpokenContactNumber(transcript);
 
         if (!phone) {
-          Alert.alert(
+          notify(
             "Couldn't Catch Number",
             "Please say your 11-digit contact number starting with 09, or type it."
           );
@@ -1372,7 +1502,7 @@ export default function CitizenSubmit() {
         setMessage(phone);
 
         if (!isValidPhilippineMobile(phone)) {
-          Alert.alert(
+          notify(
             "Check Contact Number",
             "We heard part of your number. Clear or edit it, then tap send when the 11-digit number starting with 09 looks correct."
           );
@@ -1388,7 +1518,7 @@ export default function CitizenSubmit() {
       sendChatMessage(transcript);
     } catch (error) {
       console.log("Stop voice transcription error:", error);
-      Alert.alert(
+      notify(
         "Voice Input Error",
         error?.message || "Unable to finish voice transcription."
       );
@@ -1417,7 +1547,7 @@ export default function CitizenSubmit() {
       Keyboard.dismiss();
 
       if (!getGeminiApiKey() && !getDeepgramApiKey()) {
-        Alert.alert(
+        notify(
           "Voice Not Configured",
           "Voice input needs EXPO_PUBLIC_GEMINI_API_KEY in .env (recommended for accurate Bisaya/Tagalog/English and other PH dialects).\n\nRestart Metro with cache clear after adding it, or rebuild the APK so .env is included."
         );
@@ -1509,14 +1639,14 @@ export default function CitizenSubmit() {
         error?.code === "MICROPHONE_DENIED" ||
         error?.message === "MICROPHONE_DENIED"
       ) {
-        Alert.alert(
+        notify(
           "Microphone Not Allowed",
           "Microphone access was denied, so voice input is unavailable. You can enable it later in your device settings."
         );
         return;
       }
 
-      Alert.alert(
+      notify(
         "Voice Input Error",
         error?.message || "Unable to start voice transcription."
       );
@@ -1567,7 +1697,7 @@ export default function CitizenSubmit() {
       const nextTitle = reviewDraft.title.trim();
 
       if (!nextTitle) {
-        Alert.alert("Title Required", "Complaint title cannot be empty.");
+        notify("Title Required", "Complaint title cannot be empty.");
         return;
       }
 
@@ -1579,7 +1709,7 @@ export default function CitizenSubmit() {
       const nextDescription = reviewDraft.description.trim();
 
       if (!nextDescription) {
-        Alert.alert(
+        notify(
           "Description Required",
           "Complaint description cannot be empty."
         );
@@ -1588,14 +1718,17 @@ export default function CitizenSubmit() {
 
       setComplaintDescription(nextDescription);
     } else if (field === "contact") {
-      const cleanContact = sanitizePhilippineMobileInput(reviewDraft.contact);
+      const cleanContact =
+        sanitizePhilippineMobileInput(reviewDraft.contact) ||
+        String(reviewDraft.contact || "").replace(/\D/g, "");
 
-      if (!isValidPhilippineMobile(cleanContact)) {
-        Alert.alert("Invalid Contact Number", getContactNumberErrorMessage());
+      if (!isAcceptableContactNumber(cleanContact)) {
+        notify("Invalid Contact Number", getContactNumberErrorMessage());
         return;
       }
 
       setContactNumber(cleanContact);
+      setUsedProfileContact(false);
     }
 
     setReviewEditField(null);
@@ -1626,7 +1759,7 @@ export default function CitizenSubmit() {
     const remainingSlots = MAX_PHOTOS - selectedPhotosRef.current.length;
 
     if (remainingSlots <= 0) {
-      Alert.alert("Photo Limit Reached", `You can only upload up to ${MAX_PHOTOS} photos.`);
+      notify("Photo Limit Reached", `You can only upload up to ${MAX_PHOTOS} photos.`);
       return;
     }
 
@@ -1639,7 +1772,7 @@ export default function CitizenSubmit() {
     }
 
     if (usableAssets.length > remainingSlots) {
-      Alert.alert(
+      notify(
         "Photo Limit",
         `Only ${remainingSlots} more photo${remainingSlots > 1 ? "s" : ""} can be added. The limit is ${MAX_PHOTOS} photos only.`
       );
@@ -1668,7 +1801,7 @@ export default function CitizenSubmit() {
       }
 
       if (preparedPhotos.length === 0) {
-        Alert.alert(
+        notify(
           "Photo Not Added",
           "The selected photo could not be loaded. Please choose another photo from your gallery."
         );
@@ -1696,7 +1829,7 @@ export default function CitizenSubmit() {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
 
       if (!permission.granted) {
-        Alert.alert(
+        notify(
           "Permission Needed",
           "Please allow camera access so you can take evidence photos."
         );
@@ -1717,7 +1850,7 @@ export default function CitizenSubmit() {
       await addPickedPhotoAssets(result.assets);
     } catch (error) {
       console.log("Camera picker error:", error);
-      Alert.alert(
+      notify(
         "Camera Error",
         "The app could not open the camera. Please try again or choose a photo from your gallery."
       );
@@ -1729,7 +1862,7 @@ export default function CitizenSubmit() {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (!permission.granted) {
-        Alert.alert(
+        notify(
           "Permission Needed",
           "Please allow photo access so you can upload evidence."
         );
@@ -1754,7 +1887,7 @@ export default function CitizenSubmit() {
       await addPickedPhotoAssets(result.assets);
     } catch (error) {
       console.log("Image picker error:", error);
-      Alert.alert(
+      notify(
         "Photo Error",
         "The app could not open or load the selected photo. Please try choosing another photo."
       );
@@ -1763,7 +1896,7 @@ export default function CitizenSubmit() {
 
   const pickPhotos = () => {
     if (selectedPhotosRef.current.length >= MAX_PHOTOS) {
-      Alert.alert("Photo Limit Reached", `You can only upload up to ${MAX_PHOTOS} photos.`);
+      notify("Photo Limit Reached", `You can only upload up to ${MAX_PHOTOS} photos.`);
       return;
     }
 
@@ -1771,7 +1904,7 @@ export default function CitizenSubmit() {
       return;
     }
 
-    Alert.alert(
+    notify(
       "Add Photo Evidence",
       "Take a photo with your camera or choose from your gallery.",
       [
@@ -1884,7 +2017,7 @@ export default function CitizenSubmit() {
 
   const confirmDuplicateSubmission = (message) =>
     new Promise((resolve) => {
-      Alert.alert(
+      notify(
         "Similar Report Found",
         message,
         [
@@ -1945,23 +2078,55 @@ export default function CitizenSubmit() {
   const handleSubmitComplaint = async () => {
     if (isSubmitting || isSubmittingRef.current || isAnalyzing) return;
 
-    if (!complaintTitle || !complaintDescription || !contactNumber) {
-      Alert.alert(
+    if (!complaintTitle || !complaintDescription) {
+      notify(
+        "Incomplete Complaint",
+        "Please complete the complaint title and description."
+      );
+      return;
+    }
+
+    let resolvedContact = getValidStoredContact(
+      contactNumber,
+      profileContactRef.current
+    );
+
+    if (!resolvedContact) {
+      try {
+        const {
+          data: { user: currentUser },
+        } = await supabase.auth.getUser();
+
+        resolvedContact = await fetchCitizenProfileContact(currentUser);
+        if (resolvedContact) {
+          profileContactRef.current = resolvedContact;
+          setContactNumber(resolvedContact);
+          setUsedProfileContact(true);
+        }
+      } catch {
+        // Fall through to validation below.
+      }
+    }
+
+    if (!resolvedContact) {
+      notify(
         "Incomplete Complaint",
         "Please complete the complaint title, description, and contact number."
       );
       return;
     }
 
-    const cleanContactNumber = sanitizePhilippineMobileInput(contactNumber);
+    const cleanContactNumber =
+      sanitizePhilippineMobileInput(resolvedContact) ||
+      String(resolvedContact).replace(/\D/g, "");
 
-    if (!isValidPhilippineMobile(cleanContactNumber)) {
-      Alert.alert("Invalid Contact Number", getContactNumberErrorMessage());
+    if (!isAcceptableContactNumber(cleanContactNumber)) {
+      notify("Invalid Contact Number", getContactNumberErrorMessage());
       return;
     }
 
     if (!confirmedLocation) {
-      Alert.alert(
+      notify(
         "Location Required",
         "Please confirm or edit your complaint location before submitting."
       );
@@ -1969,7 +2134,7 @@ export default function CitizenSubmit() {
     }
 
     if (isDefaultMapRegion(selectedLocation)) {
-      Alert.alert(
+      notify(
         "Exact Location Needed",
         "Your complaint is still on the default city pin. Capture your current GPS location before submitting."
       );
@@ -1978,7 +2143,7 @@ export default function CitizenSubmit() {
     }
 
     if (selectedPhotos.length === 0) {
-      Alert.alert(
+      notify(
         "Photo Required",
         "Please upload at least one photo evidence before submitting."
       );
@@ -2019,7 +2184,7 @@ export default function CitizenSubmit() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        Alert.alert(
+        notify(
           "Login Required",
           "Please log in again before submitting a complaint."
         );
@@ -2050,7 +2215,7 @@ export default function CitizenSubmit() {
         !Number.isFinite(submitLocation.longitude) ||
         isDefaultMapRegion(submitLocation)
       ) {
-        Alert.alert(
+        notify(
           "Exact Location Needed",
           "Unable to use a precise GPS pin for this complaint. Please capture your location again."
         );
@@ -2069,7 +2234,7 @@ export default function CitizenSubmit() {
       });
 
       if (isComplaintAnalysisRejected(analysis)) {
-        Alert.alert(
+        notify(
           "Complaint Not Accepted",
           getComplaintRejectionMessage(analysis)
         );
@@ -2132,7 +2297,7 @@ export default function CitizenSubmit() {
         .single();
 
       if (insertError) {
-        Alert.alert("Submit Failed", insertError.message);
+        notify("Submit Failed", insertError.message);
         return;
       }
 
@@ -2158,6 +2323,22 @@ export default function CitizenSubmit() {
       }
 
       const citizenName = await getProfileDisplayName(user.id);
+
+      await writeAuditLog({
+        action: "complaint_submit",
+        title: "Complaint Submitted",
+        description: `Complaint #${
+          insertedComplaint.short_id || insertedComplaint.id
+        } was filed under ${assignedOffice}.`,
+        entityType: "complaint",
+        entityId: insertedComplaint.id,
+        actorRole: "citizen",
+        metadata: {
+          short_id: insertedComplaint.short_id,
+          category: detectedCategory,
+          assigned_office: assignedOffice,
+        },
+      });
 
       await notifyDepartmentHeadsNewAssignment({
         complaint: insertedComplaint,
@@ -2186,7 +2367,7 @@ export default function CitizenSubmit() {
       });
     } catch (error) {
       console.log("Submit complaint error:", error);
-      Alert.alert(
+      notify(
         "Submit Failed",
         "Something went wrong while submitting your complaint. Please try again."
       );
@@ -2200,12 +2381,8 @@ export default function CitizenSubmit() {
     }
   };
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  if (!fontsLoaded && !cachedSubmit) {
+    return <PageSkeleton variant="submit" />;
   }
 
   const renderUserMessage = (item) => {
@@ -2297,7 +2474,6 @@ export default function CitizenSubmit() {
               keyboardType={keyboardType}
               maxLength={maxLength}
               autoFocus
-              onFocus={() => scrollToBottom(true)}
             />
           ) : (
             <Text style={styles.reviewValue}>{value}</Text>
@@ -2355,55 +2531,119 @@ export default function CitizenSubmit() {
     </View>
   );
 
-  return (
-    <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
+  const renderMessageComposer = () => (
+    <View style={styles.composerSection}>
+      {(isRecording || isTranscribing) && (
+        <View style={styles.recordingBanner}>
+          <View style={styles.recordingDot} />
 
-      <View style={styles.mainContainer}>
-        <View style={styles.header}>
+          <Text style={styles.recordingText}>
+            {isTranscribing
+              ? "Transcribing..."
+              : chatStep === 2
+                ? `Listening for number • ${formatRecordingTime(recordingSeconds)}`
+                : `Listening • ${formatRecordingTime(recordingSeconds)}`}
+          </Text>
+
+          <Text style={styles.recordingHint}>
+            {isTranscribing ? "Please wait" : "Stops when you pause"}
+          </Text>
+        </View>
+      )}
+
+      <View style={styles.messageRow}>
+        <View
+          style={[
+            styles.inputBox,
+            (isRecording || isTranscribing) && styles.inputBoxRecording,
+          ]}
+        >
+          <TextInput
+            key={
+              chatStep === 2
+                ? "contact-number-input"
+                : `message-input-${chatStep}`
+            }
+            ref={textInputRef}
+            style={[
+              styles.textInput,
+              Platform.OS === "android" && styles.textInputNoOutline,
+            ]}
+            value={message}
+            onChangeText={(text) => {
+              const nextText =
+                chatStep === 2 ? sanitizePhilippineMobileInput(text) : text;
+
+              messageFromVoiceRef.current = false;
+              setMessage(nextText);
+              scrollToBottom(false);
+            }}
+            placeholder={
+              isRecording
+                ? chatStep === 2
+                  ? "Say your 11-digit number..."
+                  : "Speak now..."
+                : isTranscribing
+                ? "Transcribing accurately..."
+                : chatStep === 0
+                ? "Type your complaint title..."
+                : chatStep === 1
+                ? "Describe what happened..."
+                : "09XXXXXXXXX"
+            }
+            placeholderTextColor="#9A9A9A"
+            returnKeyType="send"
+            onSubmitEditing={handleSendMessage}
+            blurOnSubmit={false}
+            editable={!isRecording && !isTranscribing}
+            keyboardType={chatStep === 2 ? "phone-pad" : "default"}
+            inputMode={chatStep === 2 ? "tel" : "text"}
+            textContentType={chatStep === 2 ? "telephoneNumber" : "none"}
+            maxLength={chatStep === 2 ? 11 : undefined}
+          />
+
           <TouchableOpacity
             activeOpacity={0.7}
-            style={styles.backButton}
-            onPress={handleBackPress}
+            style={[
+              styles.micButton,
+              isRecording && styles.micButtonActive,
+              isTranscribing && styles.micButtonDisabled,
+            ]}
+            onPress={toggleVoiceRecording}
+            disabled={isTranscribing}
           >
-            <Feather name="chevron-left" size={26} color={TEXT} />
+            <Ionicons
+              name={isRecording ? "mic" : "mic-outline"}
+              size={19}
+              color={isRecording ? WHITE : "#777777"}
+            />
           </TouchableOpacity>
-
-          <View style={styles.headerTitleBox}>
-            <Text style={styles.headerTitle}>Submit Complaint</Text>
-            <Text style={styles.headerDescription}>
-              Report an emergency or city concern through CitiSense.
-            </Text>
-          </View>
         </View>
 
-        <View style={styles.assistantHeader}>
-          <View style={styles.assistantAvatar}>
-            <Image source={BOT_LOGO} style={styles.assistantBotLogo} />
-          </View>
-
-          <View style={styles.assistantTextBox}>
-            <Text style={styles.assistantTitle}>CitiSense Assistant</Text>
-            <Text style={styles.assistantSubtitle}>AI-guided complaint form</Text>
-          </View>
-        </View>
-
-        <ScrollView
-          ref={scrollViewRef}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-          scrollEventThrottle={16}
-          overScrollMode="never"
-          contentInsetAdjustmentBehavior="never"
-          contentContainerStyle={[
-            styles.scrollContent,
-            { paddingBottom: scrollBottomPadding },
+        <TouchableOpacity
+          style={[
+            styles.sendButton,
+            {
+              opacity:
+                message.trim().length > 0 && !isRecording && !isTranscribing
+                  ? 1
+                  : 0.5,
+            },
           ]}
-          onContentSizeChange={() => {
-            scrollToBottom(false);
-          }}
+          activeOpacity={0.7}
+          onPress={handleSendMessage}
+          disabled={
+            message.trim().length === 0 || isRecording || isTranscribing
+          }
         >
+          <Ionicons name="send" size={23} color={WHITE} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const renderChatScrollContent = () => (
+    <>
           <View style={styles.chatDatePill}>
             <Text style={styles.chatDateText}>{formattedDate}</Text>
           </View>
@@ -2445,12 +2685,22 @@ export default function CitizenSubmit() {
           {renderUserMessage(descriptionMessage)}
 
           {chatStep >= 2 &&
+            !usedProfileContact &&
             renderBotMessage(
               "May I have your contact number so we can reach you for updates?",
               formatTime(new Date())
             )}
 
           {renderUserMessage(contactMessage)}
+
+          {chatStep >= 3 &&
+            usedProfileContact &&
+            renderBotMessage(
+              profileContactForUpdates
+                ? `We'll use your contact number from your profile for updates: ${profileContactForUpdates}.`
+                : "We'll use the contact number from your profile for updates.",
+              formatTime(new Date())
+            )}
 
           {chatStep >= 3 &&
             renderBotMessage(
@@ -2676,147 +2926,92 @@ export default function CitizenSubmit() {
               </Text>
             </TouchableOpacity>
           )}
-        </ScrollView>
 
-        {isKeyboardOpen && shouldShowInput && (
-          <View
-            style={[
-              styles.keyboardWhiteCover,
-              {
-                height:
-                  keyboardOffset +
-                  MESSAGE_INPUT_HEIGHT +
-                  INPUT_KEYBOARD_GAP +
-                  (isRecording || isTranscribing ? 44 : 0) +
-                  16,
-              },
-            ]}
-          />
-        )}
+    </>
+  );
+
+  return (
+    <SafeAreaView style={styles.safeArea} edges={["top"]}>
+      <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
+
+      <View
+        style={[
+          styles.mainContainer,
+          { paddingBottom: submitBottomLimit.systemNavInset },
+        ]}
+      >
+        <View style={styles.header}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            style={styles.backButton}
+            onPress={handleBackPress}
+          >
+            <Feather name="chevron-left" size={26} color={TEXT} />
+          </TouchableOpacity>
+
+          <View style={styles.headerTitleBox}>
+            <Text style={styles.headerTitle}>Submit Complaint</Text>
+            <Text style={styles.headerDescription}>
+              Report an emergency or city concern through CitiSense.
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.assistantHeader}>
+          <View style={styles.assistantAvatar}>
+            <Image source={BOT_LOGO} style={styles.assistantBotLogo} />
+          </View>
+
+          <View style={styles.assistantTextBox}>
+            <Text style={styles.assistantTitle}>CitiSense Assistant</Text>
+            <Text style={styles.assistantSubtitle}>AI-guided complaint form</Text>
+          </View>
+        </View>
+
+        <KeyboardAwareScrollView
+          style={styles.chatScroll}
+          innerRef={(node) => {
+            scrollViewRef.current = node;
+          }}
+          suppressContentPadding
+          smoothKeyboard
+          enableOnAndroid
+          enableAutomaticScroll={
+            Boolean(reviewEditField) || (shouldShowInput && isKeyboardOpen)
+          }
+          extraScrollHeight={shouldShowInput ? MESSAGE_INPUT_HEIGHT + 24 : 120}
+          keyboardVerticalOffset={keyboardVerticalOffset}
+          showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          overScrollMode="never"
+          contentInsetAdjustmentBehavior="never"
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: scrollBottomPadding },
+          ]}
+          onContentSizeChange={() => {
+            if (shouldShowInput || reviewEditField) {
+              scrollToBottom(false);
+            }
+          }}
+        >
+          {renderChatScrollContent()}
+        </KeyboardAwareScrollView>
 
         {shouldShowInput && (
           <View
             style={[
-              styles.messageInputWrapper,
-              isKeyboardOpen && styles.messageInputWrapperKeyboard,
-              { bottom: inputBottom },
+              styles.messageInputDock,
+              {
+                paddingBottom: isKeyboardOpen
+                  ? composerDockPadding
+                  : submitBottomLimit.composerPadding,
+              },
             ]}
           >
-            {(isRecording || isTranscribing) && (
-              <View style={styles.recordingBanner}>
-                <View style={styles.recordingDot} />
-
-                <Text style={styles.recordingText}>
-                  {isTranscribing
-                    ? "Transcribing..."
-                    : chatStep === 2
-                      ? `Listening for number • ${formatRecordingTime(recordingSeconds)}`
-                      : `Listening • ${formatRecordingTime(recordingSeconds)}`}
-                </Text>
-
-                <Text style={styles.recordingHint}>
-                  {isTranscribing
-                    ? "Please wait"
-                    : "Stops when you pause · Bisaya / Tagalog / English"}
-                </Text>
-              </View>
-            )}
-
-            <View style={styles.messageRow}>
-              <View
-                style={[
-                  styles.inputBox,
-                  (isRecording || isTranscribing) && styles.inputBoxRecording,
-                ]}
-              >
-                <TextInput
-                  key={
-                    chatStep === 2
-                      ? "contact-number-input"
-                      : `message-input-${chatStep}`
-                  }
-                  ref={textInputRef}
-                  style={styles.textInput}
-                  value={message}
-                  onChangeText={(text) => {
-                    const nextText =
-                      chatStep === 2
-                        ? sanitizePhilippineMobileInput(text)
-                        : text;
-
-                    messageFromVoiceRef.current = false;
-                    setMessage(nextText);
-                    scrollToBottom(false);
-                  }}
-                  onFocus={() => scrollToBottom(true)}
-                  placeholder={
-                    isRecording
-                      ? chatStep === 2
-                        ? "Say your 11-digit number..."
-                        : "Speak now..."
-                      : isTranscribing
-                      ? "Transcribing accurately..."
-                      : chatStep === 0
-                      ? "Type your complaint title..."
-                      : chatStep === 1
-                      ? "Describe what happened..."
-                      : "09XXXXXXXXX"
-                  }
-                  placeholderTextColor="#9A9A9A"
-                  returnKeyType="send"
-                  onSubmitEditing={handleSendMessage}
-                  blurOnSubmit={false}
-                  editable={!isRecording && !isTranscribing}
-                  keyboardType={chatStep === 2 ? "phone-pad" : "default"}
-                  inputMode={chatStep === 2 ? "tel" : "text"}
-                  textContentType={
-                    chatStep === 2 ? "telephoneNumber" : "none"
-                  }
-                  maxLength={chatStep === 2 ? 11 : undefined}
-                />
-
-                <TouchableOpacity
-                  activeOpacity={0.7}
-                  style={[
-                    styles.micButton,
-                    isRecording && styles.micButtonActive,
-                    isTranscribing && styles.micButtonDisabled,
-                  ]}
-                  onPress={toggleVoiceRecording}
-                  disabled={isTranscribing}
-                >
-                  <Ionicons
-                    name={isRecording ? "mic" : "mic-outline"}
-                    size={19}
-                    color={isRecording ? WHITE : "#777777"}
-                  />
-                </TouchableOpacity>
-              </View>
-
-              <TouchableOpacity
-                style={[
-                  styles.sendButton,
-                  {
-                    opacity:
-                      message.trim().length > 0 &&
-                      !isRecording &&
-                      !isTranscribing
-                        ? 1
-                        : 0.5,
-                  },
-                ]}
-                activeOpacity={0.7}
-                onPress={handleSendMessage}
-                disabled={
-                  message.trim().length === 0 || isRecording || isTranscribing
-                }
-              >
-                <Ionicons name="send" size={23} color={WHITE} />
-              </TouchableOpacity>
-            </View>
+            {renderMessageComposer()}
           </View>
         )}
-
       </View>
     </SafeAreaView>
   );
@@ -2889,11 +3084,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#E5EDE1",
     backgroundColor: WHITE,
-    shadowColor: "#000000",
-    shadowOpacity: 0.12,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 5,
     zIndex: 5,
   },
 
@@ -2933,9 +3123,17 @@ const styles = StyleSheet.create({
     marginTop: -2,
   },
 
+  chatScroll: {
+    flex: 1,
+  },
+
   scrollContent: {
     paddingHorizontal: H_PADDING,
     paddingTop: 16,
+  },
+
+  composerSection: {
+    width: "100%",
   },
 
   chatDatePill: {
@@ -2991,11 +3189,6 @@ const styles = StyleSheet.create({
     paddingBottom: 9,
     borderWidth: 1,
     borderColor: "#EEF0EE",
-    shadowColor: "#000000",
-    shadowOpacity: 0.05,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
   },
 
   botText: {
@@ -3638,31 +3831,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  keyboardWhiteCover: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: WHITE,
-    zIndex: 25,
-    elevation: 25,
-  },
-
-  messageInputWrapper: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    minHeight: 64,
-    backgroundColor: "transparent",
+  messageInputDock: {
+    paddingTop: 2,
     paddingHorizontal: 13,
-    zIndex: 40,
-    elevation: 40,
-  },
-
-  messageInputWrapperKeyboard: {
-    backgroundColor: WHITE,
-    paddingTop: 8,
-    paddingBottom: 6,
+    backgroundColor: BG,
   },
 
   messageRow: {
@@ -3682,11 +3854,6 @@ const styles = StyleSheet.create({
     paddingLeft: 14,
     paddingRight: 6,
     marginRight: 9,
-    shadowColor: "#000000",
-    shadowOpacity: 0.08,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
   },
 
   inputBoxRecording: {
@@ -3701,6 +3868,10 @@ const styles = StyleSheet.create({
     fontSize: 13.5,
     color: TEXT,
     paddingVertical: 0,
+  },
+
+  textInputNoOutline: {
+    outlineStyle: "none",
   },
 
   micButton: {
@@ -3793,11 +3964,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     borderTopWidth: 1,
     borderTopColor: "#E5E5E5",
-    shadowColor: "#000000",
-    shadowOpacity: 0.16,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: -3 },
-    elevation: 10,
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "center",
@@ -3942,11 +4108,8 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === "ios" ? 28 : 18,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    shadowColor: "#000000",
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: -4 },
-    elevation: 10,
+    borderTopWidth: 1,
+    borderColor: BORDER,
   },
 
   modalHandle: {
