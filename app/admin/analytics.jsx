@@ -714,58 +714,6 @@ export default function AdminAnalytics() {
           )}
         </ScrollView>
 
-        <View style={styles.bottomNav}>
-          {bottomTabs.map((tab) => {
-            const isActive =
-              pathname?.includes(tab.activePath) ||
-              (tab.label === "Home" &&
-                (pathname === "/" || pathname?.includes("admin/dashboard")));
-
-            return (
-              <TouchableOpacity
-                key={tab.label}
-                style={[styles.navItem, { flex: tab.flex }]}
-                activeOpacity={0.7}
-                onPress={() => smoothNavigate(tab.route, isActive)}
-              >
-                <View style={styles.navIconWrap}>
-                  <Ionicons
-                    name={isActive ? tab.activeIcon : tab.inactiveIcon}
-                    size={25}
-                    color={isActive ? GREEN : TEXT}
-                  />
-
-                  {tab.label === "Notifications" &&
-                    unreadNotificationCount > 0 && (
-                      <View style={styles.notificationNavBadge}>
-                        <Text style={styles.notificationNavBadgeText}>
-                          {unreadNotificationCount > 99
-                            ? "99+"
-                            : unreadNotificationCount}
-                        </Text>
-                      </View>
-                    )}
-                </View>
-
-                <Text
-                  style={[
-                    styles.navLabel,
-                    {
-                      color: isActive ? GREEN : TEXT,
-                      fontFamily: isActive
-                        ? "Poppins_600SemiBold"
-                        : "Poppins_500Medium",
-                    },
-                  ]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                >
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
       </View>
     </SafeAreaView>
   );

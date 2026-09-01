@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+import { getPasswordResetRedirectTo } from "../../lib/passwordReset";
 
 import {
   useFonts,
@@ -51,7 +52,7 @@ export default function ForgotPasswordScreen() {
       return;
     }
 
-    if (!cleanEmail.includes("@")) {
+    if (!cleanEmail.includes("@") || !cleanEmail.includes(".")) {
       Alert.alert("Invalid Email", "Please enter a valid email address.");
       return;
     }
@@ -59,8 +60,10 @@ export default function ForgotPasswordScreen() {
     setLoading(true);
 
     try {
+      const redirectTo = getPasswordResetRedirectTo();
+
       const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-        redirectTo: "citisense://auth/resetPassword",
+        redirectTo,
       });
 
       if (error) {
@@ -72,7 +75,7 @@ export default function ForgotPasswordScreen() {
 
       Alert.alert(
         "Password Reset Sent",
-        "Please check your email for the password reset link."
+        "Check your email and tap the reset link on this phone. It must open CitiSense (not only a browser) before you can set a new password."
       );
     } catch (err) {
       Alert.alert("Error", String(err?.message || err));
@@ -169,7 +172,7 @@ export default function ForgotPasswordScreen() {
                     },
                   ]}
                 >
-                  Reset link sent. Please check your email inbox.
+                  Reset link sent. Open it on this phone to continue.
                 </Text>
               </View>
             )}

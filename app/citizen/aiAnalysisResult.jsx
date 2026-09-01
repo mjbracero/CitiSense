@@ -406,45 +406,6 @@ export default function CitizenAIAnalysisResult() {
           </TouchableOpacity>
         </ScrollView>
 
-        <View style={styles.bottomNav}>
-          {bottomTabs.map((tab) => {
-            const isActive =
-              pathname?.includes(tab.activePath) ||
-              pathname?.includes("aiAnalysisResult");
-
-            return (
-              <TouchableOpacity
-                key={tab.label}
-                style={styles.navItem}
-                activeOpacity={0.75}
-                onPress={() => {
-                  if (isActive) return;
-                  router.replace(tab.route);
-                }}
-              >
-                <Ionicons
-                  name={isActive ? tab.activeIcon : tab.inactiveIcon}
-                  size={25}
-                  color={isActive ? GREEN : TEXT}
-                />
-                <Text
-                  style={[
-                    styles.navLabel,
-                    {
-                      color: isActive ? GREEN : TEXT,
-                      fontFamily: isActive
-                        ? "Poppins_600SemiBold"
-                        : "Poppins_500Medium",
-                    },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
       </View>
     </SafeAreaView>
   );

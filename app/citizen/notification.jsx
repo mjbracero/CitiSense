@@ -760,48 +760,6 @@ export default function CitizenNotification() {
           )}
         </ScrollView>
 
-        <View style={styles.bottomNav}>
-          {bottomTabs.map((tab) => {
-            const isActive =
-              pathname?.includes(tab.activePath) ||
-              (tab.label === "Home" &&
-                (pathname === "/" || pathname?.includes("citizen/dashboard")));
-
-            return (
-              <TouchableOpacity
-                key={tab.label}
-                style={[styles.navItem, { flex: tab.flex }]}
-                activeOpacity={0.7}
-                onPress={() => {
-                  if (isActive) return;
-                  router.replace(tab.route);
-                }}
-              >
-                <Ionicons
-                  name={isActive ? tab.activeIcon : tab.inactiveIcon}
-                  size={26}
-                  color={isActive ? GREEN : "#000000"}
-                />
-
-                <Text
-                  style={[
-                    styles.navLabel,
-                    {
-                      color: isActive ? GREEN : "#000000",
-                      fontFamily: isActive
-                        ? "Poppins_600SemiBold"
-                        : "Poppins_500Medium",
-                    },
-                  ]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                >
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
       </View>
     </SafeAreaView>
   );

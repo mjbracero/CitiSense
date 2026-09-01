@@ -38,6 +38,10 @@ import {
   getProfileDisplayName,
   notifyAdminsCitizenValidated,
 } from "../../lib/adminNotificationService";
+import {
+  buildResolutionValidationDbPayload,
+  validateResolutionWithGemini,
+} from "../../lib/geminiResolutionValidation";
 import { supabase } from "../../lib/supabase";
 
 const GREEN = "#087A0D";
@@ -1797,6 +1801,12 @@ export default function CitizenComplaints() {
         citizen_validation_feedback: feedback.trim(),
         citizen_validation_photo_urls: uploadedValidationPhotos,
         citizen_validated_at: validationSubmittedAt,
+        ai_validation_status: "pending",
+        ai_validation_approved: null,
+        ai_validation_summary: "AI is reviewing the validation evidence.",
+        ai_validation_reason: null,
+        ai_validation_recommendation: null,
+        ai_validated_at: null,
       };
 
       const { error } = await supabase
@@ -1809,12 +1819,81 @@ export default function CitizenComplaints() {
         return;
       }
 
+      let aiValidation = null;
+
+      try {
+        const localValidationUris = validationPhotos
+          .map((photo) => photo?.uri)
+          .filter(Boolean);
+        const originalPhotoUris = (
+          selectedComplaint.photoUrls ||
+          (selectedComplaint.photo ? [selectedComplaint.photo] : [])
+        ).filter(
+          (uri) =>
+            uri &&
+            !String(uri).includes("placehold.co") &&
+            !String(uri).includes("placeholder")
+        );
+
+        aiValidation = await validateResolutionWithGemini({
+          title: selectedComplaint.title,
+          description: selectedComplaint.description,
+          category: selectedComplaint.category,
+          locationText: selectedComplaint.location,
+          citizenAnswer: validationAnswer,
+          citizenFeedback: feedback.trim(),
+          originalPhotoUris,
+          validationPhotoUris:
+            localValidationUris.length > 0
+              ? localValidationUris
+              : uploadedValidationPhotos,
+        });
+
+        const { error: aiError } = await supabase
+          .from("complaints")
+          .update(buildResolutionValidationDbPayload(aiValidation))
+          .eq("id", selectedComplaint.id);
+
+        if (aiError) {
+          console.log("Save AI validation result error:", aiError);
+        }
+      } catch (aiError) {
+        console.log("AI resolution validation error:", aiError);
+        aiValidation = {
+          approved: false,
+          status: "error",
+          confidence: 0,
+          summary: "AI validation could not finish. Admin review is required.",
+          reason: aiError?.message || "AI validation failed.",
+          recommendation: "needs_human_review",
+          validated_at: new Date().toISOString(),
+        };
+
+        await supabase
+          .from("complaints")
+          .update({
+            ai_validation_status: "error",
+            ai_validation_approved: false,
+            ai_validation_summary: aiValidation.summary,
+            ai_validation_reason: aiValidation.reason,
+            ai_validation_recommendation: "needs_human_review",
+            ai_validation_result: aiValidation,
+            ai_validated_at: aiValidation.validated_at,
+          })
+          .eq("id", selectedComplaint.id);
+      }
+
       const updatedComplaint = {
         ...selectedComplaint,
         validationSubmitted: true,
         validationResult: validationAnswer,
         validationFeedback: feedback.trim(),
         validationPhotoUrls: uploadedValidationPhotos,
+        aiValidationStatus: aiValidation?.status || "pending",
+        aiValidationApproved: Boolean(aiValidation?.approved),
+        aiValidationSummary: aiValidation?.summary || null,
+        aiValidationReason: aiValidation?.reason || null,
+        aiValidationRecommendation: aiValidation?.recommendation || null,
       };
 
       setComplaintsData((prev) =>
@@ -1826,6 +1905,12 @@ export default function CitizenComplaints() {
                 validationResult: validationAnswer,
                 validationFeedback: feedback.trim(),
                 validationPhotoUrls: uploadedValidationPhotos,
+                aiValidationStatus: updatedComplaint.aiValidationStatus,
+                aiValidationApproved: updatedComplaint.aiValidationApproved,
+                aiValidationSummary: updatedComplaint.aiValidationSummary,
+                aiValidationReason: updatedComplaint.aiValidationReason,
+                aiValidationRecommendation:
+                  updatedComplaint.aiValidationRecommendation,
               }
             : item
         )
@@ -1860,11 +1945,18 @@ export default function CitizenComplaints() {
         console.log("Admin validation notification error:", notifyResult);
       }
 
+      const aiNote =
+        aiValidation?.status === "approved"
+          ? " AI also approved the validation evidence."
+          : aiValidation?.status === "rejected"
+            ? " AI flagged the validation evidence for admin review."
+            : " AI validation is pending or needs admin review.";
+
       Alert.alert(
         "Validation Submitted",
         validationAnswer === "resolved"
-          ? "Thank you. Your feedback was submitted. The admin will review it before marking the complaint as completed."
-          : "Thank you. Your feedback was submitted. The admin will review it and may return the complaint to the department if further action is needed."
+          ? `Thank you. Your feedback was submitted.${aiNote} The admin will review it before marking the complaint as completed.`
+          : `Thank you. Your feedback was submitted.${aiNote} The admin may return the complaint to the department if further action is needed.`
       );
 
       await loadComplaints();

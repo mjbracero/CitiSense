@@ -17,6 +17,12 @@ function base64UrlEncode(value: string) {
   return btoa(value).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+function isExpoPushToken(token: string) {
+  return (
+    token.startsWith("ExponentPushToken[") || token.startsWith("ExpoPushToken[")
+  );
+}
+
 async function getFirebaseAccessToken() {
   const clientEmail = Deno.env.get("FIREBASE_CLIENT_EMAIL")?.trim();
   const privateKey = Deno.env
@@ -72,7 +78,9 @@ async function getFirebaseAccessToken() {
   const tokenJson = await tokenResponse.json();
 
   if (!tokenResponse.ok) {
-    throw new Error(tokenJson.error_description || "Unable to get Firebase access token.");
+    throw new Error(
+      tokenJson.error_description || "Unable to get Firebase access token."
+    );
   }
 
   return tokenJson.access_token as string;
@@ -93,6 +101,58 @@ function pemToArrayBuffer(pem: string) {
   return bytes.buffer;
 }
 
+async function sendExpoPushMessage(
+  token: string,
+  title: string,
+  body: string,
+  data: Record<string, string> = {}
+) {
+  const response = await fetch("https://exp.host/--/api/v2/push/send", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Accept-Encoding": "gzip, deflate",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      to: token,
+      title,
+      body,
+      sound: "default",
+      priority: "high",
+      channelId: "default",
+      ttl: 86400,
+      data,
+    }),
+  });
+
+  const responseJson = await response.json();
+
+  if (!response.ok) {
+    throw new Error(JSON.stringify(responseJson));
+  }
+
+  const tickets = Array.isArray(responseJson?.data)
+    ? responseJson.data
+    : [responseJson?.data].filter(Boolean);
+
+  const errors = tickets.filter((ticket) => ticket?.status === "error");
+
+  if (errors.length > 0) {
+    throw new Error(JSON.stringify(errors));
+  }
+
+  return responseJson;
+}
+
+/**
+ * Closed-app Android banners require a top-level `notification` block so the
+ * OS can show a tray/heads-up alert when the app process is not running.
+ *
+ * Intentionally omit android.notification.channel_id: if the app's "default"
+ * channel was muted/created wrong, FCM still returns success but nothing shows.
+ * Without channel_id, Android posts to the system Miscellaneous channel instead.
+ */
 async function sendFcmMessage(
   accessToken: string,
   projectId: string,
@@ -104,6 +164,7 @@ async function sendFcmMessage(
   const stringData: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(data)) {
+    if (value == null) continue;
     stringData[key] = String(value);
   }
 
@@ -118,12 +179,22 @@ async function sendFcmMessage(
       body: JSON.stringify({
         message: {
           token,
-          notification: { title, body },
+          notification: {
+            title,
+            body,
+          },
+          // Keep data tiny — only routing keys — so OEMs treat this as a
+          // display notification, not a silent data message.
           data: stringData,
           android: {
             priority: "HIGH",
+            ttl: "86400s",
             notification: {
-              channel_id: "default",
+              sound: "default",
+              default_sound: true,
+              default_vibrate_timings: true,
+              notification_priority: "PRIORITY_MAX",
+              visibility: "PUBLIC",
             },
           },
         },
@@ -131,10 +202,20 @@ async function sendFcmMessage(
     }
   );
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(errorBody || "FCM send failed.");
+  const responseText = await response.text();
+  let responseJson: Record<string, unknown> = {};
+
+  try {
+    responseJson = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    responseJson = { raw: responseText };
   }
+
+  if (!response.ok) {
+    throw new Error(responseText || "FCM send failed.");
+  }
+
+  return responseJson;
 }
 
 Deno.serve(async (request) => {
@@ -178,14 +259,36 @@ Deno.serve(async (request) => {
       );
     }
 
-    const accessToken = await getFirebaseAccessToken();
     const data = payload.data || {};
     let sent = 0;
+    const results: Array<Record<string, unknown>> = [];
+    let firebaseAccessToken: string | null = null;
 
     for (const row of tokens) {
       try {
-        await sendFcmMessage(
-          accessToken,
+        if (isExpoPushToken(row.token)) {
+          const expoResult = await sendExpoPushMessage(
+            row.token,
+            payload.title,
+            payload.body,
+            data
+          );
+          sent += 1;
+          results.push({
+            ok: true,
+            via: "expo",
+            token_len: row.token?.length || 0,
+            expo: expoResult,
+          });
+          continue;
+        }
+
+        if (!firebaseAccessToken) {
+          firebaseAccessToken = await getFirebaseAccessToken();
+        }
+
+        const fcmResult = await sendFcmMessage(
+          firebaseAccessToken,
           firebaseProjectId,
           row.token,
           payload.title,
@@ -193,14 +296,35 @@ Deno.serve(async (request) => {
           data
         );
         sent += 1;
+        results.push({
+          ok: true,
+          via: "fcm",
+          token_len: row.token?.length || 0,
+          fcm_name: fcmResult?.name || null,
+        });
       } catch (sendError) {
-        console.error("FCM send error:", sendError);
+        const message =
+          sendError instanceof Error ? sendError.message : String(sendError);
+        console.error("Push send error:", sendError);
+        results.push({
+          ok: false,
+          via: isExpoPushToken(row.token) ? "expo" : "fcm",
+          token_len: row.token?.length || 0,
+          error: message.slice(0, 500),
+        });
       }
     }
 
-    return new Response(JSON.stringify({ sent }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        sent,
+        firebase_project_id: firebaseProjectId,
+        results,
+      }),
+      {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
   } catch (error) {
     console.error("send-push-notification error:", error);
 

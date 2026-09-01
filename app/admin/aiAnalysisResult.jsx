@@ -555,25 +555,6 @@ export default function AIAnalysisResult() {
           </TouchableOpacity>
         </ScrollView>
 
-        <View style={styles.bottomNav}>
-          {bottomTabs.map((tab) => {
-            const isActive =
-              pathname?.includes(tab.activePath) ||
-              (tab.label === "Submit" && pathname?.includes("aiAnalysisResult"));
-
-            return (
-              <SmoothTabItem
-                key={tab.label}
-                tab={tab}
-                isActive={isActive}
-                onPress={() => {
-                  if (isActive) return;
-                  router.replace(tab.route);
-                }}
-              />
-            );
-          })}
-        </View>
       </View>
     </SafeAreaView>
   );

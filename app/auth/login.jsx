@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -13,13 +13,14 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import {
   Ionicons,
   MaterialCommunityIcons,
   FontAwesome5,
 } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+import { markPasswordRecoveryActive } from "../../lib/passwordReset";
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
 
 import {
@@ -34,6 +35,8 @@ const logo = require("../../assets/images/logowname.png");
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { confirmed } = useLocalSearchParams();
+  const shownEmailConfirmedRef = useRef(false);
 
   const [selectedRole, setSelectedRole] = useState("citizen");
   const [email, setEmail] = useState("");
@@ -47,6 +50,16 @@ export default function LoginScreen() {
     Poppins_600SemiBold,
     Poppins_700Bold,
   });
+
+  useEffect(() => {
+    if (confirmed === "1" && !shownEmailConfirmedRef.current) {
+      shownEmailConfirmedRef.current = true;
+      Alert.alert(
+        "Email confirmed",
+        "Your email is verified. Please log in with your password."
+      );
+    }
+  }, [confirmed]);
 
   if (!fontsLoaded) return null;
 
@@ -129,6 +142,9 @@ export default function LoginScreen() {
         );
         return;
       }
+
+      // Clear leftover recovery flag from a mistaken email-confirm deep link.
+      await markPasswordRecoveryActive(false);
 
       if (profile.role === "citizen") {
         await registerPushTokenForCurrentUser();

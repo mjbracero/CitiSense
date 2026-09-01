@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -11,12 +11,21 @@ import {
   Alert,
   ActivityIndicator,
   Image,
-  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import * as Linking from "expo-linking";
 import { supabase } from "../../lib/supabase";
+import {
+  establishSessionFromAuthParams,
+  establishSessionFromAuthUrl,
+  hydratePasswordRecoveryFlag,
+  isPasswordRecoveryActive,
+  isPasswordResetCallbackUrl,
+  markPasswordRecoveryActive,
+  waitForRecoverySession,
+} from "../../lib/passwordReset";
 
 import {
   useFonts,
@@ -38,6 +47,7 @@ const WHITE = "#FFFFFF";
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
+  const routeParams = useLocalSearchParams();
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -54,89 +64,146 @@ export default function ResetPasswordScreen() {
     Poppins_700Bold,
   });
 
+  const activateResetSession = useCallback(async (url) => {
+    if (!url) {
+      return false;
+    }
+
+    const result = await establishSessionFromAuthUrl(url);
+
+    if (result?.session) {
+      await markPasswordRecoveryActive(true);
+      setLinkReady(true);
+      return true;
+    }
+
+    return false;
+  }, []);
+
   useEffect(() => {
+    let active = true;
+
+    const code = Array.isArray(routeParams.code)
+      ? routeParams.code[0]
+      : routeParams.code;
+    const accessToken = Array.isArray(routeParams.access_token)
+      ? routeParams.access_token[0]
+      : routeParams.access_token;
+    const refreshToken = Array.isArray(routeParams.refresh_token)
+      ? routeParams.refresh_token[0]
+      : routeParams.refresh_token;
+    const type = Array.isArray(routeParams.type)
+      ? routeParams.type[0]
+      : routeParams.type;
+    const tokenHash = Array.isArray(routeParams.token_hash)
+      ? routeParams.token_hash[0]
+      : routeParams.token_hash ||
+        (Array.isArray(routeParams.token)
+          ? routeParams.token[0]
+          : routeParams.token);
+    const errorParam = Array.isArray(routeParams.error)
+      ? routeParams.error[0]
+      : routeParams.error;
+    const errorDescription = Array.isArray(routeParams.error_description)
+      ? routeParams.error_description[0]
+      : routeParams.error_description;
+
     const prepareResetSession = async () => {
       try {
+        await hydratePasswordRecoveryFlag();
+
+        const paramResult = await establishSessionFromAuthParams({
+          code,
+          access_token: accessToken,
+          refresh_token: refreshToken,
+          type,
+          token_hash: tokenHash,
+          error: errorParam,
+          error_description: errorDescription,
+        });
+
+        if (paramResult?.session) {
+          if (active) setLinkReady(true);
+          return;
+        }
+
         const initialUrl = await Linking.getInitialURL();
 
-        if (initialUrl) {
-          await handleDeepLink(initialUrl);
-        } else {
-          const { data } = await supabase.auth.getSession();
+        if (initialUrl && isPasswordResetCallbackUrl(initialUrl)) {
+          const ok = await activateResetSession(initialUrl);
+          if (ok) return;
+        }
 
-          if (data?.session) {
-            setLinkReady(true);
-          }
+        const session = await waitForRecoverySession();
+        if (session && active) {
+          setLinkReady(true);
         }
       } catch (error) {
         console.log("Reset link check error:", error);
+        Alert.alert(
+          "Invalid Reset Link",
+          error?.message || "Please request a new password reset email."
+        );
       } finally {
-        setCheckingLink(false);
+        if (active) {
+          setCheckingLink(false);
+        }
       }
     };
 
     prepareResetSession();
 
-    const subscription = Linking.addEventListener("url", async ({ url }) => {
-      await handleDeepLink(url);
+    const linkingSub = Linking.addEventListener("url", async ({ url }) => {
+      if (!isPasswordResetCallbackUrl(url)) {
+        return;
+      }
+
+      try {
+        await activateResetSession(url);
+      } catch (error) {
+        Alert.alert(
+          "Invalid Reset Link",
+          error?.message || "Please request a new password reset email."
+        );
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!session) {
+        return;
+      }
+
+      if (event === "PASSWORD_RECOVERY") {
+        await markPasswordRecoveryActive(true);
+        setLinkReady(true);
+        setCheckingLink(false);
+        return;
+      }
+
+      if (isPasswordRecoveryActive()) {
+        setLinkReady(true);
+        setCheckingLink(false);
+      }
     });
 
     return () => {
-      subscription.remove();
+      active = false;
+      linkingSub.remove();
+      subscription.unsubscribe();
     };
-  }, []);
-
-  const handleDeepLink = async (url) => {
-    try {
-      console.log("Reset password URL:", url);
-
-      const parsedUrl = new URL(url);
-      const code = parsedUrl.searchParams.get("code");
-
-      if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
-
-        if (error) {
-          console.log("exchangeCodeForSession error:", error);
-          Alert.alert("Invalid Link", error.message);
-          return;
-        }
-
-        setLinkReady(true);
-        return;
-      }
-
-      const hash = parsedUrl.hash?.replace("#", "");
-      const hashParams = new URLSearchParams(hash);
-
-      const accessToken = hashParams.get("access_token");
-      const refreshToken = hashParams.get("refresh_token");
-
-      if (accessToken && refreshToken) {
-        const { error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
-
-        if (error) {
-          console.log("setSession error:", error);
-          Alert.alert("Invalid Link", error.message);
-          return;
-        }
-
-        setLinkReady(true);
-        return;
-      }
-
-      const { data } = await supabase.auth.getSession();
-
-      if (data?.session) {
-        setLinkReady(true);
-      }
-    } catch (error) {
-      console.log("Deep link parse error:", error);
-    }
-  };
+  }, [
+    activateResetSession,
+    routeParams.access_token,
+    routeParams.code,
+    routeParams.error,
+    routeParams.error_description,
+    routeParams.refresh_token,
+    routeParams.token,
+    routeParams.token_hash,
+    routeParams.type,
+  ]);
 
   if (!fontsLoaded) return null;
 
@@ -162,12 +229,16 @@ export default function ResetPasswordScreen() {
     setLoading(true);
 
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
+      let session = (await supabase.auth.getSession()).data?.session;
 
-      if (!sessionData?.session && !linkReady) {
+      if (!session) {
+        session = await waitForRecoverySession({ attempts: 4, delayMs: 300 });
+      }
+
+      if (!session) {
         Alert.alert(
           "Invalid Reset Session",
-          "Please open the reset password link from your email again."
+          "Open the reset link from your email on this phone first, then set your new password."
         );
         return;
       }
@@ -181,6 +252,7 @@ export default function ResetPasswordScreen() {
         return;
       }
 
+      await markPasswordRecoveryActive(false);
       await supabase.auth.signOut();
 
       Alert.alert(
@@ -226,7 +298,10 @@ export default function ResetPasswordScreen() {
         >
           <TouchableOpacity
             style={styles.backButton}
-            onPress={() => router.replace("/auth/login")}
+            onPress={async () => {
+              await markPasswordRecoveryActive(false);
+              router.replace("/auth/login");
+            }}
             activeOpacity={0.7}
           >
             <Ionicons name="chevron-back" size={24} color={GREEN} />
@@ -249,8 +324,8 @@ export default function ResetPasswordScreen() {
               <Ionicons name="warning" size={20} color={RED} />
 
               <Text style={styles.warningText}>
-                Reset session was not detected. Please open the reset link from
-                your email again.
+                Open the reset link from your email on this phone first. After
+                the app opens from that link, you can set a new password here.
               </Text>
             </View>
           )}
@@ -268,6 +343,7 @@ export default function ResetPasswordScreen() {
                 value={newPassword}
                 onChangeText={setNewPassword}
                 secureTextEntry={!showNewPassword}
+                editable={linkReady && !loading}
               />
 
               <TouchableOpacity
@@ -294,6 +370,7 @@ export default function ResetPasswordScreen() {
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
                 secureTextEntry={!showConfirmPassword}
+                editable={linkReady && !loading}
               />
 
               <TouchableOpacity
@@ -309,9 +386,12 @@ export default function ResetPasswordScreen() {
             </View>
 
             <TouchableOpacity
-              style={[styles.resetButton, loading && styles.disabledButton]}
+              style={[
+                styles.resetButton,
+                (loading || !linkReady) && styles.disabledButton,
+              ]}
               onPress={handleUpdatePassword}
-              disabled={loading}
+              disabled={loading || !linkReady}
               activeOpacity={0.8}
             >
               {loading ? (
@@ -323,7 +403,10 @@ export default function ResetPasswordScreen() {
 
             <TouchableOpacity
               style={styles.loginButton}
-              onPress={() => router.replace("/auth/login")}
+              onPress={async () => {
+                await markPasswordRecoveryActive(false);
+                router.replace("/auth/login");
+              }}
               activeOpacity={0.7}
             >
               <Text style={styles.loginText}>Back to Log In</Text>
