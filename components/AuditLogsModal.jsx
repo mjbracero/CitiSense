@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FlatList,
   Modal,
@@ -9,7 +9,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { fetchAuditLogs } from "../lib/auditLogService";
+import { fetchAuditLogs, AUDIT_LOGS_PAGE_SIZE } from "../lib/auditLogService";
+import ComplaintsLoadMoreFooter from "./ComplaintsLoadMoreFooter";
 import { useHideBottomNav } from "./PersistentBottomNav";
 import { AuditLogListSkeleton } from "./skeletons";
 
@@ -156,25 +157,67 @@ export default function AuditLogsModal({
   onClose,
 }) {
   const [logs, setLogs] = useState([]);
+  const [logsTotal, setLogsTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  const logsRef = useRef([]);
+  const remoteOffsetRef = useRef(0);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
 
   useHideBottomNav(visible);
 
-  const loadLogs = useCallback(async (showLoader = true) => {
-    if (showLoader) setLoading(true);
+  const loadLogs = useCallback(async (showLoader = true, append = false) => {
+    if (append) {
+      if (loadingMoreRef.current || !hasMoreRef.current) return;
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+    } else if (showLoader) {
+      setLoading(true);
+    }
 
-    const result = await fetchAuditLogs({
-      limit: 100,
-    });
+    const offset = append ? remoteOffsetRef.current : 0;
+    const pageSize = append
+      ? AUDIT_LOGS_PAGE_SIZE
+      : Math.max(AUDIT_LOGS_PAGE_SIZE, logsRef.current.length || 0);
 
-    setLogs(result.logs || []);
+    const result = await fetchAuditLogs({ offset, pageSize });
+    const incoming = result.logs || [];
+
+    if (!append) {
+      remoteOffsetRef.current = result.remotePageLength || 0;
+    } else {
+      remoteOffsetRef.current += result.remotePageLength || 0;
+    }
+
+    const nextLogs = append
+      ? [...logsRef.current, ...incoming].filter(
+          (item, index, list) =>
+            list.findIndex((entry) => entry.id === item.id) === index
+        )
+      : incoming;
+
+    logsRef.current = nextLogs;
+    setLogs(nextLogs);
+    setLogsTotal(result.total ?? nextLogs.length);
+
+    const more = result.hasMore !== false;
+    hasMoreRef.current = more;
+    setHasMore(more);
+
     setLoading(false);
     setRefreshing(false);
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
   }, []);
 
   useEffect(() => {
     if (visible) {
+      remoteOffsetRef.current = 0;
+      hasMoreRef.current = true;
       loadLogs(true);
     }
   }, [visible, loadLogs]);
@@ -194,7 +237,8 @@ export default function AuditLogsModal({
             <View style={styles.headerTextBox}>
               <Text style={styles.title}>Audit Logs</Text>
               <Text style={styles.subtitle}>
-                Your recent account activity.
+                Your recent account activity
+                {logsTotal > 0 ? ` · ${logs.length} of ${logsTotal}` : ""}.
               </Text>
             </View>
 
@@ -225,6 +269,17 @@ export default function AuditLogsModal({
                   }}
                   tintColor={GREEN}
                   colors={[GREEN]}
+                />
+              }
+              onEndReached={() => {
+                if (!hasMore) return;
+                loadLogs(false, true);
+              }}
+              onEndReachedThreshold={0.3}
+              ListFooterComponent={
+                <ComplaintsLoadMoreFooter
+                  loading={loadingMore}
+                  label="Loading more activity..."
                 />
               }
               ListEmptyComponent={
