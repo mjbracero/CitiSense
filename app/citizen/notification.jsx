@@ -1,4 +1,5 @@
-import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -9,8 +10,6 @@ import {
 import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
   Platform,
   ScrollView,
   StatusBar,
@@ -20,7 +19,21 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Skeleton from "../../components/Skeleton";
+import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
+import { NotificationListSkeleton, PageSkeleton } from "../../components/skeletons";
+import {
+  buildNotificationPageQuery,
+  computeNotificationHasMore,
+  getNotificationPageSize,
+  isNearContentBottom,
+  mergeNotificationPages,
+} from "../../lib/notificationPagination";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { writeAuditLog } from "../../lib/auditLogService";
+import { useScreenBottomInset } from "../../hooks/useScreenBottomInset";
 
 const GREEN = "#087A0D";
 const LIGHT_GREEN = "#EAF6E4";
@@ -34,6 +47,7 @@ const ORANGE = "#F4A24C";
 const BLUE = "#315A9A";
 
 const H_PADDING = 20;
+const CITIZEN_NOTIFICATIONS_CACHE_KEY = "citizen.notifications";
 
 const bottomTabs = [
   {
@@ -147,11 +161,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (actualValidation) {
     return {
-      statusBg: LIGHT_GREEN,
-      statusColor: GREEN,
+      statusBg: "#F3EAFF",
+      statusColor: "#7A3EA8",
       icon: "clipboard-check-outline",
-      iconBg: LIGHT_GREEN,
-      iconColor: GREEN,
+      iconBg: "#F3EAFF",
+      iconColor: "#7A3EA8",
       actionLabel: "Provide Validation",
       actionType: "validation",
     };
@@ -217,11 +231,27 @@ function getNotificationStyle(type, status, metadata = {}) {
     };
   }
 
-  if (normalizedStatus === "for validation") {
+  if (normalizedType === "ai_validation") {
+    const rejected =
+      normalizedStatus === "rejected" ||
+      normalizeText(metadata.ai_status) === "rejected";
+
+    if (rejected) {
+      return {
+        statusBg: "#FFF0F0",
+        statusColor: RED,
+        icon: "close-circle-outline",
+        iconBg: "#FFF0F0",
+        iconColor: RED,
+        actionLabel: "View Details",
+        actionType: "details",
+      };
+    }
+
     return {
       statusBg: LIGHT_GREEN,
       statusColor: GREEN,
-      icon: "clipboard-check-outline",
+      icon: "check-decagram-outline",
       iconBg: LIGHT_GREEN,
       iconColor: GREEN,
       actionLabel: "View Details",
@@ -229,14 +259,42 @@ function getNotificationStyle(type, status, metadata = {}) {
     };
   }
 
+  if (normalizedStatus === "for validation") {
+    return {
+      statusBg: "#F3EAFF",
+      statusColor: "#7A3EA8",
+      icon: "clipboard-check-outline",
+      iconBg: "#F3EAFF",
+      iconColor: "#7A3EA8",
+      actionLabel: "View Details",
+      actionType: "details",
+    };
+  }
+
   if (normalizedStatus === "in progress") {
     return {
-      statusBg: "#FFF2C2",
-      statusColor: "#A97700",
+      statusBg: "#FFF8D6",
+      statusColor: "#C9A000",
       icon: "progress-wrench",
-      iconBg: "#FFF7DA",
-      iconColor: ORANGE,
+      iconBg: "#FFF8D6",
+      iconColor: "#C9A000",
       actionLabel: "View Details",
+      actionType: "details",
+    };
+  }
+
+  if (
+    normalizedStatus === "returned" ||
+    normalizedType === "returned" ||
+    normalizedType === "returned_by_admin"
+  ) {
+    return {
+      statusBg: "#FFF0F0",
+      statusColor: RED,
+      icon: "arrow-u-left-top",
+      iconBg: "#FFF0F0",
+      iconColor: RED,
+      actionLabel: "Resubmit Validation",
       actionType: "details",
     };
   }
@@ -287,12 +345,36 @@ function mapNotification(row) {
 export default function CitizenNotification() {
   const router = useRouter();
   const pathname = usePathname();
+  const scrollBottomInset = useScreenBottomInset({ includeNav: false });
 
-  const [notifications, setNotifications] = useState([]);
-  const [loadingNotifications, setLoadingNotifications] = useState(true);
-  const [currentUserId, setCurrentUserId] = useState(null);
-  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const cachedNotifications = getPageCache(CITIZEN_NOTIFICATIONS_CACHE_KEY);
+  const [notifications, setNotifications] = useState(
+    cachedNotifications?.notifications ?? []
+  );
+  const [notificationsTotal, setNotificationsTotal] = useState(
+    cachedNotifications?.notificationsTotal ??
+      cachedNotifications?.notifications?.length ??
+      0
+  );
+  const [loadingNotifications, setLoadingNotifications] = useState(
+    !cachedNotifications
+  );
+  const [loadingMoreNotifications, setLoadingMoreNotifications] = useState(false);
+  const [hasMoreNotifications, setHasMoreNotifications] = useState(
+    cachedNotifications?.hasMore !== false
+  );
+  const [currentUserId, setCurrentUserId] = useState(
+    cachedNotifications?.currentUserId ?? null
+  );
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(
+    cachedNotifications?.unreadNotificationCount ?? 0
+  );
   const notificationChannelRef = useRef(null);
+  const notificationsDataRef = useRef(cachedNotifications?.notifications ?? []);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(cachedNotifications?.hasMore !== false);
+  const listViewportHeightRef = useRef(0);
+  const loadNotificationsRef = useRef(null);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -338,8 +420,41 @@ export default function CitizenNotification() {
     [currentUserId]
   );
 
+  useEffect(() => {
+    notificationsDataRef.current = notifications;
+  }, [notifications]);
+
   const loadNotifications = useCallback(
-    async (showLoader = true) => {
+    async (options = {}) => {
+      const normalized =
+        typeof options === "boolean" ? { showLoader: options } : options;
+      const append = normalized.append === true;
+      const cached = !append ? getPageCache(CITIZEN_NOTIFICATIONS_CACHE_KEY) : null;
+
+      if (!append && cached) {
+        setNotifications(cached.notifications ?? []);
+        setNotificationsTotal(
+          cached.notificationsTotal ?? cached.notifications?.length ?? 0
+        );
+        hasMoreRef.current = cached.hasMore !== false;
+        setHasMoreNotifications(cached.hasMore !== false);
+      }
+
+      const showLoader =
+        normalized.showLoader ??
+        (!append && shouldShowPageLoader(CITIZEN_NOTIFICATIONS_CACHE_KEY));
+
+      if (append) {
+        if (loadingMoreRef.current || !hasMoreRef.current) {
+          return;
+        }
+
+        loadingMoreRef.current = true;
+        setLoadingMoreNotifications(true);
+      } else {
+        hasMoreRef.current = cached?.hasMore !== false;
+      }
+
       try {
         if (showLoader) {
           setLoadingNotifications(true);
@@ -351,51 +466,119 @@ export default function CitizenNotification() {
         } = await supabase.auth.getUser();
 
         if (userError || !user) {
-          setCurrentUserId(null);
-          setNotifications([]);
-          setUnreadNotificationCount(0);
+          if (!cached) {
+            setCurrentUserId(null);
+            setNotifications([]);
+            setNotificationsTotal(0);
+            setUnreadNotificationCount(0);
+            hasMoreRef.current = false;
+            setHasMoreNotifications(false);
+          }
           return;
         }
 
         setCurrentUserId(user.id);
 
-        const { data, error } = await supabase
-          .from("complaint_notifications")
-          .select("*")
-          .eq("citizen_id", user.id)
-          .order("created_at", { ascending: false });
+        const offset = append ? notificationsDataRef.current.length : 0;
+        const pageSize = getNotificationPageSize(
+          append,
+          cached?.notifications?.length || 0
+        );
+
+        const { data, error, count } = await buildNotificationPageQuery(supabase, {
+          role: "citizen",
+          ownerId: user.id,
+          offset,
+          pageSize,
+        });
 
         if (error) {
-          Alert.alert("Load Failed", error.message);
-          setNotifications([]);
-          setUnreadNotificationCount(0);
+          notify("Load Failed", error.message);
+          if (!cached) {
+            setNotifications([]);
+            setNotificationsTotal(0);
+            setUnreadNotificationCount(0);
+            hasMoreRef.current = false;
+            setHasMoreNotifications(false);
+          }
           return;
         }
 
         const mappedNotifications = (data || []).map(mapNotification);
+        const nextNotifications = append
+          ? mergeNotificationPages(
+              notificationsDataRef.current,
+              mappedNotifications,
+              (item) => item.id
+            )
+          : mappedNotifications;
 
-        setNotifications(mappedNotifications);
+        const total = count ?? nextNotifications.length;
+        const loadedCount = nextNotifications.length;
+        const hasMore = computeNotificationHasMore(
+          mappedNotifications,
+          loadedCount,
+          total
+        );
 
-        const unreadCount = mappedNotifications.filter(
-          (item) => item.unread
-        ).length;
-
-        setUnreadNotificationCount(unreadCount);
+        setNotifications(nextNotifications);
+        setNotificationsTotal(total);
+        hasMoreRef.current = hasMore;
+        setHasMoreNotifications(hasMore);
+        setPageCache(CITIZEN_NOTIFICATIONS_CACHE_KEY, {
+          notifications: nextNotifications,
+          notificationsTotal: total,
+          hasMore,
+          currentUserId: user.id,
+        });
 
         await loadUnreadNotificationCount(user.id);
       } catch (error) {
         console.log("Load notifications error:", error);
-        Alert.alert("Load Failed", "Unable to load notifications.");
-        setNotifications([]);
-        setUnreadNotificationCount(0);
-      } finally {
-        if (showLoader) {
-          setLoadingNotifications(false);
+        if (!cached) {
+          notify("Load Failed", "Unable to load notifications.");
+          setNotifications([]);
+          setNotificationsTotal(0);
+          setUnreadNotificationCount(0);
+          hasMoreRef.current = false;
+          setHasMoreNotifications(false);
         }
+      } finally {
+        if (append) {
+          loadingMoreRef.current = false;
+          setLoadingMoreNotifications(false);
+        }
+        setLoadingNotifications(false);
       }
     },
     [loadUnreadNotificationCount]
   );
+
+  useEffect(() => {
+    loadNotificationsRef.current = loadNotifications;
+  }, [loadNotifications]);
+
+  const loadMoreNotifications = useCallback(() => {
+    loadNotifications({ append: true, showLoader: false });
+  }, [loadNotifications]);
+
+  const handleNotificationsScroll = ({ nativeEvent }) => {
+    if (isNearContentBottom(nativeEvent)) {
+      loadMoreNotifications();
+    }
+  };
+
+  const maybeFillViewport = (contentHeight) => {
+    if (
+      hasMoreRef.current &&
+      !loadingMoreRef.current &&
+      !loadingNotifications &&
+      listViewportHeightRef.current > 0 &&
+      contentHeight < listViewportHeightRef.current + 80
+    ) {
+      loadMoreNotifications();
+    }
+  };
 
   useEffect(() => {
     loadNotifications(true);
@@ -512,12 +695,18 @@ export default function CitizenNotification() {
       .eq("citizen_id", currentUserId);
 
     if (error) {
-      Alert.alert("Update Failed", error.message);
+      notify("Update Failed", error.message);
       loadNotifications(false);
       return;
     }
 
     await loadUnreadNotificationCount(currentUserId);
+    writeAuditLog({
+      action: "notifications_read",
+      title: "Notifications Marked as Read",
+      description: "All citizen notifications were marked as read.",
+      actorRole: "citizen",
+    });
   };
 
   const markSingleAsRead = async (item) => {
@@ -556,11 +745,14 @@ export default function CitizenNotification() {
   const openRelatedComplaint = (item) => {
     if (!item.complaintId) return;
 
+    const status = String(item.status || "").trim();
+
     router.push({
       pathname: "/citizen/complaints",
       params: {
         complaintId: item.complaintId,
         openDetails: "true",
+        ...(status === "Returned" ? { filter: "Returned" } : {}),
       },
     });
   };
@@ -575,12 +767,8 @@ export default function CitizenNotification() {
     openRelatedComplaint(item);
   };
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  if (!fontsLoaded && !cachedNotifications) {
+    return <PageSkeleton variant="notifications" />;
   }
 
   return (
@@ -588,27 +776,24 @@ export default function CitizenNotification() {
       <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
 
       <View style={styles.mainContainer}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            activeOpacity={0.7}
-            style={styles.backButton}
-            onPress={handleBack}
-          >
-            <Feather name="chevron-left" size={26} color={TEXT} />
-          </TouchableOpacity>
+        <View style={styles.stickyHeader}>
+          <View style={styles.headerRow}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              style={styles.backButton}
+              onPress={handleBack}
+            >
+              <Feather name="chevron-left" size={26} color={TEXT} />
+            </TouchableOpacity>
 
-          <View style={styles.headerTitleBox}>
-            <Text style={styles.headerTitle}>Notifications</Text>
-            <Text style={styles.headerDescription}>
-              Complaint updates, validation requests, and duplicate alerts.
-            </Text>
+            <View style={styles.headerTitleBox}>
+              <Text style={styles.headerTitle}>Notifications</Text>
+              <Text style={styles.headerDescription}>
+                Complaint updates, validation requests, and duplicate notifications.
+              </Text>
+            </View>
           </View>
-        </View>
 
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
           <View style={styles.topSummaryCard}>
             <View style={styles.summaryIconCircle}>
               <Ionicons name="notifications" size={27} color={WHITE} />
@@ -649,19 +834,32 @@ export default function CitizenNotification() {
 
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Recent Updates</Text>
-
-            <Text style={styles.sectionCount}>
-              {loadingNotifications
-                ? "Loading..."
-                : `${notifications.length} total`}
-            </Text>
+            {loadingNotifications && notifications.length === 0 ? (
+              <Skeleton width={72} height={12} borderRadius={6} />
+            ) : (
+              <Text style={styles.sectionCount}>
+                {`${notificationsTotal} total`}
+              </Text>
+            )}
           </View>
+        </View>
 
-          {loadingNotifications ? (
-            <View style={styles.loadingCard}>
-              <ActivityIndicator size="large" color={GREEN} />
-              <Text style={styles.loadingText}>Loading notifications...</Text>
-            </View>
+        <ScrollView
+          style={styles.listScroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: scrollBottomInset },
+          ]}
+          scrollEventThrottle={16}
+          onScroll={handleNotificationsScroll}
+          onLayout={(event) => {
+            listViewportHeightRef.current = event.nativeEvent.layout.height;
+          }}
+          onContentSizeChange={(_, height) => maybeFillViewport(height)}
+        >
+          {loadingNotifications && notifications.length === 0 ? (
+            <NotificationListSkeleton count={5} />
           ) : notifications.length === 0 ? (
             <View style={styles.emptyCard}>
               <Ionicons name="notifications-outline" size={38} color={MUTED} />
@@ -756,6 +954,10 @@ export default function CitizenNotification() {
                   </View>
                 </TouchableOpacity>
               ))}
+              <ComplaintsLoadMoreFooter
+                loading={loadingMoreNotifications}
+                label="Loading more notifications..."
+              />
             </View>
           )}
         </ScrollView>
@@ -776,6 +978,19 @@ const styles = StyleSheet.create({
     backgroundColor: BG,
   },
 
+  stickyHeader: {
+    backgroundColor: WHITE,
+    paddingHorizontal: H_PADDING,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+    zIndex: 2,
+  },
+
+  listScroll: {
+    flex: 1,
+  },
+
   loader: {
     flex: 1,
     backgroundColor: WHITE,
@@ -783,16 +998,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
-  header: {
+  headerRow: {
     minHeight: 62,
-    backgroundColor: WHITE,
-    borderBottomWidth: 1,
-    borderBottomColor: "#EEEEEE",
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: H_PADDING,
     paddingBottom: 8,
-    marginTop: 0,
   },
 
   backButton: {
@@ -828,8 +1038,7 @@ const styles = StyleSheet.create({
 
   scrollContent: {
     paddingHorizontal: H_PADDING,
-    paddingTop: 16,
-    paddingBottom: 116,
+    paddingTop: 12,
   },
 
   topSummaryCard: {
@@ -840,7 +1049,7 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 16,
+    marginBottom: 12,
     shadowColor: "#000000",
     shadowOpacity: 0.12,
     shadowRadius: 6,
@@ -918,7 +1127,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 10,
+    marginBottom: 0,
   },
 
   sectionTitle: {
