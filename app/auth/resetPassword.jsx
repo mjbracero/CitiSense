@@ -1,14 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Alert,
   ActivityIndicator,
   Image,
 } from "react-native";
@@ -17,6 +14,10 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Linking from "expo-linking";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import { PageSkeleton } from "../../components/skeletons";
+import { writeAuditLog } from "../../lib/auditLogService";
 import {
   establishSessionFromAuthParams,
   establishSessionFromAuthUrl,
@@ -140,7 +141,7 @@ export default function ResetPasswordScreen() {
         }
       } catch (error) {
         console.log("Reset link check error:", error);
-        Alert.alert(
+        notify(
           "Invalid Reset Link",
           error?.message || "Please request a new password reset email."
         );
@@ -161,7 +162,7 @@ export default function ResetPasswordScreen() {
       try {
         await activateResetSession(url);
       } catch (error) {
-        Alert.alert(
+        notify(
           "Invalid Reset Link",
           error?.message || "Please request a new password reset email."
         );
@@ -205,11 +206,11 @@ export default function ResetPasswordScreen() {
     routeParams.type,
   ]);
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded) return <PageSkeleton variant="auth" />;
 
   const handleUpdatePassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
-      Alert.alert(
+      notify(
         "Missing Fields",
         "Please enter and confirm your new password."
       );
@@ -217,12 +218,12 @@ export default function ResetPasswordScreen() {
     }
 
     if (newPassword.length < 6) {
-      Alert.alert("Weak Password", "Password must be at least 6 characters.");
+      notify("Weak Password", "Password must be at least 6 characters.");
       return;
     }
 
     if (newPassword !== confirmPassword) {
-      Alert.alert("Password Mismatch", "Passwords do not match.");
+      notify("Password Mismatch", "Passwords do not match.");
       return;
     }
 
@@ -236,7 +237,7 @@ export default function ResetPasswordScreen() {
       }
 
       if (!session) {
-        Alert.alert(
+        notify(
           "Invalid Reset Session",
           "Open the reset link from your email on this phone first, then set your new password."
         );
@@ -248,14 +249,19 @@ export default function ResetPasswordScreen() {
       });
 
       if (error) {
-        Alert.alert("Reset Failed", error.message);
+        notify("Reset Failed", error.message);
         return;
       }
 
+      await writeAuditLog({
+        action: "password_reset",
+        title: "Password Reset",
+        description: "Account password was reset through the email recovery link.",
+      });
       await markPasswordRecoveryActive(false);
       await supabase.auth.signOut();
 
-      Alert.alert(
+      notify(
         "Password Updated",
         "Your password has been changed successfully. Please log in again.",
         [
@@ -267,33 +273,20 @@ export default function ResetPasswordScreen() {
       );
     } catch (error) {
       console.log("Update password error:", error);
-      Alert.alert("Error", String(error?.message || error));
+      notify("Error", String(error?.message || error));
     } finally {
       setLoading(false);
     }
   };
 
   if (checkingLink) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={GREEN} />
-
-          <Text style={styles.loadingText}>Checking reset link...</Text>
-        </View>
-      </SafeAreaView>
-    );
+    return <PageSkeleton variant="auth" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <ScrollView
+      <KeyboardAwareScrollView
           contentContainerStyle={styles.container}
-          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
           <TouchableOpacity
@@ -412,8 +405,7 @@ export default function ResetPasswordScreen() {
               <Text style={styles.loginText}>Back to Log In</Text>
             </TouchableOpacity>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }
