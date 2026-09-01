@@ -1,4 +1,5 @@
-import { Feather, Ionicons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -7,14 +8,15 @@ import {
   useFonts,
 } from "@expo-google-fonts/poppins";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Image,
+  Modal,
   Platform,
   RefreshControl,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -23,7 +25,22 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import KeyboardAwareScrollView, {
+  KEYBOARD_SCROLL_PROPS,
+} from "../../components/KeyboardAwareScrollView";
+import { PageSkeleton, UserListSkeleton } from "../../components/skeletons";
+import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { computeOffsetHasMore } from "../../lib/complaintPagination";
+import {
+  buildUserPageQuery,
+  getUserPageSize,
+  mergeUserPages,
+} from "../../lib/userPagination";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
+import { writeAuditLog } from "../../lib/auditLogService";
+import { DEPARTMENT_OFFICES } from "../../lib/complaintCategories";
 
 const GREEN = "#087A0D";
 const LIGHT_GREEN = "#EAF6E4";
@@ -36,6 +53,13 @@ const RED = "#D71920";
 const SOFT_RED = "#FFF0F0";
 
 const H_PADDING = 20;
+const ADMIN_USERS_CACHE_KEY = "admin.manageUsers";
+
+const ROLE_OPTIONS = [
+  { id: "citizen", label: "Citizen" },
+  { id: "moderator", label: "Department Head" },
+  { id: "admin", label: "Admin" },
+];
 
 function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
@@ -52,7 +76,7 @@ function getRoleColor(role) {
     };
   }
 
-  if (cleanRole === "moderator" || cleanRole === "departmentHead") {
+  if (cleanRole === "moderator" || cleanRole === "departmenthead") {
     return {
       bg: LIGHT_GREEN,
       color: GREEN,
@@ -65,6 +89,25 @@ function getRoleColor(role) {
     color: MUTED,
     label: "Citizen",
   };
+}
+
+function storedRoleFrom(role) {
+  const cleanRole = normalizeText(role);
+
+  if (cleanRole === "admin") return "admin";
+  if (cleanRole === "moderator" || cleanRole === "departmenthead") {
+    return "moderator";
+  }
+
+  return "citizen";
+}
+
+function roleLabelFrom(role) {
+  return getRoleColor(role).label;
+}
+
+function isUserBanned(user) {
+  return Boolean(user?.banned_at);
 }
 
 function formatDate(value) {
@@ -84,12 +127,31 @@ function formatDate(value) {
 export default function AdminManageUsers() {
   const router = useRouter();
 
-  const [users, setUsers] = useState([]);
-  const [currentAdminId, setCurrentAdminId] = useState(null);
-  const [loadingUsers, setLoadingUsers] = useState(true);
+  const cachedUsers = getPageCache(ADMIN_USERS_CACHE_KEY);
+  const [users, setUsers] = useState(cachedUsers?.users ?? []);
+  const [usersTotal, setUsersTotal] = useState(
+    cachedUsers?.total ?? cachedUsers?.users?.length ?? 0
+  );
+  const [currentAdminId, setCurrentAdminId] = useState(
+    cachedUsers?.currentAdminId ?? null
+  );
+  const [loadingUsers, setLoadingUsers] = useState(!cachedUsers);
+  const [loadingMoreUsers, setLoadingMoreUsers] = useState(false);
+  const [hasMoreUsers, setHasMoreUsers] = useState(
+    cachedUsers?.hasMore !== false
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState(null);
+  const [banningUserId, setBanningUserId] = useState(null);
   const [searchText, setSearchText] = useState("");
+  const [roleModalUser, setRoleModalUser] = useState(null);
+  const [selectedRole, setSelectedRole] = useState("citizen");
+  const [selectedDepartment, setSelectedDepartment] = useState("");
+  const [savingRole, setSavingRole] = useState(false);
+
+  const usersRef = useRef(cachedUsers?.users ?? []);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(cachedUsers?.hasMore !== false);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -102,9 +164,27 @@ export default function AdminManageUsers() {
     router.replace("/admin/dashboard");
   };
 
-  const loadUsers = useCallback(async (showLoader = true) => {
+  const loadUsers = useCallback(async (showLoader = true, append = false) => {
+    const cached = !append ? getPageCache(ADMIN_USERS_CACHE_KEY) : null;
+
+    if (!append && cached?.users) {
+      usersRef.current = cached.users;
+      setUsers(cached.users);
+      setUsersTotal(cached.total ?? cached.users.length);
+      hasMoreRef.current = cached.hasMore !== false;
+      setHasMoreUsers(cached.hasMore !== false);
+    }
+
+    if (append) {
+      if (loadingMoreRef.current || !hasMoreRef.current) return;
+      loadingMoreRef.current = true;
+      setLoadingMoreUsers(true);
+    } else {
+      hasMoreRef.current = cached?.hasMore !== false;
+    }
+
     try {
-      if (showLoader) {
+      if (showLoader && !append && shouldShowPageLoader(ADMIN_USERS_CACHE_KEY)) {
         setLoadingUsers(true);
       }
 
@@ -114,34 +194,71 @@ export default function AdminManageUsers() {
       } = await supabase.auth.getUser();
 
       if (authError || !user) {
-        setCurrentAdminId(null);
-        setUsers([]);
+        if (shouldShowPageLoader(ADMIN_USERS_CACHE_KEY)) {
+          setCurrentAdminId(null);
+          if (!append) {
+            setUsers([]);
+            setUsersTotal(0);
+          }
+        }
         return;
       }
 
       setCurrentAdminId(user.id);
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select(
-          "id, email, role, full_name, contact_number, department, avatar_url, created_at"
-        )
-        .order("created_at", { ascending: false });
+      const offset = append ? usersRef.current.length : 0;
+      const pageSize = getUserPageSize(append, cached?.users?.length || 0);
+      const { data, error, count } = await buildUserPageQuery(supabase, {
+        offset,
+        pageSize,
+      });
 
       if (error) {
-        Alert.alert("Load Failed", error.message);
-        setUsers([]);
+        notify("Load Failed", error.message);
+        if (!append && !cached) {
+          setUsers([]);
+          setUsersTotal(0);
+        }
         return;
       }
 
-      setUsers(data || []);
+      const total = count ?? 0;
+      setUsersTotal(total);
+
+      const nextUsers = append
+        ? mergeUserPages(usersRef.current, data || [])
+        : data || [];
+
+      usersRef.current = nextUsers;
+      setUsers(nextUsers);
+
+      const more = computeOffsetHasMore({
+        loadedCount: nextUsers.length,
+        lastPageLength: (data || []).length,
+        total,
+        pageSize,
+      });
+      hasMoreRef.current = more;
+      setHasMoreUsers(more);
+
+      setPageCache(ADMIN_USERS_CACHE_KEY, {
+        users: nextUsers,
+        currentAdminId: user.id,
+        total,
+        hasMore: more,
+      });
     } catch (error) {
       console.log("Load users error:", error);
-      Alert.alert("Load Failed", "Unable to load users.");
-      setUsers([]);
+      if (shouldShowPageLoader(ADMIN_USERS_CACHE_KEY) && !append) {
+        notify("Load Failed", "Unable to load users.");
+        setUsers([]);
+        setUsersTotal(0);
+      }
     } finally {
       setLoadingUsers(false);
       setRefreshing(false);
+      loadingMoreRef.current = false;
+      setLoadingMoreUsers(false);
     }
   }, []);
 
@@ -164,25 +281,201 @@ export default function AdminManageUsers() {
     return users.filter((item) => {
       const name = normalizeText(item.full_name);
       const email = normalizeText(item.email);
-      const role = normalizeText(item.role);
+      const role = roleLabelFrom(item.role).toLowerCase();
       const department = normalizeText(item.department);
       const contact = normalizeText(item.contact_number);
+      const banned = isUserBanned(item) ? "banned" : "";
 
       return (
         name.includes(keyword) ||
         email.includes(keyword) ||
         role.includes(keyword) ||
         department.includes(keyword) ||
-        contact.includes(keyword)
+        contact.includes(keyword) ||
+        banned.includes(keyword)
       );
     });
   }, [users, searchText]);
+
+  const applyUserUpdate = (updatedUser) => {
+    if (!updatedUser?.id) return;
+
+    setUsers((prev) => {
+      const next = prev.map((item) =>
+        item.id === updatedUser.id ? { ...item, ...updatedUser } : item
+      );
+      usersRef.current = next;
+      return next;
+    });
+  };
+
+  const closeRoleModal = () => {
+    if (savingRole) return;
+
+    setRoleModalUser(null);
+    setSelectedRole("citizen");
+    setSelectedDepartment("");
+  };
+
+  const openRoleModal = (targetUser) => {
+    if (!targetUser?.id) return;
+
+    if (targetUser.id === currentAdminId) {
+      notify("Not Allowed", "You cannot change your own role.");
+      return;
+    }
+
+    setRoleModalUser(targetUser);
+    setSelectedRole(storedRoleFrom(targetUser.role));
+    setSelectedDepartment(targetUser.department || "");
+  };
+
+  const saveUserRole = async () => {
+    if (!roleModalUser?.id) return;
+
+    if (selectedRole === "moderator" && !selectedDepartment.trim()) {
+      notify(
+        "Department Required",
+        "Please assign an office before saving a department head role."
+      );
+      return;
+    }
+
+    const nextRole = selectedRole;
+
+    try {
+      setSavingRole(true);
+
+      const { data, error } = await supabase.rpc("admin_set_user_role", {
+        p_user_id: roleModalUser.id,
+        p_role: nextRole,
+        p_department: nextRole === "moderator" ? selectedDepartment.trim() : null,
+      });
+
+      if (error) {
+        notify("Role Update Failed", error.message);
+        return;
+      }
+
+      const updated = Array.isArray(data) ? data[0] : data;
+      applyUserUpdate(updated);
+
+      writeAuditLog({
+        action: "user_role_change",
+        title: "User Role Updated",
+        description: `${
+          roleModalUser.full_name || roleModalUser.email || "A user"
+        } is now a ${roleLabelFrom(nextRole)}.`,
+        entityType: "user",
+        entityId: roleModalUser.id,
+        actorRole: "admin",
+        metadata: {
+          previous_role: roleModalUser.role,
+          new_role: nextRole,
+          department: nextRole === "moderator" ? selectedDepartment.trim() : null,
+        },
+      });
+
+      notify(
+        "Role Updated",
+        `${roleModalUser.full_name || "This user"} is now a ${roleLabelFrom(nextRole)}.`
+      );
+
+      setRoleModalUser(null);
+    } catch (error) {
+      console.log("Save user role error:", error);
+      notify("Role Update Failed", "Unable to update this user's role.");
+    } finally {
+      setSavingRole(false);
+    }
+  };
+
+  const setUserBanned = async (targetUser, banned) => {
+    if (!targetUser?.id) return;
+
+    if (targetUser.id === currentAdminId) {
+      notify("Not Allowed", "You cannot ban your own admin account.");
+      return;
+    }
+
+    try {
+      setBanningUserId(targetUser.id);
+
+      const { data, error } = await supabase.rpc("admin_set_user_banned", {
+        p_user_id: targetUser.id,
+        p_banned: banned,
+      });
+
+      if (error) {
+        notify(banned ? "Ban Failed" : "Unban Failed", error.message);
+        return;
+      }
+
+      const updated = Array.isArray(data) ? data[0] : data;
+      applyUserUpdate(updated);
+
+      writeAuditLog({
+        action: banned ? "user_ban" : "user_unban",
+        title: banned ? "User Banned" : "User Unbanned",
+        description: `${
+          targetUser.full_name || targetUser.email || "A user"
+        } was ${banned ? "banned from CitiSense" : "allowed to sign in again"}.`,
+        entityType: "user",
+        entityId: targetUser.id,
+        actorRole: "admin",
+        metadata: {
+          banned,
+          target_email: targetUser.email,
+          target_role: targetUser.role,
+        },
+      });
+
+      notify(
+        banned ? "User Banned" : "User Unbanned",
+        banned
+          ? "This account can no longer log in."
+          : "This account can log in again."
+      );
+    } catch (error) {
+      console.log("Ban user error:", error);
+      notify(
+        banned ? "Ban Failed" : "Unban Failed",
+        "Unable to update this user's ban status."
+      );
+    } finally {
+      setBanningUserId(null);
+    }
+  };
+
+  const confirmBanUser = (targetUser) => {
+    const banned = isUserBanned(targetUser);
+
+    notify(
+      banned ? "Unban User" : "Ban User",
+      banned
+        ? `Allow ${targetUser.full_name || targetUser.email || "this user"} to log in again?`
+        : `Ban ${
+            targetUser.full_name || targetUser.email || "this user"
+          }? They will not be able to log in until you unban them.`,
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: banned ? "Unban" : "Ban User",
+          style: banned ? "default" : "destructive",
+          onPress: () => setUserBanned(targetUser, !banned),
+        },
+      ]
+    );
+  };
 
   const deleteUserAccount = async (targetUser) => {
     if (!targetUser?.id) return;
 
     if (targetUser.id === currentAdminId) {
-      Alert.alert("Not Allowed", "You cannot delete your own admin account.");
+      notify("Not Allowed", "You cannot delete your own admin account.");
       return;
     }
 
@@ -199,28 +492,48 @@ export default function AdminManageUsers() {
       );
 
       if (error) {
-        Alert.alert("Delete Failed", error.message);
+        notify("Delete Failed", error.message);
         return;
       }
 
       if (data?.error) {
-        Alert.alert("Delete Failed", data.error);
+        notify("Delete Failed", data.error);
         return;
       }
 
-      setUsers((prev) => prev.filter((item) => item.id !== targetUser.id));
+      setUsers((prev) => {
+        const next = prev.filter((item) => item.id !== targetUser.id);
+        usersRef.current = next;
+        return next;
+      });
+      setUsersTotal((total) => Math.max(0, total - 1));
 
-      Alert.alert("Deleted", "User account has been deleted.");
+      writeAuditLog({
+        action: "user_delete",
+        title: "User Account Deleted",
+        description: `${
+          targetUser.full_name || targetUser.email || "A user"
+        } was removed from CitiSense.`,
+        entityType: "user",
+        entityId: targetUser.id,
+        actorRole: "admin",
+        metadata: {
+          deleted_email: targetUser.email,
+          deleted_role: targetUser.role,
+        },
+      });
+
+      notify("Deleted", "User account has been deleted.");
     } catch (error) {
       console.log("Delete user error:", error);
-      Alert.alert("Delete Failed", "Unable to delete user account.");
+      notify("Delete Failed", "Unable to delete user account.");
     } finally {
       setDeletingUserId(null);
     }
   };
 
   const confirmDeleteUser = (targetUser) => {
-    Alert.alert(
+    notify(
       "Delete User",
       `Are you sure you want to delete ${
         targetUser.full_name || targetUser.email || "this user"
@@ -242,7 +555,10 @@ export default function AdminManageUsers() {
   const renderUser = ({ item }) => {
     const roleStyle = getRoleColor(item.role);
     const isDeleting = deletingUserId === item.id;
+    const isBanning = banningUserId === item.id;
     const isCurrentAdmin = item.id === currentAdminId;
+    const banned = isUserBanned(item);
+    const actionsDisabled = isDeleting || isBanning || isCurrentAdmin;
 
     return (
       <View style={styles.userCard}>
@@ -268,10 +584,17 @@ export default function AdminManageUsers() {
             </Text>
           </View>
 
-          <View style={[styles.roleBadge, { backgroundColor: roleStyle.bg }]}>
-            <Text style={[styles.roleBadgeText, { color: roleStyle.color }]}>
-              {roleStyle.label}
-            </Text>
+          <View style={styles.badgeColumn}>
+            {banned ? (
+              <View style={styles.bannedBadge}>
+                <Text style={styles.bannedBadgeText}>Banned</Text>
+              </View>
+            ) : null}
+            <View style={[styles.roleBadge, { backgroundColor: roleStyle.bg }]}>
+              <Text style={[styles.roleBadgeText, { color: roleStyle.color }]}>
+                {roleStyle.label}
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -296,6 +619,62 @@ export default function AdminManageUsers() {
               Joined {formatDate(item.created_at)}
             </Text>
           </View>
+        </View>
+
+        <View style={styles.actionRow}>
+          <TouchableOpacity
+            activeOpacity={0.75}
+            disabled={actionsDisabled}
+            style={[
+              styles.roleButton,
+              actionsDisabled && styles.actionButtonDisabled,
+            ]}
+            onPress={() => openRoleModal(item)}
+          >
+            <Feather
+              name="edit-3"
+              size={16}
+              color={isCurrentAdmin ? MUTED : GREEN}
+            />
+            <Text
+              style={[
+                styles.roleButtonText,
+                isCurrentAdmin && styles.actionButtonTextDisabled,
+              ]}
+            >
+              Edit Role
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.75}
+            disabled={actionsDisabled}
+            style={[
+              banned ? styles.unbanButton : styles.banButton,
+              actionsDisabled && styles.actionButtonDisabled,
+            ]}
+            onPress={() => confirmBanUser(item)}
+          >
+            {isBanning ? (
+              <ActivityIndicator size="small" color={banned ? GREEN : RED} />
+            ) : (
+              <>
+                <Feather
+                  name={banned ? "check-circle" : "slash"}
+                  size={16}
+                  color={isCurrentAdmin ? MUTED : banned ? GREEN : RED}
+                />
+                <Text
+                  style={[
+                    banned ? styles.unbanButtonText : styles.banButtonText,
+                    isCurrentAdmin && styles.actionButtonTextDisabled,
+                  ]}
+                >
+                  {banned ? "Unban" : "Ban User"}
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
         </View>
 
         <TouchableOpacity
@@ -332,11 +711,7 @@ export default function AdminManageUsers() {
   };
 
   if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+    return <PageSkeleton variant="users" />;
   }
 
   return (
@@ -356,7 +731,7 @@ export default function AdminManageUsers() {
           <View style={styles.headerTextBox}>
             <Text style={styles.headerTitle}>Manage Users</Text>
             <Text style={styles.headerDescription}>
-              Delete user accounts when necessary.
+              Change roles, ban accounts, or delete users.
             </Text>
           </View>
         </View>
@@ -371,6 +746,8 @@ export default function AdminManageUsers() {
               placeholderTextColor="#9A9A9A"
               style={styles.searchInput}
               autoCapitalize="none"
+              returnKeyType="search"
+              blurOnSubmit
             />
 
             {searchText.length > 0 && (
@@ -386,21 +763,29 @@ export default function AdminManageUsers() {
 
         <View style={styles.summaryRow}>
           <Text style={styles.sectionTitle}>User Accounts</Text>
-          <Text style={styles.userCount}>{filteredUsers.length} shown</Text>
+          <Text style={styles.userCount}>
+            {searchText.trim()
+              ? `${filteredUsers.length} shown`
+              : `${users.length} of ${usersTotal || users.length}`}
+          </Text>
         </View>
 
         {loadingUsers ? (
-          <View style={styles.loadingBox}>
-            <ActivityIndicator size="large" color={GREEN} />
-            <Text style={styles.loadingText}>Loading users...</Text>
-          </View>
+          <KeyboardAwareScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.listContent}
+          >
+            <UserListSkeleton count={4} />
+          </KeyboardAwareScrollView>
         ) : (
           <FlatList
             data={filteredUsers}
             keyExtractor={(item) => item.id}
             renderItem={renderUser}
+            extraData={`${deletingUserId || ""}:${banningUserId || ""}:${currentAdminId || ""}`}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.listContent}
+            {...KEYBOARD_SCROLL_PROPS}
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
@@ -418,9 +803,133 @@ export default function AdminManageUsers() {
                 </Text>
               </View>
             }
+            onEndReached={() => {
+              if (searchText.trim() || !hasMoreUsers) return;
+              loadUsers(false, true);
+            }}
+            onEndReachedThreshold={0.3}
+            ListFooterComponent={
+              !searchText.trim() ? (
+                <ComplaintsLoadMoreFooter
+                  loading={loadingMoreUsers}
+                  label="Loading more users..."
+                />
+              ) : null
+            }
           />
         )}
       </View>
+
+      <Modal
+        visible={Boolean(roleModalUser)}
+        animationType="slide"
+        transparent
+        onRequestClose={closeRoleModal}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+
+            <Text style={styles.modalTitle}>Edit Role</Text>
+            <Text style={styles.modalSubtitle} numberOfLines={2}>
+              {roleModalUser?.full_name || roleModalUser?.email || "User"}
+            </Text>
+
+            <Text style={styles.modalSectionLabel}>Account role</Text>
+            <View style={styles.roleOptionList}>
+              {ROLE_OPTIONS.map((option) => {
+                const selected = selectedRole === option.id;
+
+                return (
+                  <TouchableOpacity
+                    key={option.id}
+                    activeOpacity={0.75}
+                    style={[
+                      styles.roleOption,
+                      selected && styles.roleOptionSelected,
+                    ]}
+                    onPress={() => setSelectedRole(option.id)}
+                  >
+                    <Text
+                      style={[
+                        styles.roleOptionText,
+                        selected && styles.roleOptionTextSelected,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                    {selected ? (
+                      <Feather name="check" size={16} color={GREEN} />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {selectedRole === "moderator" ? (
+              <>
+                <Text style={styles.modalSectionLabel}>Assigned office</Text>
+                <ScrollView
+                  style={styles.departmentList}
+                  showsVerticalScrollIndicator={false}
+                >
+                  {DEPARTMENT_OFFICES.map((office) => {
+                    const selected = selectedDepartment === office;
+
+                    return (
+                      <TouchableOpacity
+                        key={office}
+                        activeOpacity={0.75}
+                        style={[
+                          styles.departmentOption,
+                          selected && styles.departmentOptionSelected,
+                        ]}
+                        onPress={() => setSelectedDepartment(office)}
+                      >
+                        <Text
+                          style={[
+                            styles.departmentOptionText,
+                            selected && styles.departmentOptionTextSelected,
+                          ]}
+                        >
+                          {office}
+                        </Text>
+                        {selected ? (
+                          <Feather name="check" size={16} color={GREEN} />
+                        ) : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </>
+            ) : null}
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                disabled={savingRole}
+                style={styles.modalCancelButton}
+                onPress={closeRoleModal}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.75}
+                disabled={savingRole}
+                style={styles.modalSaveButton}
+                onPress={saveUserRole}
+              >
+                {savingRole ? (
+                  <ActivityIndicator size="small" color={WHITE} />
+                ) : (
+                  <Text style={styles.modalSaveText}>Save Role</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -434,13 +943,6 @@ const styles = StyleSheet.create({
   mainContainer: {
     flex: 1,
     backgroundColor: BG,
-  },
-
-  loader: {
-    flex: 1,
-    backgroundColor: WHITE,
-    alignItems: "center",
-    justifyContent: "center",
   },
 
   header: {
@@ -529,19 +1031,6 @@ const styles = StyleSheet.create({
     color: MUTED,
   },
 
-  loadingBox: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  loadingText: {
-    fontFamily: "Poppins_500Medium",
-    fontSize: 12,
-    color: MUTED,
-    marginTop: 10,
-  },
-
   listContent: {
     paddingHorizontal: H_PADDING,
     paddingBottom: Platform.OS === "ios" ? 32 : 24,
@@ -617,6 +1106,27 @@ const styles = StyleSheet.create({
     fontSize: 10,
   },
 
+  badgeColumn: {
+    alignItems: "flex-end",
+    gap: 6,
+  },
+
+  bannedBadge: {
+    minWidth: 72,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: SOFT_RED,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 9,
+  },
+
+  bannedBadgeText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 10,
+    color: RED,
+  },
+
   userDetailsBox: {
     borderRadius: 14,
     backgroundColor: BG,
@@ -648,7 +1158,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
-    marginTop: 12,
+    marginTop: 8,
     gap: 8,
   },
 
@@ -666,6 +1176,232 @@ const styles = StyleSheet.create({
 
   deleteButtonTextDisabled: {
     color: MUTED,
+  },
+
+  actionRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 12,
+  },
+
+  roleButton: {
+    flex: 1,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: WHITE,
+    borderWidth: 1,
+    borderColor: GREEN,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+
+  roleButtonText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 12,
+    color: GREEN,
+  },
+
+  banButton: {
+    flex: 1,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: SOFT_RED,
+    borderWidth: 1,
+    borderColor: "#F3C7C7",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+
+  banButtonText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 12,
+    color: RED,
+  },
+
+  unbanButton: {
+    flex: 1,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: LIGHT_GREEN,
+    borderWidth: 1,
+    borderColor: "#D9EFD1",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+
+  unbanButtonText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 12,
+    color: GREEN,
+  },
+
+  actionButtonDisabled: {
+    backgroundColor: "#F1F1F1",
+    borderColor: BORDER,
+  },
+
+  actionButtonTextDisabled: {
+    color: MUTED,
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    justifyContent: "flex-end",
+  },
+
+  modalSheet: {
+    maxHeight: "88%",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    backgroundColor: WHITE,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 24,
+  },
+
+  modalHandle: {
+    width: 42,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: BORDER,
+    alignSelf: "center",
+    marginBottom: 12,
+  },
+
+  modalTitle: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 18,
+    color: TEXT,
+  },
+
+  modalSubtitle: {
+    fontFamily: "Poppins_400Regular",
+    fontSize: 12,
+    color: MUTED,
+    marginTop: 3,
+    marginBottom: 14,
+  },
+
+  modalSectionLabel: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: 12,
+    color: TEXT,
+    marginBottom: 8,
+  },
+
+  roleOptionList: {
+    gap: 8,
+    marginBottom: 16,
+  },
+
+  roleOption: {
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: BG,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  roleOptionSelected: {
+    backgroundColor: LIGHT_GREEN,
+    borderColor: GREEN,
+  },
+
+  roleOptionText: {
+    fontFamily: "Poppins_500Medium",
+    fontSize: 13,
+    color: TEXT,
+  },
+
+  roleOptionTextSelected: {
+    fontFamily: "Poppins_700Bold",
+    color: GREEN,
+  },
+
+  departmentList: {
+    maxHeight: 220,
+    marginBottom: 16,
+  },
+
+  departmentOption: {
+    minHeight: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: BG,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  departmentOptionSelected: {
+    backgroundColor: LIGHT_GREEN,
+    borderColor: GREEN,
+  },
+
+  departmentOptionText: {
+    flex: 1,
+    fontFamily: "Poppins_500Medium",
+    fontSize: 12,
+    color: TEXT,
+    paddingRight: 8,
+  },
+
+  departmentOptionTextSelected: {
+    fontFamily: "Poppins_600SemiBold",
+    color: GREEN,
+  },
+
+  modalActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 4,
+  },
+
+  modalCancelButton: {
+    flex: 1,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "#F1F4F1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  modalCancelText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 13,
+    color: TEXT,
+  },
+
+  modalSaveButton: {
+    flex: 1,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: GREEN,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  modalSaveText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 13,
+    color: WHITE,
   },
 
   emptyBox: {
