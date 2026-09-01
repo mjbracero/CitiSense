@@ -1,4 +1,5 @@
-import { Feather, Ionicons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -11,7 +12,6 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   InteractionManager,
   Platform,
   StatusBar,
@@ -21,21 +21,26 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { MapBlockSkeleton, PageSkeleton } from "../../components/skeletons";
 import ComplaintMapView from "../../components/ComplaintMapView";
 import { resolveExactAddress } from "../../lib/addressUtils";
 import { isInsideBogoCity } from "../../lib/bogoCityBounds";
 import { isLocationUsageAllowed } from "../../lib/locationPreferences";
 import { setPendingLocationEdit } from "../../lib/locationEditStore";
+import { writeAuditLog } from "../../lib/auditLogService";
+import { getPageCache, setPageCache } from "../../lib/pageDataCache";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
 import { HEADER_TOP_SPACING } from "../../constants/screenLayout";
 
 const GREEN = "#087A0D";
 const WHITE = "#FFFFFF";
 const TEXT = "#171717";
 const MUTED = "#6F776F";
+const EDIT_LOCATION_CACHE_KEY = "citizen.editComplaintLocation";
 
 function warnOutsideBogoCity() {
-  Alert.alert(
+  notify(
     "Outside Bogo City",
     "Please pin your complaint location within Bogo City, Cebu only."
   );
@@ -64,6 +69,11 @@ export default function EditComplaintLocationScreen() {
     Poppins_600SemiBold,
     Poppins_700Bold,
   });
+  const cachedEditLocation = getPageCache(EDIT_LOCATION_CACHE_KEY);
+
+  useEffect(() => {
+    setPageCache(EDIT_LOCATION_CACHE_KEY, { visited: true });
+  }, []);
 
   const updateAddressFromCoords = useCallback(async (coords) => {
     const nextAddress = await resolveExactAddress(
@@ -122,7 +132,7 @@ export default function EditComplaintLocationScreen() {
       } = await supabase.auth.getUser();
 
       if (!user?.id || !(await isLocationUsageAllowed(user.id))) {
-        Alert.alert(
+        notify(
           "Location Disabled",
           "Turn on location services in your profile to use your current location."
         );
@@ -132,7 +142,7 @@ export default function EditComplaintLocationScreen() {
       const permission = await Location.getForegroundPermissionsAsync();
 
       if (permission.status !== "granted") {
-        Alert.alert(
+        notify(
           "Location Permission Needed",
           "Please allow location access so we can pin your complaint location."
         );
@@ -156,7 +166,7 @@ export default function EditComplaintLocationScreen() {
       setDraftLocation(nextCoords);
       mapRef.current?.flyToLocation(nextCoords.longitude, nextCoords.latitude);
     } catch {
-      Alert.alert(
+      notify(
         "Location Error",
         "Unable to detect your current location. Please tap the map manually."
       );
@@ -192,6 +202,17 @@ export default function EditComplaintLocationScreen() {
 
     setIsSaving(false);
 
+    writeAuditLog({
+      action: "location_edit",
+      title: "Complaint Location Updated",
+      description: "The pinned complaint location was updated before submission.",
+      actorRole: "citizen",
+      metadata: {
+        latitude: draftLocation.latitude,
+        longitude: draftLocation.longitude,
+      },
+    });
+
     if (router.canGoBack()) {
       router.back();
     } else {
@@ -207,12 +228,8 @@ export default function EditComplaintLocationScreen() {
     }
   };
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  if (!fontsLoaded && !cachedEditLocation) {
+    return <PageSkeleton variant="map" />;
   }
 
   return (
@@ -260,10 +277,7 @@ export default function EditComplaintLocationScreen() {
             onCoordinateChange={handleCoordinateChange}
           />
         ) : (
-          <View style={styles.mapLoader}>
-            <ActivityIndicator size="large" color={GREEN} />
-            <Text style={styles.mapLoaderText}>Loading map...</Text>
-          </View>
+          <MapBlockSkeleton style={styles.map} />
         )}
       </View>
 
