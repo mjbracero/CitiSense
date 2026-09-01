@@ -1,4 +1,5 @@
-import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -12,11 +13,9 @@ import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Dimensions,
   Image,
   Keyboard,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -30,16 +29,38 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import { ComplaintListSkeleton, PageSkeleton } from "../../components/skeletons";
+import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
+import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
 import { WebView } from "react-native-webview";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
 import { createCitizenNotificationAndPush } from "../../lib/citizenNotificationService";
 import {
   notifyAdminsReassignment,
   notifyAdminsValidationRequired,
 } from "../../lib/adminNotificationService";
 import { notifyDepartmentHeadsReassigned } from "../../lib/departmentHeadNotificationService";
+import { writeAuditLog } from "../../lib/auditLogService";
 import { isLocationUsageAllowed } from "../../lib/locationPreferences";
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
+import {
+  applyComplaintOffsetFilters,
+  applyOffsetPagination,
+  COMPLAINTS_PAGE_SIZE,
+  getOffsetPageRange,
+  isNearContentBottom,
+  mergeComplaintPages,
+} from "../../lib/complaintPagination";
+import {
+  complaintAppliesToDepartment,
+  CONCERN_DEPARTMENT_OPTIONS,
+  getAssignedOffice,
+  getCategoriesForDepartment,
+} from "../../lib/complaintCategories";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -56,6 +77,11 @@ const ORANGE = "#F4A24C";
 
 const H_PADDING = 20;
 const DEFAULT_DEPARTMENT_HEAD_DEPARTMENT = "";
+const DEPT_ASSIGNED_LAST_FILTER_KEY = "departmentHead.assigned.lastFilter";
+
+function assignedComplaintsCacheKey({ category, status, priority }) {
+  return `departmentHead.assigned:${category}:${status}:${priority}`;
+}
 
 const MAPTILER_API_KEY =
   process.env.EXPO_PUBLIC_MAPTILER_API_KEY || "YvAwnNKyEt5uLWWmRXMN";
@@ -64,71 +90,6 @@ const PHOTO_PLACEHOLDER =
   "https://placehold.co/900x600/eaf6e4/087a0d?text=CitiSense+Complaint";
 
 const AVATAR_BUCKET = "avatars";
-
-const concernDepartmentMap = [
-  { category: "Water Concerns", department: "Bogo Water District" },
-  { category: "Electricity Concerns", department: "CEBECO II" },
-  { category: "Streetlight Concerns", department: "City Engineering Office" },
-  {
-    category: "Road and Infrastructure Concerns",
-    department: "City Engineering Office",
-  },
-  {
-    category: "Drainage and Flooding Concerns",
-    department: "City Engineering Office",
-  },
-  { category: "Waste and Environmental Concerns", department: "CENRO" },
-  { category: "Traffic and Road Safety Concerns", department: "BTMO" },
-  {
-    category: "Transport Terminal Concerns",
-    department: "Bogo City Central Bus Terminal Office",
-  },
-  { category: "Port Concerns", department: "Polambato Port Office" },
-  { category: "Health and Sanitation Concerns", department: "City Health Office" },
-  { category: "Animal Concerns", department: "City Veterinary Office" },
-  {
-    category: "Building and Construction Concerns",
-    department: "Office of the Building Official",
-  },
-  {
-    category: "Planning and Zoning Concerns",
-    department: "City Planning and Development Office / Zoning Office",
-  },
-  { category: "Public Market Concerns", department: "Bogo Public Market Office" },
-  { category: "Public Plaza Concerns", department: "Bogo Public Plaza Office" },
-  { category: "City Facility Concerns", department: "General Services Office" },
-  {
-    category: "Tourism Site / Public Attraction Concerns",
-    department: "City Tourism Office",
-  },
-  { category: "Disaster and Emergency Concerns", department: "CDRRMO" },
-  { category: "Fire Safety Concerns", department: "BFP Bogo City Fire Station" },
-  {
-    category: "Peace and Order Concerns",
-    department: "Bogo City Police Station / PNP",
-  },
-  {
-    category: "Coastal and Marine Protection Concerns",
-    department: "Bantay Dagat",
-  },
-  { category: "PWD Accessibility Concerns", department: "PDAO" },
-  {
-    category: "Tax and Treasury Concerns",
-    department: "City Treasurer's Office",
-  },
-  {
-    category: "Property Assessment Concerns",
-    department: "City Assessor's Office",
-  },
-  {
-    category: "Civil Registry Concerns",
-    department: "City Civil Registrar's Office",
-  },
-  {
-    category: "Business Permit and Licensing Concerns",
-    department: "City Business Permit and Licensing Office",
-  },
-];
 
 const statusFilters = [
   "All Status",
@@ -189,17 +150,6 @@ function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function getCategoriesForDepartment(department) {
-  return concernDepartmentMap
-    .filter((item) => item.department === department)
-    .map((item) => item.category);
-}
-
-function getDepartmentByCategory(category) {
-  const match = concernDepartmentMap.find((item) => item.category === category);
-  return match?.department || "Unassigned";
-}
-
 function normalizeStatus(status) {
   const clean = normalizeText(status);
 
@@ -210,6 +160,15 @@ function normalizeStatus(status) {
     return "For Validation";
   }
   if (clean === "completed" || clean === "resolved") return "Completed";
+  if (
+    clean === "returned" ||
+    clean === "returned to department" ||
+    clean === "returned to department head" ||
+    clean === "for rework" ||
+    clean === "needs revision"
+  ) {
+    return "Returned";
+  }
 
   return status || "Assigned";
 }
@@ -233,9 +192,10 @@ function getStatusStyle(status) {
   if (normalizedStatus === "Pending" || normalizedStatus === "Assigned") {
     return { bg: "#E8EEFF", color: BLUE };
   }
-  if (normalizedStatus === "In Progress") return { bg: "#FFF2C2", color: "#A97700" };
-  if (normalizedStatus === "For Validation") return { bg: LIGHT_GREEN, color: GREEN };
+  if (normalizedStatus === "In Progress") return { bg: "#FFF8D6", color: "#C9A000" };
+  if (normalizedStatus === "For Validation") return { bg: "#F3EAFF", color: "#7A3EA8" };
   if (normalizedStatus === "Completed") return { bg: "#DFF0DF", color: GREEN };
+  if (normalizedStatus === "Returned") return { bg: "#FFF0F0", color: RED };
 
   return { bg: "#F1F1F1", color: MUTED };
 }
@@ -1053,15 +1013,36 @@ export default function DepartmentHeadAssignedComplaints() {
   const pathname = usePathname();
   const { unreadNotificationCount } = useDepartmentHeadUnreadNotifications();
 
-  const [complaints, setComplaints] = useState([]);
-  const [loadingComplaints, setLoadingComplaints] = useState(true);
-  const [departmentHeadDepartment, setDepartmentHeadDepartment] = useState(DEFAULT_DEPARTMENT_HEAD_DEPARTMENT);
-  const [currentUserId, setCurrentUserId] = useState(null);
+  const lastAssignedFilter = getPageCache(DEPT_ASSIGNED_LAST_FILTER_KEY) || {};
+  const selectedCategoryInit = lastAssignedFilter.category || "All Category";
+  const selectedStatusInit = lastAssignedFilter.status || "All Status";
+  const selectedPriorityInit = lastAssignedFilter.priority || "All Priority";
+  const cachedAssigned = getPageCache(
+    assignedComplaintsCacheKey({
+      category: selectedCategoryInit,
+      status: selectedStatusInit,
+      priority: selectedPriorityInit,
+    })
+  );
+
+  const [complaints, setComplaints] = useState(cachedAssigned?.complaints ?? []);
+  const [complaintsTotal, setComplaintsTotal] = useState(cachedAssigned?.total ?? 0);
+  const [loadingComplaints, setLoadingComplaints] = useState(!cachedAssigned);
+  const [loadingMoreComplaints, setLoadingMoreComplaints] = useState(false);
+  const [hasMoreComplaints, setHasMoreComplaints] = useState(
+    cachedAssigned?.hasMore !== false
+  );
+  const [departmentHeadDepartment, setDepartmentHeadDepartment] = useState(
+    cachedAssigned?.department ?? DEFAULT_DEPARTMENT_HEAD_DEPARTMENT
+  );
+  const [currentUserId, setCurrentUserId] = useState(
+    cachedAssigned?.currentUserId ?? null
+  );
   const [currentUserEmail, setCurrentUserEmail] = useState(null);
 
-  const [selectedCategory, setSelectedCategory] = useState("All Category");
-  const [selectedStatus, setSelectedStatus] = useState("All Status");
-  const [selectedPriority, setSelectedPriority] = useState("All Priority");
+  const [selectedCategory, setSelectedCategory] = useState(selectedCategoryInit);
+  const [selectedStatus, setSelectedStatus] = useState(selectedStatusInit);
+  const [selectedPriority, setSelectedPriority] = useState(selectedPriorityInit);
 
   const [categoryDropdownVisible, setCategoryDropdownVisible] = useState(false);
   const [statusDropdownVisible, setStatusDropdownVisible] = useState(false);
@@ -1082,6 +1063,13 @@ export default function DepartmentHeadAssignedComplaints() {
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
 
+  useHideBottomNav(
+    detailsVisible ||
+      statusModalVisible ||
+      reassignModalVisible ||
+      fullMapVisible
+  );
+
   const [departmentHeadLocation, setDepartmentHeadLocation] = useState(null);
   const [departmentHeadHeading, setDepartmentHeadHeading] = useState(0);
   const [locationLoading, setLocationLoading] = useState(false);
@@ -1090,6 +1078,11 @@ export default function DepartmentHeadAssignedComplaints() {
   const fullMapRef = useRef(null);
   const locationWatcherRef = useRef(null);
   const headingWatcherRef = useRef(null);
+  const complaintsRef = useRef(cachedAssigned?.complaints ?? []);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(cachedAssigned?.hasMore !== false);
+  const listViewportHeightRef = useRef(0);
+  const assignedMatchModeRef = useRef("exact");
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -1256,9 +1249,37 @@ export default function DepartmentHeadAssignedComplaints() {
   }, []);
 
   const loadAssignedComplaints = useCallback(
-    async (showLoader = true) => {
+    async (showLoader = true, append = false) => {
+      const cacheKey = assignedComplaintsCacheKey({
+        category: selectedCategory,
+        status: selectedStatus,
+        priority: selectedPriority,
+      });
+      const cached = !append ? getPageCache(cacheKey) : null;
+
+      if (!append && cached?.complaints) {
+        complaintsRef.current = cached.complaints;
+        setComplaints(cached.complaints);
+        setComplaintsTotal(cached.total ?? cached.complaints.length);
+        hasMoreRef.current = cached.hasMore !== false;
+        setHasMoreComplaints(cached.hasMore !== false);
+        if (cached.department) setDepartmentHeadDepartment(cached.department);
+        if (cached.currentUserId) setCurrentUserId(cached.currentUserId);
+      }
+
+      if (append) {
+        if (loadingMoreRef.current || !hasMoreRef.current) return;
+        loadingMoreRef.current = true;
+        setLoadingMoreComplaints(true);
+      } else {
+        hasMoreRef.current = cached?.hasMore !== false;
+        assignedMatchModeRef.current = "exact";
+      }
+
       try {
-        if (showLoader) setLoadingComplaints(true);
+        if (showLoader && !append && shouldShowPageLoader(cacheKey)) {
+          setLoadingComplaints(true);
+        }
 
         const department = await loadDepartmentHeadDepartment();
         const cleanDepartment = String(department || "")
@@ -1267,42 +1288,55 @@ export default function DepartmentHeadAssignedComplaints() {
 
         if (!cleanDepartment) {
           console.log("No moderator department found. Check profiles.department.");
-          setComplaints([]);
+          if (!cached) {
+            setComplaints([]);
+            setComplaintsTotal(0);
+            hasMoreRef.current = false;
+            setHasMoreComplaints(false);
+          }
           return;
         }
 
-        let complaintsRows = [];
-        let queryError = null;
+        const offset = append ? complaintsRef.current.length : 0;
+        const pageSize = append
+          ? COMPLAINTS_PAGE_SIZE
+          : Math.max(COMPLAINTS_PAGE_SIZE, cached?.complaints?.length || 0);
 
-        const { data: exactData, error: exactError } = await supabase
-          .from("complaints")
-          .select("*")
-          .ilike("assigned_office", cleanDepartment)
-          .order("created_at", { ascending: false });
+        const listFilters = {
+          ...(selectedStatus === "In Progress"
+            ? { statusIn: ["In Progress", "Returned"] }
+            : {
+                status:
+                  selectedStatus === "All Status" ? undefined : selectedStatus,
+              }),
+          category:
+            selectedCategory === "All Category" ? undefined : selectedCategory,
+          priority:
+            selectedPriority === "All Priority" ? undefined : selectedPriority,
+        };
 
-        if (exactError) {
-          queryError = exactError;
-          console.log("Assigned complaints exact load error:", exactError);
-        } else {
-          complaintsRows = exactData || [];
-        }
-
-        if (!queryError && complaintsRows.length === 0) {
-          const { data: looseData, error: looseError } = await supabase
+        const runPagedQuery = (officeClause) => {
+          let query = supabase
             .from("complaints")
-            .select("*")
-            .ilike("assigned_office", `%${cleanDepartment}%`)
+            .select("*", { count: "exact" })
             .order("created_at", { ascending: false });
 
-          if (looseError) {
-            queryError = looseError;
-            console.log("Assigned complaints loose load error:", looseError);
-          } else {
-            complaintsRows = looseData || [];
+          if (officeClause === "exact") {
+            query = query.ilike("assigned_office", cleanDepartment);
+          } else if (officeClause === "loose") {
+            query = query.ilike("assigned_office", `%${cleanDepartment}%`);
           }
-        }
 
-        if (!queryError && complaintsRows.length === 0) {
+          query = applyComplaintOffsetFilters(query, listFilters);
+          return applyOffsetPagination(query, offset, pageSize);
+        };
+
+        let complaintsRows = [];
+        let queryError = null;
+        let total = 0;
+        const matchMode = append ? assignedMatchModeRef.current : "exact";
+
+        if (matchMode === "visible") {
           const { data: visibleData, error: visibleError } = await supabase
             .from("complaints")
             .select("*")
@@ -1310,28 +1344,82 @@ export default function DepartmentHeadAssignedComplaints() {
 
           if (visibleError) {
             queryError = visibleError;
-            console.log("Assigned complaints visible load error:", visibleError);
           } else {
-            complaintsRows = (visibleData || []).filter((row) => {
-              const assignedOffice = String(row.assigned_office || "")
-                .replace(/\s+/g, " ")
-                .trim();
+            const matchedRows = (visibleData || []).filter((row) =>
+              complaintAppliesToDepartment(
+                row.assigned_office,
+                row.category || row.concern_category,
+                cleanDepartment
+              )
+            );
 
-              return normalizeText(assignedOffice) === normalizeText(cleanDepartment);
-            });
+            const { from, to } = getOffsetPageRange(offset, pageSize);
+            complaintsRows = matchedRows.slice(from, to + 1);
+            total = matchedRows.length;
+          }
+        } else {
+          const {
+            data: pagedData,
+            error: pagedError,
+            count: pagedCount,
+          } = await runPagedQuery(matchMode);
+
+          if (pagedError) {
+            queryError = pagedError;
+            console.log("Assigned complaints load error:", pagedError);
+          } else {
+            complaintsRows = pagedData || [];
+            total = pagedCount ?? 0;
+          }
+        }
+
+        if (!append && !queryError && complaintsRows.length === 0) {
+          const { data: looseData, error: looseError, count: looseCount } =
+            await runPagedQuery("loose");
+
+          if (looseError) {
+            queryError = looseError;
+          } else if ((looseData || []).length > 0) {
+            complaintsRows = looseData || [];
+            total = looseCount ?? 0;
+            assignedMatchModeRef.current = "loose";
+          }
+        }
+
+        if (!append && !queryError && complaintsRows.length === 0) {
+          const { data: visibleData, error: visibleError } = await supabase
+            .from("complaints")
+            .select("*")
+            .order("created_at", { ascending: false });
+
+          if (visibleError) {
+            queryError = visibleError;
+          } else {
+            const matchedRows = (visibleData || []).filter((row) =>
+              complaintAppliesToDepartment(
+                row.assigned_office,
+                row.category || row.concern_category,
+                cleanDepartment
+              )
+            );
+
+            const { from, to } = getOffsetPageRange(offset, pageSize);
+            complaintsRows = matchedRows.slice(from, to + 1);
+            total = matchedRows.length;
+            assignedMatchModeRef.current = "visible";
           }
         }
 
         if (queryError) {
           console.log("Assigned complaints final load error:", queryError);
-          setComplaints([]);
+          if (!append && !cached) {
+            setComplaints([]);
+            setComplaintsTotal(0);
+          }
           return;
         }
 
-        console.log("Assigned complaints loaded:", {
-          department: cleanDepartment,
-          count: complaintsRows.length,
-        });
+        setComplaintsTotal(total);
 
         const citizenIds = Array.from(
           new Set((complaintsRows || []).map((row) => row.citizen_id).filter(Boolean))
@@ -1343,16 +1431,86 @@ export default function DepartmentHeadAssignedComplaints() {
           (complaintsRows || []).map((row) => mapComplaintRow(row, profileMap))
         );
 
-        setComplaints(mappedComplaints);
+        const nextComplaints = append
+          ? mergeComplaintPages(complaintsRef.current, mappedComplaints)
+          : mappedComplaints;
+
+        complaintsRef.current = nextComplaints;
+        setComplaints(nextComplaints);
+
+        if (mappedComplaints.length === 0) {
+          hasMoreRef.current = false;
+          setHasMoreComplaints(false);
+        } else {
+          const more = nextComplaints.length < total;
+          hasMoreRef.current = more;
+          setHasMoreComplaints(more);
+        }
+
+        setPageCache(cacheKey, {
+          complaints: nextComplaints,
+          total,
+          hasMore:
+            mappedComplaints.length === 0 ? false : nextComplaints.length < total,
+          department: cleanDepartment,
+          currentUserId,
+        });
+        setPageCache(DEPT_ASSIGNED_LAST_FILTER_KEY, {
+          category: selectedCategory,
+          status: selectedStatus,
+          priority: selectedPriority,
+        });
       } catch (error) {
         console.log("Load assigned complaints error:", error);
-        setComplaints([]);
+        if (!append && !cached) {
+          setComplaints([]);
+          setComplaintsTotal(0);
+        }
       } finally {
-        if (showLoader) setLoadingComplaints(false);
+        setLoadingComplaints(false);
+
+        if (append) {
+          loadingMoreRef.current = false;
+          setLoadingMoreComplaints(false);
+        }
       }
     },
-    [loadCitizenProfiles, loadDepartmentHeadDepartment]
+    [
+      loadCitizenProfiles,
+      loadDepartmentHeadDepartment,
+      selectedCategory,
+      selectedPriority,
+      selectedStatus,
+    ]
   );
+
+  const loadAssignedComplaintsRef = useRef(loadAssignedComplaints);
+  loadAssignedComplaintsRef.current = loadAssignedComplaints;
+
+  const loadMoreComplaints = useCallback(() => {
+    loadAssignedComplaints(false, true);
+  }, [loadAssignedComplaints]);
+
+  const handleComplaintsScroll = ({ nativeEvent }) => {
+    if (isNearContentBottom(nativeEvent)) {
+      loadMoreComplaints();
+    }
+  };
+
+  const maybeFillViewport = (contentHeight) => {
+    if (
+      hasMoreRef.current &&
+      !loadingMoreRef.current &&
+      listViewportHeightRef.current > 0 &&
+      contentHeight < listViewportHeightRef.current + 80
+    ) {
+      loadMoreComplaints();
+    }
+  };
+
+  useEffect(() => {
+    complaintsRef.current = complaints;
+  }, [complaints]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1373,7 +1531,7 @@ export default function DepartmentHeadAssignedComplaints() {
           table: "complaints",
         },
         () => {
-          loadAssignedComplaints(false);
+          loadAssignedComplaintsRef.current?.(false);
         }
       )
       .subscribe((status) => {
@@ -1403,7 +1561,7 @@ export default function DepartmentHeadAssignedComplaints() {
           const idMatches = changedProfileId && changedProfileId === currentUserId;
 
           if (emailMatches || idMatches) {
-            loadAssignedComplaints(false);
+            loadAssignedComplaintsRef.current?.(false);
           }
         }
       )
@@ -1415,7 +1573,7 @@ export default function DepartmentHeadAssignedComplaints() {
       supabase.removeChannel(complaintsChannel);
       supabase.removeChannel(profileChannel);
     };
-  }, [currentUserId, currentUserEmail, loadAssignedComplaints]);
+  }, [currentUserId, currentUserEmail]);
 
   const startDepartmentHeadTracking = useCallback(async () => {
     try {
@@ -1508,7 +1666,7 @@ export default function DepartmentHeadAssignedComplaints() {
         }
       );
     } catch {
-      Alert.alert(
+      notify(
         "Location Error",
         "Unable to get your location. Please try again."
       );
@@ -1541,13 +1699,17 @@ export default function DepartmentHeadAssignedComplaints() {
 
   const filteredComplaints = useMemo(() => {
     const filtered = complaints.filter((item) => {
-      const departmentMatch = item.department === departmentHeadDepartment;
+      const departmentMatch =
+        normalizeText(item.department) ===
+        normalizeText(departmentHeadDepartment);
 
       const categoryMatch =
         selectedCategory === "All Category" || item.category === selectedCategory;
 
       const statusMatch =
-        selectedStatus === "All Status" || item.status === selectedStatus;
+        selectedStatus === "All Status" ||
+        item.status === selectedStatus ||
+        (selectedStatus === "In Progress" && item.status === "Returned");
 
       const priorityMatch =
         selectedPriority === "All Priority" || item.priority === selectedPriority;
@@ -1569,16 +1731,54 @@ export default function DepartmentHeadAssignedComplaints() {
       return;
     }
 
-    if (filteredComplaints.length === 0) {
-      Alert.alert(
-        "Nothing to Export",
-        "There are no complaints matching the current filters."
-      );
-      return;
-    }
-
     try {
-      const csv = buildComplaintsCsv(filteredComplaints);
+      const department = String(departmentHeadDepartment || "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      let exportQuery = supabase
+        .from("complaints")
+        .select("*")
+        .ilike("assigned_office", `%${department}%`)
+        .order("created_at", { ascending: false });
+
+      exportQuery = applyComplaintOffsetFilters(exportQuery, {
+        ...(selectedStatus === "In Progress"
+          ? { statusIn: ["In Progress", "Returned"] }
+          : {
+              status:
+                selectedStatus === "All Status" ? undefined : selectedStatus,
+            }),
+        category:
+          selectedCategory === "All Category" ? undefined : selectedCategory,
+        priority:
+          selectedPriority === "All Priority" ? undefined : selectedPriority,
+      });
+
+      const { data: exportRows, error: exportError } = await exportQuery;
+
+      if (exportError) {
+        notify("Export Failed", exportError.message);
+        return;
+      }
+
+      const citizenIds = Array.from(
+        new Set((exportRows || []).map((row) => row.citizen_id).filter(Boolean))
+      );
+      const profileMap = await loadCitizenProfiles(citizenIds);
+      const mappedComplaints = await Promise.all(
+        (exportRows || []).map((row) => mapComplaintRow(row, profileMap))
+      );
+
+      if (mappedComplaints.length === 0) {
+        notify(
+          "Nothing to Export",
+          "There are no complaints matching the current filters."
+        );
+        return;
+      }
+
+      const csv = buildComplaintsCsv(mappedComplaints);
       const dateStamp = new Date().toISOString().slice(0, 10);
       const fileUri = `${FileSystem.cacheDirectory}cenro-complaints-${dateStamp}.csv`;
 
@@ -1602,9 +1802,17 @@ export default function DepartmentHeadAssignedComplaints() {
       if (shareResult.action === Share.dismissedAction) {
         return;
       }
+
+      writeAuditLog({
+        action: "csv_export",
+        title: "Complaints Exported",
+        description: `${mappedComplaints.length} CENRO complaint records were exported to CSV.`,
+        actorRole: "moderator",
+        metadata: { count: mappedComplaints.length },
+      });
     } catch (error) {
       console.log("CSV export error:", error);
-      Alert.alert("Export Failed", "Unable to export complaints to CSV.");
+      notify("Export Failed", "Unable to export complaints to CSV.");
     }
   };
 
@@ -1661,8 +1869,6 @@ export default function DepartmentHeadAssignedComplaints() {
 
     if (refreshedSelectedComplaint) {
       setSelectedComplaint(refreshedSelectedComplaint);
-    } else if (detailsVisible) {
-      closeDetails();
     }
   }, [complaints]);
 
@@ -1690,7 +1896,7 @@ export default function DepartmentHeadAssignedComplaints() {
 
   const openFullMap = () => {
     if (!selectedComplaint?.latitude || !selectedComplaint?.longitude) {
-      Alert.alert(
+      notify(
         "Map Unavailable",
         "This complaint has no valid pinned location coordinates."
       );
@@ -1706,7 +1912,7 @@ export default function DepartmentHeadAssignedComplaints() {
 
   const routeToPinnedLocation = () => {
     if (!selectedComplaint?.latitude || !selectedComplaint?.longitude) {
-      Alert.alert(
+      notify(
         "Route Unavailable",
         "This complaint has no valid pinned location."
       );
@@ -1714,7 +1920,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }
 
     if (!departmentHeadLocation) {
-      Alert.alert(
+      notify(
         "Department Head Location Needed",
         "Please update your location first before routing."
       );
@@ -1737,6 +1943,12 @@ export default function DepartmentHeadAssignedComplaints() {
 
   const openPhotoViewer = (uri) => {
     if (!uri) return;
+    if (
+      String(uri).includes("placehold.co") ||
+      String(uri).includes("placeholder")
+    ) {
+      return;
+    }
     setSelectedPhoto(uri);
     setPhotoViewerVisible(true);
   };
@@ -1751,7 +1963,7 @@ export default function DepartmentHeadAssignedComplaints() {
 
   const openUpdateStatusModal = (complaint) => {
     if (normalizeStatus(complaint.status) === "Completed") {
-      Alert.alert(
+      notify(
         "Status Locked",
         "Completed complaints can no longer be updated by the department head. The admin is responsible for marking complaints as completed after reviewing citizen feedback."
       );
@@ -1771,7 +1983,7 @@ export default function DepartmentHeadAssignedComplaints() {
     const oldStatus = normalizeStatus(complaint.status);
 
     if (nextStatus === "Completed") {
-      Alert.alert(
+      notify(
         "Admin Action Required",
         "Only the admin can mark a complaint as completed after reviewing the citizen feedback."
       );
@@ -1779,7 +1991,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }
 
     if (oldStatus === "Completed") {
-      Alert.alert(
+      notify(
         "Status Locked",
         "Completed complaints can no longer be updated by the department head."
       );
@@ -1834,14 +2046,29 @@ export default function DepartmentHeadAssignedComplaints() {
       setUpdatingStatusId(null);
 
       // Confirm right after the DB write — don't wait for push/notifications.
-      Alert.alert(
+      notify(
         "Status Updated",
         `Complaint status changed to ${nextStatus}.`
       );
 
+      writeAuditLog({
+        action: "status_update",
+        title: "Complaint Status Updated",
+        description: `Complaint #${complaint.id} changed from ${oldStatus} to ${nextStatus}.`,
+        entityType: "complaint",
+        entityId: complaint.rawId,
+        actorRole: "moderator",
+        metadata: {
+          old_status: oldStatus,
+          new_status: nextStatus,
+          assigned_office: complaint.department,
+        },
+      });
+
       // Notify citizen/admins in the background.
       const notificationType =
-        oldStatus === "In Progress" && nextStatus === "For Validation"
+        (oldStatus === "In Progress" || oldStatus === "Returned") &&
+        nextStatus === "For Validation"
           ? "validation"
           : "status";
 
@@ -1914,7 +2141,7 @@ export default function DepartmentHeadAssignedComplaints() {
       }
 
       setUpdatingStatusId(null);
-      Alert.alert(
+      notify(
         "Update Failed",
         error?.message || "Unable to update complaint status."
       );
@@ -1923,7 +2150,7 @@ export default function DepartmentHeadAssignedComplaints() {
 
   const openReassignModal = (complaint) => {
     if (complaint.status === "Completed") {
-      Alert.alert(
+      notify(
         "Reassignment Locked",
         "Completed complaints can no longer be reassigned."
       );
@@ -1944,12 +2171,12 @@ export default function DepartmentHeadAssignedComplaints() {
     const reason = reassignmentReason.replace(/\s+/g, " ").trim();
 
     if (!selectedItem) {
-      Alert.alert("Select Category", "Please choose the new category for this complaint.");
+      notify("Select Category", "Please choose the new category for this complaint.");
       return;
     }
 
     if (!reason) {
-      Alert.alert(
+      notify(
         "Reason Required",
         "Please provide a reason for reassigning this complaint."
       );
@@ -1957,13 +2184,13 @@ export default function DepartmentHeadAssignedComplaints() {
     }
 
     const nextDepartment =
-      selectedItem.department || getDepartmentByCategory(selectedItem.category);
+      selectedItem.department || getAssignedOffice(selectedItem.category);
 
     if (
       selectedItem.category === actionComplaint.category &&
       nextDepartment === actionComplaint.department
     ) {
-      Alert.alert(
+      notify(
         "No Change Detected",
         "Please choose a different category or assigned office before submitting the reassignment."
       );
@@ -1984,12 +2211,12 @@ export default function DepartmentHeadAssignedComplaints() {
       );
 
       if (error) {
-        Alert.alert("Reassign Failed", error.message);
+        notify("Reassign Failed", error.message);
         return;
       }
 
       if (!reassignedComplaint) {
-        Alert.alert(
+        notify(
           "Reassign Failed",
           "No complaint row was updated. Please check if the reassignment RPC function exists in Supabase."
         );
@@ -2077,26 +2304,36 @@ export default function DepartmentHeadAssignedComplaints() {
       setSelectedReassignTarget(null);
       setReassignmentReason("");
 
-      Alert.alert(
+      notify(
         "Complaint Reassigned",
         `This complaint was reassigned to ${nextDepartment}. The citizen has been notified.`
       );
 
+      writeAuditLog({
+        action: "complaint_reassign",
+        title: "Complaint Reassigned",
+        description: `Complaint #${actionComplaint.id} was reassigned from ${actionComplaint.department} to ${nextDepartment}.`,
+        entityType: "complaint",
+        entityId: actionComplaint.rawId,
+        actorRole: "moderator",
+        metadata: {
+          old_department: actionComplaint.department,
+          new_department: nextDepartment,
+          reason,
+        },
+      });
+
       loadAssignedComplaints(false);
     } catch (error) {
       console.log("Reassign complaint error:", error);
-      Alert.alert("Reassign Failed", "Unable to reassign complaint.");
+      notify("Reassign Failed", "Unable to reassign complaint.");
     } finally {
       setSubmittingReassignment(false);
     }
   };
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  if (!fontsLoaded && !cachedAssigned) {
+    return <PageSkeleton variant="list" />;
   }
 
   return (
@@ -2104,10 +2341,7 @@ export default function DepartmentHeadAssignedComplaints() {
       <StatusBar barStyle="dark-content" backgroundColor={BG} />
 
       <View style={styles.mainContainer}>
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
+        <View style={styles.stickyHeader}>
           <View style={styles.headerContainer}>
             <View style={styles.headerTitleRow}>
               <View style={styles.headerTextWrap}>
@@ -2166,13 +2400,22 @@ export default function DepartmentHeadAssignedComplaints() {
               </TouchableOpacity>
             </View>
           </View>
+        </View>
 
+        <ScrollView
+          style={styles.listScroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+          scrollEventThrottle={16}
+          onScroll={handleComplaintsScroll}
+          onLayout={(event) => {
+            listViewportHeightRef.current = event.nativeEvent.layout.height;
+          }}
+          onContentSizeChange={(_, height) => maybeFillViewport(height)}
+        >
           <View style={styles.complaintsList}>
-            {loadingComplaints ? (
-              <View style={styles.emptyCard}>
-                <ActivityIndicator size="large" color={GREEN} />
-                <Text style={styles.emptyTitle}>Loading assigned complaints...</Text>
-              </View>
+            {loadingComplaints && complaints.length === 0 ? (
+              <ComplaintListSkeleton count={COMPLAINTS_PAGE_SIZE} />
             ) : filteredComplaints.length === 0 ? (
               <View style={styles.emptyCard}>
                 <Ionicons name="document-text-outline" size={30} color={MUTED} />
@@ -2330,8 +2573,9 @@ export default function DepartmentHeadAssignedComplaints() {
               })
             )}
           </View>
-        </ScrollView>
 
+          <ComplaintsLoadMoreFooter loading={loadingMoreComplaints} />
+        </ScrollView>
 
         <DropdownModal
           visible={categoryDropdownVisible}
@@ -2607,22 +2851,20 @@ export default function DepartmentHeadAssignedComplaints() {
               </View>
             )}
 
-            {photoViewerVisible && selectedPhoto && (
-              <TouchableOpacity
-                activeOpacity={1}
-                style={styles.photoViewerOverlay}
-                onPress={closePhotoViewer}
-              >
-                <Image
-                  pointerEvents="none"
-                  source={{ uri: selectedPhoto }}
-                  style={styles.fullscreenPhoto}
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-            )}
+            <FullscreenPhotoViewer
+              variant="overlay"
+              visible={photoViewerVisible && detailsVisible}
+              uri={selectedPhoto}
+              onClose={closePhotoViewer}
+            />
           </View>
         </Modal>
+
+        <FullscreenPhotoViewer
+          visible={photoViewerVisible && !detailsVisible}
+          uri={selectedPhoto}
+          onClose={closePhotoViewer}
+        />
 
         <OptionModal
           visible={statusModalVisible}
@@ -2644,7 +2886,7 @@ export default function DepartmentHeadAssignedComplaints() {
         <ReassignComplaintModal
           visible={reassignModalVisible}
           complaint={actionComplaint}
-          options={concernDepartmentMap}
+          options={CONCERN_DEPARTMENT_OPTIONS}
           selectedTarget={selectedReassignTarget}
           reason={reassignmentReason}
           submitting={submittingReassignment}
@@ -2836,12 +3078,7 @@ function ReassignComplaintModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView
-        style={styles.reassignKeyboardOverlay}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 12 : 20}
-      >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
           <View style={styles.centerModalOverlay}>
             <View style={styles.reassignModalBox}>
               <View style={styles.dropdownHeader}>
@@ -2866,10 +3103,10 @@ function ReassignComplaintModal({
                 </TouchableOpacity>
               </View>
 
-              <ScrollView
-                ref={reassignScrollRef}
+              <KeyboardAwareScrollView
+                modal
+                innerRef={reassignScrollRef}
                 showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
                 onScrollBeginDrag={Keyboard.dismiss}
                 contentContainerStyle={styles.reassignModalScrollContent}
               >
@@ -2946,7 +3183,7 @@ function ReassignComplaintModal({
                 <Text style={styles.reassignmentReasonCounter}>
                   {String(reason || "").trim().length}/500 characters
                 </Text>
-              </ScrollView>
+              </KeyboardAwareScrollView>
 
               <TouchableOpacity
                 activeOpacity={0.82}
@@ -2974,7 +3211,6 @@ function ReassignComplaintModal({
             </View>
           </View>
         </TouchableWithoutFeedback>
-      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -2999,6 +3235,20 @@ const styles = StyleSheet.create({
     backgroundColor: BG,
   },
 
+  stickyHeader: {
+    backgroundColor: BG,
+    paddingHorizontal: H_PADDING,
+    paddingTop: 4,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+    zIndex: 2,
+  },
+
+  listScroll: {
+    flex: 1,
+  },
+
   loader: {
     flex: 1,
     backgroundColor: BG,
@@ -3008,12 +3258,12 @@ const styles = StyleSheet.create({
 
   scrollContent: {
     paddingHorizontal: H_PADDING,
-    paddingTop: 4,
-    paddingBottom: 116,
+    paddingTop: 12,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   headerContainer: {
-    marginBottom: 14,
+    marginBottom: 10,
   },
 
   headerTitleRow: {
@@ -3061,7 +3311,7 @@ const styles = StyleSheet.create({
 
   filterGrid: {
     gap: 8,
-    marginBottom: 14,
+    marginBottom: 0,
   },
 
   filterPillFull: {
