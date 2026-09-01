@@ -1,5 +1,6 @@
 import { Stack } from "expo-router";
 import { View, StyleSheet } from "react-native";
+import { APP_BACKGROUND } from "../../lib/platformUi";
 import PersistentBottomNav from "../../components/PersistentBottomNav";
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
 
@@ -8,16 +9,17 @@ export default function DepartmentHeadLayout() {
 
   return (
     <View style={styles.container}>
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          animation: "fade",
-          animationDuration: 180,
-          gestureEnabled: false,
-          fullScreenGestureEnabled: false,
-          freezeOnBlur: true,
-        }}
-      />
+      <View style={styles.stack}>
+        <Stack
+          detachInactiveScreens={false}
+          screenOptions={{
+            headerShown: false,
+            animation: "none",
+            gestureEnabled: false,
+            fullScreenGestureEnabled: false,
+          }}
+        />
+      </View>
       <PersistentBottomNav
         role="departmentHead"
         unreadNotificationCount={unreadNotificationCount}
@@ -28,6 +30,10 @@ export default function DepartmentHeadLayout() {
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+    backgroundColor: APP_BACKGROUND,
+  },
+  stack: {
     flex: 1,
   },
 });
