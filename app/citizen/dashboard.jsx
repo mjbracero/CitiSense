@@ -9,7 +9,6 @@ import {
 import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Dimensions,
   Image,
   Modal,
@@ -22,8 +21,33 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { ComplaintListSkeleton, PageSkeleton } from "../../components/skeletons";
+import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
+import {
+  calculatePriorityFromKeywords,
+  detectComplaintCategoryFromKeywords,
+  getAssignedOffice as getAssignedOfficeFromCategory,
+  normalizeComplaintCategory,
+} from "../../lib/complaintCategories";
+import {
+  canCitizenSubmitValidation,
+  getLatestFeedbackStatusByComplaintIds,
+  isValidationResubmit,
+} from "../../lib/complaintFeedbackService";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import {
+  applyOffsetPagination,
+  COMPLAINTS_PAGE_SIZE,
+  fetchAllRowsWithOffset,
+} from "../../lib/complaintPagination";
+import {
+  getProfileAvatarUrl,
+  setProfileAvatarUrl,
+  subscribeProfileAvatar,
+} from "../../lib/profileAvatarStore";
 import { supabase } from "../../lib/supabase";
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -44,6 +68,7 @@ const ORANGE = "#F4A24C";
 const H_PADDING = 20;
 const CARD_GAP = 8;
 const CARD_WIDTH = (SCREEN_WIDTH - H_PADDING * 2 - CARD_GAP * 3) / 4;
+const CITIZEN_DASHBOARD_CACHE_KEY = "citizen.dashboard";
 
 const PHOTO_PLACEHOLDER =
   "https://placehold.co/900x600/eaf6e4/087a0d?text=CitiSense+Complaint";
@@ -52,21 +77,25 @@ const dashboardCardConfig = [
   {
     title: "Pending",
     statusNames: ["Pending"],
+    filter: "Pending",
     icon: "clock-outline",
   },
   {
     title: "In Progress",
     statusNames: ["In Progress"],
+    filter: "In Progress",
     icon: "progress-wrench",
   },
   {
     title: "For Validation",
     statusNames: ["For Validation", "Validation"],
+    filter: "For Validation",
     icon: "account-check-outline",
   },
   {
     title: "Completed",
     statusNames: ["Completed"],
+    filter: "Completed",
     icon: "check-circle-outline",
   },
 ];
@@ -106,83 +135,8 @@ const bottomTabs = [
   },
 ];
 
-const CATEGORY_DEPARTMENT_MAP = {
-  "Water Concerns": "Bogo Water District",
-  "Electricity Concerns": "CEBECO II",
-  "Streetlight Concerns": "City Engineering Office",
-  "Road and Infrastructure Concerns": "City Engineering Office",
-  "Drainage and Flooding Concerns": "City Engineering Office",
-  "Waste and Environmental Concerns": "CENRO",
-  "Traffic and Road Safety Concerns": "BTMO",
-  "Transport Terminal Concerns": "Bogo City Central Bus Terminal Office",
-  "Port Concerns": "Polambato Port Office",
-  "Health and Sanitation Concerns": "City Health Office",
-  "Animal Concerns": "City Veterinary Office",
-  "Building and Construction Concerns": "Office of the Building Official",
-  "Planning and Zoning Concerns":
-    "City Planning and Development Office / Zoning Office",
-  "Public Market Concerns": "Bogo Public Market Office",
-  "Public Plaza Concerns": "Bogo Public Plaza Office",
-  "City Facility Concerns": "General Services Office",
-  "Tourism Site / Public Attraction Concerns": "City Tourism Office",
-  "Disaster and Emergency Concerns": "CDRRMO",
-  "Fire Safety Concerns": "BFP Bogo City Fire Station",
-  "Peace and Order Concerns": "Bogo City Police Station / PNP",
-  "Coastal and Marine Protection Concerns": "Bantay Dagat",
-  "PWD Accessibility Concerns": "PDAO",
-  "Tax and Treasury Concerns": "City Treasurer's Office",
-  "Property Assessment Concerns": "City Assessor's Office",
-  "Civil Registry Concerns": "City Civil Registrar's Office",
-  "Business Permit and Licensing Concerns":
-    "City Business Permit and Licensing Office",
-};
-
-const CATEGORY_ALIASES = {
-  "road & infrastructure": "Road and Infrastructure Concerns",
-  "road and infrastructure": "Road and Infrastructure Concerns",
-  "drainage & flooding": "Drainage and Flooding Concerns",
-  "drainage and flooding": "Drainage and Flooding Concerns",
-  "waste & environmental": "Waste and Environmental Concerns",
-  "waste and environmental": "Waste and Environmental Concerns",
-  "traffic & road safety": "Traffic and Road Safety Concerns",
-  "traffic and road safety": "Traffic and Road Safety Concerns",
-  "fire safety": "Fire Safety Concerns",
-  "city facility": "City Facility Concerns",
-};
-
 function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
-}
-
-function normalizeCategory(category) {
-  if (!category) return "Unclassified";
-
-  const cleanCategory = String(category).trim();
-
-  if (CATEGORY_DEPARTMENT_MAP[cleanCategory]) return cleanCategory;
-
-  const lowerCategory = cleanCategory.toLowerCase();
-
-  if (CATEGORY_ALIASES[lowerCategory]) return CATEGORY_ALIASES[lowerCategory];
-
-  const matchedCategory = Object.keys(CATEGORY_DEPARTMENT_MAP).find((item) => {
-    const lowerItem = item.toLowerCase();
-    const simpleItem = lowerItem.replace(" concerns", "");
-
-    return lowerItem.includes(lowerCategory) || lowerCategory.includes(simpleItem);
-  });
-
-  return matchedCategory || cleanCategory || "Unclassified";
-}
-
-function getAssignedOffice(category, existingOffice) {
-  if (existingOffice && String(existingOffice).trim()) {
-    return String(existingOffice).trim();
-  }
-
-  const normalizedCategory = normalizeCategory(category);
-
-  return CATEGORY_DEPARTMENT_MAP[normalizedCategory] || "Unassigned";
 }
 
 function normalizePhotoUrls(value) {
@@ -281,7 +235,7 @@ async function resolveComplaintPhotoUrls(row) {
     const { data: files, error } = await supabase.storage
       .from("complaint-photos")
       .list(String(row.id), {
-        limit: 10,
+        limit: 20,
         sortBy: { column: "name", order: "asc" },
       });
 
@@ -289,6 +243,8 @@ async function resolveComplaintPhotoUrls(row) {
 
     const imageFiles = files.filter((file) => {
       const name = String(file.name || "").toLowerCase();
+
+      if (name.startsWith("validation-")) return false;
 
       return (
         name.endsWith(".jpg") ||
@@ -341,23 +297,182 @@ function formatDbTime(value) {
   });
 }
 
-function getStatusVisual(status) {
-  if (status === "Pending") return { bg: "#E8EEFF", color: BLUE };
+function normalizeValidationPhotoUrls(value) {
+  if (!value) return [];
+
+  if (Array.isArray(value)) return value.filter(Boolean);
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+
+      if (Array.isArray(parsed)) return parsed.filter(Boolean);
+    } catch {
+      return value ? [value] : [];
+    }
+  }
+
+  return [];
+}
+
+async function resolveValidationPhotoUrls(row) {
+  const rawUrls = normalizeValidationPhotoUrls(
+    row?.citizen_validation_photo_urls ||
+      row?.validation_photo_urls ||
+      row?.citizen_feedback_photo_urls
+  );
+
+  const resolvedUrls = [];
+
+  for (const rawUrl of rawUrls) {
+    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
+
+    if (resolvedUrl) {
+      resolvedUrls.push(resolvedUrl);
+    }
+  }
+
+  if (resolvedUrls.length > 0) {
+    return resolvedUrls;
+  }
+
+  if (!row?.id) return [];
+
+  try {
+    const { data: files, error } = await supabase.storage
+      .from("complaint-photos")
+      .list(String(row.id), {
+        limit: 20,
+        sortBy: { column: "name", order: "asc" },
+      });
+
+    if (error || !files?.length) return [];
+
+    const validationFiles = files.filter((file) => {
+      const name = String(file.name || "").toLowerCase();
+      return name.startsWith("validation-");
+    });
+
+    const listedUrls = [];
+
+    for (const file of validationFiles) {
+      const storagePath = `${row.id}/${file.name}`;
+      const resolvedUrl = await createReadableComplaintPhotoUrl(storagePath);
+
+      if (resolvedUrl) {
+        listedUrls.push(resolvedUrl);
+      }
+    }
+
+    return listedUrls;
+  } catch (error) {
+    console.log("List validation photos error:", error);
+    return [];
+  }
+}
+
+function buildTimeline(status, createdAt, assignedOffice) {
+  const submittedTime = `${formatDbDate(createdAt)} • ${formatDbTime(createdAt)}`;
+
+  const hasAssignedOffice = Boolean(
+    assignedOffice && assignedOffice !== "Unassigned"
+  );
+
+  const statusOrder = [
+    "Submitted",
+    "AI Analysis",
+    "Routed",
+    "In Progress",
+    "For Validation",
+    "Completed",
+  ];
+
+  const currentIndex =
+    status === "Completed"
+      ? 5
+      : status === "For Validation"
+        ? 4
+        : status === "In Progress"
+          ? 3
+          : hasAssignedOffice
+            ? 2
+            : 1;
+
+  return statusOrder.map((label, index) => ({
+    label,
+    done: index <= currentIndex,
+    time:
+      index === 0
+        ? submittedTime
+        : index === 1
+          ? submittedTime
+          : index === 2 && hasAssignedOffice
+            ? `Assigned to ${assignedOffice}`
+            : index <= currentIndex
+              ? submittedTime
+              : "Waiting",
+  }));
+}
+
+function getDisplayComplaintId(row) {
+  if (row.short_id) return String(row.short_id);
+  if (row.complaint_short_id) return String(row.complaint_short_id);
+  if (row.id) return String(row.id).slice(0, 8).toUpperCase();
+
+  return "N/A";
+}
+
+function getValidationSubmitted(row) {
+  const directFlags = [
+    row.validation_status,
+    row.citizen_validation_status,
+    row.citizen_feedback_status,
+  ]
+    .filter(Boolean)
+    .map((item) => String(item).trim().toLowerCase());
+
+  return Boolean(
+    row.citizen_validated_at ||
+      row.validation_submitted_at ||
+      row.citizen_feedback_submitted_at ||
+      row.citizen_feedback_submitted === true ||
+      directFlags.includes("validated") ||
+      directFlags.includes("submitted") ||
+      directFlags.includes("done")
+  );
+}
+
+function getStatusStyle(status) {
+  if (status === "Pending") {
+    return { bg: "#E8EEFF", color: BLUE, icon: "clock-outline" };
+  }
 
   if (status === "In Progress") {
-    return { bg: "#FFF2C2", color: "#A97700" };
+    return { bg: "#FFF8D6", color: "#C9A000", icon: "progress-wrench" };
   }
 
   if (status === "For Validation" || status === "Validation") {
-    return { bg: LIGHT_GREEN, color: GREEN };
+    return { bg: "#F3EAFF", color: "#7A3EA8", icon: "clipboard-check-outline" };
   }
 
-  if (status === "Completed") return { bg: LIGHT_GREEN, color: GREEN };
+  if (status === "Completed") {
+    return { bg: "#DFF0DF", color: GREEN, icon: "check-circle-outline" };
+  }
 
-  return { bg: "#F1F1F1", color: MUTED };
+  if (status === "Returned") {
+    return { bg: "#FFF0F0", color: RED, icon: "backup-restore" };
+  }
+
+  return { bg: "#F1F1F1", color: MUTED, icon: "file-document-outline" };
 }
 
-function getPriorityVisual(priority) {
+function getDashboardStatusRank(status) {
+  if (status === "Returned") return 0;
+  if (status === "For Validation" || status === "Validation") return 1;
+  return 2;
+}
+
+function getPriorityStyle(priority) {
   if (priority === "Critical" || priority === "Urgent") {
     return { bg: "#FFF0F0", color: RED };
   }
@@ -369,11 +484,12 @@ function getPriorityVisual(priority) {
   return { bg: LIGHT_GREEN, color: GREEN };
 }
 
-function normalizeConcernType(value, isEmergency = false) {
+function normalizeConcernType(value, isEmergency = false, priority = "Normal") {
   const cleanValue = normalizeText(value);
 
   if (
     isEmergency ||
+    priority === "Critical" ||
     cleanValue === "emergency" ||
     (cleanValue.includes("emergency") && !cleanValue.includes("non"))
   ) {
@@ -383,38 +499,59 @@ function normalizeConcernType(value, isEmergency = false) {
   return "Non-Emergency";
 }
 
-function getConcernVisual(concernType) {
+function getConcernStyle(concernType) {
   if (concernType === "Emergency") {
-    return { bg: "#FFF0F0", color: RED };
+    return { bg: "#FFF0F0", color: RED, icon: "alert-triangle" };
   }
 
-  return { bg: LIGHT_GREEN, color: GREEN };
+  return { bg: LIGHT_GREEN, color: GREEN, icon: "check-circle" };
 }
 
 async function mapDashboardComplaint(row) {
   const createdAt =
-    row.created_at || row.submitted_at || new Date().toISOString();
+    row.created_at ||
+    row.submitted_at ||
+    row.submitted_date_time ||
+    new Date().toISOString();
 
-  const category = normalizeCategory(row.category || row.concern_category);
+  const detectedCategory = detectComplaintCategoryFromKeywords(
+    row.title,
+    row.description
+  );
 
-  const assignedOffice = getAssignedOffice(
+  const category =
+    !row.category ||
+    row.category === "Unclassified" ||
+    row.category === "Unassigned"
+      ? detectedCategory
+      : normalizeComplaintCategory(row.category || row.concern_category);
+
+  const assignedOffice = getAssignedOfficeFromCategory(
     category,
     row.assigned_office || row.assignedOffice || row.department
   );
 
-  const concernType = normalizeConcernType(row.complaint_type, row.is_emergency);
-  const priority = row.priority || (row.is_emergency ? "Critical" : "Normal");
-  const status = row.status || "Pending";
+  const priority = calculatePriorityFromKeywords(
+    row.title,
+    row.description,
+    Boolean(row.is_emergency)
+  );
+
+  const concernType = normalizeConcernType(
+    row.complaint_type,
+    Boolean(row.is_emergency),
+    priority
+  );
+
   const photoUrls = await resolveComplaintPhotoUrls(row);
   const photo = photoUrls[0] || PHOTO_PLACEHOLDER;
-
-  const statusVisual = getStatusVisual(status);
-  const priorityVisual = getPriorityVisual(priority);
-  const concernVisual = getConcernVisual(concernType);
+  const validationPhotoUrls = await resolveValidationPhotoUrls(row);
+  const status = row.status || "Pending";
 
   return {
-    id: row.short_id || row.id,
+    id: row.id,
     rawId: row.id,
+    shortId: getDisplayComplaintId(row),
     title: row.title || "Untitled Complaint",
     category,
     concernType,
@@ -426,13 +563,12 @@ async function mapDashboardComplaint(row) {
     assignedOffice,
     priority,
     status,
-    statusBg: statusVisual.bg,
-    statusColor: statusVisual.color,
-    priorityBg: priorityVisual.bg,
-    priorityColor: priorityVisual.color,
-    concernBg: concernVisual.bg,
-    concernColor: concernVisual.color,
+    latestFeedbackStatus: row.latest_feedback_status || null,
+    validationSubmitted: getValidationSubmitted(row),
+    validationPhotoUrls,
     photo,
+    photoUrls,
+    timeline: buildTimeline(status, createdAt, assignedOffice),
   };
 }
 
@@ -508,13 +644,28 @@ export default function CitizenDashboard() {
     registerPushTokenForCurrentUser();
   }, []);
 
+  const cachedDashboard = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedComplaint, setSelectedComplaint] = useState(null);
   const [complaintModalVisible, setComplaintModalVisible] = useState(false);
-  const [profilePhotoUrl, setProfilePhotoUrl] = useState(null);
-  const [complaintsData, setComplaintsData] = useState([]);
-  const [currentUserId, setCurrentUserId] = useState(null);
-  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
+
+  useHideBottomNav(complaintModalVisible);
+
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState(
+    getProfileAvatarUrl() || cachedDashboard?.profilePhotoUrl || null
+  );
+  const [complaintsData, setComplaintsData] = useState(
+    cachedDashboard?.complaints ?? []
+  );
+  const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
+  const [currentUserId, setCurrentUserId] = useState(
+    cachedDashboard?.currentUserId ?? null
+  );
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(
+    cachedDashboard?.unreadNotificationCount ?? 0
+  );
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -566,6 +717,7 @@ export default function CitizenDashboard() {
       if (error || !currentUser) {
         setCurrentUserId(null);
         setProfilePhotoUrl(null);
+        setProfileAvatarUrl(null);
         return;
       }
 
@@ -575,6 +727,13 @@ export default function CitizenDashboard() {
 
       if (metadataAvatar) {
         setProfilePhotoUrl(metadataAvatar);
+        setProfileAvatarUrl(metadataAvatar);
+        const prev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
+        setPageCache(CITIZEN_DASHBOARD_CACHE_KEY, {
+          ...prev,
+          currentUserId: currentUser.id,
+          profilePhotoUrl: metadataAvatar,
+        });
         return;
       }
 
@@ -584,10 +743,29 @@ export default function CitizenDashboard() {
         .eq("id", currentUser.id)
         .maybeSingle();
 
-      setProfilePhotoUrl(profileData?.avatar_url || null);
+      const nextPhoto = profileData?.avatar_url || null;
+      setProfilePhotoUrl(nextPhoto);
+      setProfileAvatarUrl(nextPhoto);
+      const prev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(CITIZEN_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        currentUserId: currentUser.id,
+        profilePhotoUrl: nextPhoto,
+      });
     } catch {
       setProfilePhotoUrl(null);
     }
+  }, []);
+
+  useEffect(() => {
+    return subscribeProfileAvatar((url) => {
+      setProfilePhotoUrl(url);
+      const prev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(CITIZEN_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        profilePhotoUrl: url,
+      });
+    });
   }, []);
 
   const loadUnreadNotificationCount = useCallback(async (userId = null) => {
@@ -612,6 +790,11 @@ export default function CitizenDashboard() {
       }
 
       setUnreadNotificationCount(count || 0);
+      const prev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(CITIZEN_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        unreadNotificationCount: count || 0,
+      });
     } catch (error) {
       console.log("Load dashboard unread notification count error:", error);
       setUnreadNotificationCount(0);
@@ -620,41 +803,77 @@ export default function CitizenDashboard() {
 
   const loadDashboardComplaints = useCallback(async () => {
     try {
+      if (shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY)) {
+        setLoadingComplaints(true);
+      }
+
       const {
         data: { user: currentUser },
         error: userError,
       } = await supabase.auth.getUser();
 
       if (userError || !currentUser) {
-        setCurrentUserId(null);
-        setComplaintsData([]);
-        setUnreadNotificationCount(0);
+        if (shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY)) {
+          setCurrentUserId(null);
+          setComplaintsData([]);
+          setUnreadNotificationCount(0);
+        }
         return;
       }
 
       setCurrentUserId(currentUser.id);
       await loadUnreadNotificationCount(currentUser.id);
 
-      const { data, error } = await supabase
-        .from("complaints")
-        .select("*")
-        .eq("citizen_id", currentUser.id)
-        .order("created_at", { ascending: false });
+      const { data, error } = await fetchAllRowsWithOffset(async (offset, pageSize) => {
+        const query = applyOffsetPagination(
+          supabase
+            .from("complaints")
+            .select("*", { count: offset === 0 ? "exact" : undefined })
+            .eq("citizen_id", currentUser.id)
+            .order("created_at", { ascending: false }),
+          offset,
+          pageSize
+        );
+
+        return await query;
+      }, COMPLAINTS_PAGE_SIZE);
 
       if (error) {
         console.log("Dashboard complaints load error:", error);
-        setComplaintsData([]);
+        if (shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY)) {
+          setComplaintsData([]);
+        }
         return;
       }
 
+      const rows = data || [];
+      const feedbackStatusById = await getLatestFeedbackStatusByComplaintIds(
+        rows.map((row) => row.id)
+      );
+
       const mappedComplaints = await Promise.all(
-        (data || []).map((row) => mapDashboardComplaint(row))
+        rows.map((row) =>
+          mapDashboardComplaint({
+            ...row,
+            latest_feedback_status: feedbackStatusById[row.id] || null,
+          })
+        )
       );
 
       setComplaintsData(mappedComplaints);
+      const prev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(CITIZEN_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        complaints: mappedComplaints,
+        currentUserId: currentUser.id,
+      });
     } catch (error) {
       console.log("Dashboard complaints load error:", error);
-      setComplaintsData([]);
+      if (shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY)) {
+        setComplaintsData([]);
+      }
+    } finally {
+      setLoadingComplaints(false);
     }
   }, [loadUnreadNotificationCount]);
 
@@ -734,11 +953,17 @@ export default function CitizenDashboard() {
 
   const latestComplaints = useMemo(() => {
     return [...complaints]
-      .sort(
-        (a, b) =>
+      .sort((a, b) => {
+        const rank =
+          getDashboardStatusRank(a.status) - getDashboardStatusRank(b.status);
+
+        if (rank !== 0) return rank;
+
+        return (
           parseComplaintDateTime(b.date, b.time) -
           parseComplaintDateTime(a.date, a.time)
-      )
+        );
+      })
       .slice(0, 4);
   }, [complaints]);
 
@@ -750,14 +975,31 @@ export default function CitizenDashboard() {
   const closeComplaintDetails = () => {
     setComplaintModalVisible(false);
     setSelectedComplaint(null);
+    setPhotoViewerVisible(false);
+    setSelectedPhoto(null);
   };
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  const openPhotoViewer = (uri) => {
+    if (!uri) return;
+    if (
+      String(uri).includes("placehold.co") ||
+      String(uri).includes("placeholder")
+    ) {
+      return;
+    }
+    setSelectedPhoto(uri);
+    setPhotoViewerVisible(true);
+  };
+
+  const closePhotoViewer = () => {
+    setPhotoViewerVisible(false);
+    setTimeout(() => {
+      setSelectedPhoto(null);
+    }, 160);
+  };
+
+  if (!fontsLoaded && !cachedDashboard) {
+    return <PageSkeleton variant="dashboard" />;
   }
 
   return (
@@ -829,8 +1071,9 @@ export default function CitizenDashboard() {
 
           <View style={styles.dashboardCardsRow}>
             {dashboardCards.map((item, index) => (
-              <View
+              <TouchableOpacity
                 key={item.title}
+                activeOpacity={0.78}
                 style={[
                   styles.dashboardCard,
                   {
@@ -839,6 +1082,12 @@ export default function CitizenDashboard() {
                       index === dashboardCards.length - 1 ? 0 : CARD_GAP,
                   },
                 ]}
+                onPress={() =>
+                  smoothNavigate({
+                    pathname: "/citizen/complaints",
+                    params: { filter: item.filter },
+                  })
+                }
               >
                 <View style={styles.cardIconCircle}>
                   <MaterialCommunityIcons
@@ -850,7 +1099,7 @@ export default function CitizenDashboard() {
 
                 <Text style={styles.cardTitle}>{item.title}</Text>
                 <Text style={styles.cardValue}>{item.value}</Text>
-              </View>
+              </TouchableOpacity>
             ))}
           </View>
 
@@ -868,7 +1117,9 @@ export default function CitizenDashboard() {
           </View>
 
           <View style={styles.complaintsList}>
-            {latestComplaints.length === 0 ? (
+            {loadingComplaints && complaintsData.length === 0 ? (
+              <ComplaintListSkeleton count={3} />
+            ) : latestComplaints.length === 0 ? (
               <View style={styles.emptyComplaintsCard}>
                 <Ionicons name="document-text-outline" size={30} color={MUTED} />
                 <Text style={styles.emptyComplaintsTitle}>
@@ -879,22 +1130,100 @@ export default function CitizenDashboard() {
                 </Text>
               </View>
             ) : (
-              latestComplaints.map((item) => (
-                <TouchableOpacity
-                  key={item.rawId || item.id}
-                  style={styles.complaintCard}
-                  activeOpacity={0.75}
-                  onPress={() => openComplaintDetails(item)}
-                >
-                  <View style={styles.complaintInfo}>
-                    <Text style={styles.complaintTitle} numberOfLines={1}>
-                      {item.title}
-                    </Text>
+              latestComplaints.map((item) => {
+                const statusStyle = getStatusStyle(item.status);
+                const priorityStyle = getPriorityStyle(item.priority);
+                const concernStyle = getConcernStyle(item.concernType);
+
+                return (
+                  <TouchableOpacity
+                    key={item.rawId || item.id}
+                    style={styles.complaintCard}
+                    activeOpacity={0.75}
+                    onPress={() => openComplaintDetails(item)}
+                  >
+                    <View style={styles.cardTopRow}>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        style={styles.complaintImageWrapper}
+                        onPress={() => openPhotoViewer(item.photo)}
+                      >
+                        <Image
+                          source={{ uri: item.photo }}
+                          style={styles.complaintImage}
+                        />
+                      </TouchableOpacity>
+
+                      <View style={styles.complaintInfo}>
+                        <View style={styles.idRow}>
+                          <Text style={styles.complaintId}>
+                            #{item.shortId || item.id}
+                          </Text>
+
+                          <View
+                            style={[
+                              styles.priorityPill,
+                              { backgroundColor: priorityStyle.bg },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.priorityText,
+                                { color: priorityStyle.color },
+                              ]}
+                            >
+                              {item.priority}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <Text style={styles.complaintTitle} numberOfLines={1}>
+                          {item.title}
+                        </Text>
+
+                        <View style={styles.categoryConcernRow}>
+                          <Text style={styles.categoryText} numberOfLines={1}>
+                            {item.category}
+                          </Text>
+
+                          <View
+                            style={[
+                              styles.concernPill,
+                              { backgroundColor: concernStyle.bg },
+                            ]}
+                          >
+                            <Feather
+                              name={concernStyle.icon}
+                              size={9}
+                              color={concernStyle.color}
+                            />
+                            <Text
+                              style={[
+                                styles.concernText,
+                                { color: concernStyle.color },
+                              ]}
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.82}
+                            >
+                              {item.concernType}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    </View>
 
                     <View style={styles.detailRow}>
                       <Feather name="tag" size={13} color={MUTED} />
                       <Text style={styles.detailText} numberOfLines={1}>
-                        {item.category}
+                        Category: {item.category}
+                      </Text>
+                    </View>
+
+                    <View style={styles.detailRow}>
+                      <Feather name="briefcase" size={13} color={MUTED} />
+                      <Text style={styles.detailText} numberOfLines={1}>
+                        Assigned Office: {item.assignedOffice}
                       </Text>
                     </View>
 
@@ -914,34 +1243,40 @@ export default function CitizenDashboard() {
                       <Feather name="clock" size={13} color={MUTED} />
                       <Text style={styles.detailText}>{item.time}</Text>
                     </View>
-                  </View>
 
-                  <View style={styles.complaintRight}>
-                    <View
-                      style={[
-                        styles.statusBadge,
-                        { backgroundColor: item.statusBg },
-                      ]}
-                    >
-                      <Text
+                    <View style={styles.cardBottomRow}>
+                      <View
                         style={[
-                          styles.statusBadgeText,
-                          { color: item.statusColor },
+                          styles.statusBadge,
+                          { backgroundColor: statusStyle.bg },
                         ]}
-                        numberOfLines={1}
                       >
-                        {item.status}
-                      </Text>
-                    </View>
+                        <MaterialCommunityIcons
+                          name={statusStyle.icon}
+                          size={15}
+                          color={statusStyle.color}
+                        />
+                        <Text
+                          style={[
+                            styles.statusBadgeText,
+                            { color: statusStyle.color },
+                          ]}
+                        >
+                          {item.status}
+                        </Text>
+                      </View>
 
-                    <Feather name="chevron-right" size={21} color={MUTED} />
-                  </View>
-                </TouchableOpacity>
-              ))
+                      <View style={styles.viewRow}>
+                        <Text style={styles.viewText}>View Details</Text>
+                        <Feather name="chevron-right" size={16} color={GREEN} />
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
             )}
           </View>
         </ScrollView>
-
 
         <Modal
           visible={complaintModalVisible}
@@ -954,7 +1289,7 @@ export default function CitizenDashboard() {
               <View style={styles.modalHandle} />
 
               <View style={styles.modalHeaderRow}>
-                <Text style={styles.modalTitle}>Complaint Information</Text>
+                <Text style={styles.modalTitle}>Complaint Details</Text>
 
                 <TouchableOpacity
                   activeOpacity={0.75}
@@ -970,170 +1305,241 @@ export default function CitizenDashboard() {
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={styles.modalScrollContent}
                 >
-                  <Image
-                    source={{ uri: selectedComplaint.photo }}
-                    style={styles.complaintDetailsImage}
-                  />
+                  {(() => {
+                    const detailPhotos = (
+                      selectedComplaint.photoUrls || []
+                    ).filter(Boolean);
+                    const photosToShow =
+                      detailPhotos.length > 0
+                        ? detailPhotos
+                        : selectedComplaint.photo
+                          ? [selectedComplaint.photo]
+                          : [];
+                    const validationPhotos = (
+                      selectedComplaint.validationPhotoUrls || []
+                    ).filter(Boolean);
 
-                  <View style={styles.modalTitleSection}>
-                    <Text style={styles.complaintDetailsTitle}>
-                      {selectedComplaint.title}
+                    return (
+                      <>
+                        {photosToShow.length > 0 ? (
+                          photosToShow.length === 1 ? (
+                            <TouchableOpacity
+                              activeOpacity={0.85}
+                              onPress={() => openPhotoViewer(photosToShow[0])}
+                            >
+                              <Image
+                                source={{ uri: photosToShow[0] }}
+                                style={styles.complaintDetailsImage}
+                              />
+                            </TouchableOpacity>
+                          ) : (
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              contentContainerStyle={styles.detailsPhotoRow}
+                            >
+                              {photosToShow.map((photo, index) => (
+                                <TouchableOpacity
+                                  key={`${photo}-${index}`}
+                                  activeOpacity={0.85}
+                                  onPress={() => openPhotoViewer(photo)}
+                                >
+                                  <Image
+                                    source={{ uri: photo }}
+                                    style={styles.detailsGalleryPhoto}
+                                  />
+                                </TouchableOpacity>
+                              ))}
+                            </ScrollView>
+                          )
+                        ) : (
+                          <Image
+                            source={{ uri: PHOTO_PLACEHOLDER }}
+                            style={styles.complaintDetailsImage}
+                          />
+                        )}
+
+                        {validationPhotos.length > 0 && (
+                          <View style={styles.detailsValidationPhotosBox}>
+                            <Text style={styles.detailsLabel}>
+                              Validation Photos
+                            </Text>
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              contentContainerStyle={styles.detailsPhotoRow}
+                            >
+                              {validationPhotos.map((photo, index) => (
+                                <TouchableOpacity
+                                  key={`validation-${photo}-${index}`}
+                                  activeOpacity={0.85}
+                                  onPress={() => openPhotoViewer(photo)}
+                                >
+                                  <Image
+                                    source={{ uri: photo }}
+                                    style={styles.detailsGalleryPhoto}
+                                  />
+                                </TouchableOpacity>
+                              ))}
+                            </ScrollView>
+                          </View>
+                        )}
+                      </>
+                    );
+                  })()}
+
+                  <Text style={styles.complaintDetailsTitle}>
+                    {selectedComplaint.title}
+                  </Text>
+
+                  <Text style={styles.detailsDescription}>
+                    {selectedComplaint.description}
+                  </Text>
+
+                  <View style={styles.detailsInfoCard}>
+                    <Text style={styles.detailsLabel}>Complaint ID</Text>
+                    <Text style={styles.detailsValue}>
+                      {selectedComplaint.shortId || selectedComplaint.id}
                     </Text>
 
-                    <Text style={styles.complaintDetailsId}>
-                      Complaint ID: {selectedComplaint.id}
+                    <Text style={styles.detailsLabel}>Concern Type</Text>
+                    <Text style={styles.detailsValue}>
+                      {selectedComplaint.concernType}
+                    </Text>
+
+                    <Text style={styles.detailsLabel}>Category</Text>
+                    <Text style={styles.detailsValue}>
+                      {selectedComplaint.category}
+                    </Text>
+
+                    <Text style={styles.detailsLabel}>Priority</Text>
+                    <Text style={styles.detailsValue}>
+                      {selectedComplaint.priority}
+                    </Text>
+
+                    <Text style={styles.detailsLabel}>Status</Text>
+                    <Text style={styles.detailsValue}>
+                      {selectedComplaint.status}
+                    </Text>
+
+                    <Text style={styles.detailsLabel}>Assigned Office</Text>
+                    <Text style={styles.detailsValue}>
+                      {selectedComplaint.assignedOffice}
+                    </Text>
+
+                    <Text style={styles.detailsLabel}>Location</Text>
+                    <Text style={styles.detailsValue}>
+                      {selectedComplaint.location}
+                    </Text>
+
+                    <Text style={styles.detailsLabel}>Date Submitted</Text>
+                    <Text style={styles.detailsValue}>
+                      {selectedComplaint.date}
+                    </Text>
+
+                    <Text style={styles.detailsLabel}>Time Submitted</Text>
+                    <Text style={styles.detailsValue}>
+                      {selectedComplaint.time}
                     </Text>
                   </View>
 
-                  <View style={styles.badgeRow}>
-                    <View
-                      style={[
-                        styles.modalStatusBadge,
-                        { backgroundColor: selectedComplaint.statusBg },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.modalStatusText,
-                          { color: selectedComplaint.statusColor },
-                        ]}
-                      >
-                        {selectedComplaint.status}
-                      </Text>
-                    </View>
+                  <Text style={styles.timelineTitle}>Status Timeline</Text>
 
-                    <View
-                      style={[
-                        styles.modalPriorityBadge,
-                        { backgroundColor: selectedComplaint.priorityBg },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.modalPriorityText,
-                          { color: selectedComplaint.priorityColor },
-                        ]}
-                      >
-                        {selectedComplaint.priority} Priority
-                      </Text>
-                    </View>
+                  <View style={styles.timelineBox}>
+                    {(selectedComplaint.timeline || []).map((step, index) => (
+                      <View key={step.label} style={styles.timelineRow}>
+                        <View style={styles.timelineIndicatorBox}>
+                          <View
+                            style={[
+                              styles.timelineCircle,
+                              step.done && styles.timelineCircleDone,
+                            ]}
+                          >
+                            {step.done && (
+                              <Feather name="check" size={11} color={WHITE} />
+                            )}
+                          </View>
 
-                    <View
-                      style={[
-                        styles.modalConcernBadge,
-                        { backgroundColor: selectedComplaint.concernBg },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.modalConcernText,
-                          { color: selectedComplaint.concernColor },
-                        ]}
-                      >
-                        {selectedComplaint.concernType}
-                      </Text>
-                    </View>
+                          {index !==
+                            (selectedComplaint.timeline || []).length - 1 && (
+                            <View
+                              style={[
+                                styles.timelineLine,
+                                step.done && styles.timelineLineDone,
+                              ]}
+                            />
+                          )}
+                        </View>
+
+                        <View style={styles.timelineTextBox}>
+                          <Text
+                            style={[
+                              styles.timelineStep,
+                              step.done && styles.timelineStepDone,
+                            ]}
+                          >
+                            {step.label}
+                          </Text>
+                          <Text style={styles.timelineTime}>{step.time}</Text>
+                        </View>
+                      </View>
+                    ))}
                   </View>
 
-                  <View style={styles.descriptionBox}>
-                    <Text style={styles.infoLabel}>Description</Text>
-                    <Text style={styles.descriptionText}>
-                      {selectedComplaint.description}
-                    </Text>
-                  </View>
-
-                  <View style={styles.infoCard}>
-                    <View style={styles.infoRow}>
-                      <View style={styles.infoIconCircle}>
-                        <Feather name="tag" size={15} color={GREEN} />
-                      </View>
-
-                      <View style={styles.infoTextBox}>
-                        <Text style={styles.infoLabel}>Category</Text>
-                        <Text style={styles.infoValue}>
-                          {selectedComplaint.category}
-                        </Text>
-                      </View>
+                  {canCitizenSubmitValidation(selectedComplaint) ? (
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={styles.returnedActionButton}
+                      onPress={() => {
+                        closeComplaintDetails();
+                        router.push({
+                          pathname: "/citizen/complaints",
+                          params: {
+                            complaintId:
+                              selectedComplaint.rawId || selectedComplaint.id,
+                            filter: "For Validation",
+                          },
+                        });
+                      }}
+                    >
+                      <Ionicons name="camera-outline" size={18} color={WHITE} />
+                      <Text style={styles.returnedActionText}>
+                        {isValidationResubmit(selectedComplaint)
+                          ? "Submit Validation Again"
+                          : "Provide Feedback & Photo Evidence"}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : selectedComplaint.status === "For Validation" &&
+                    selectedComplaint.validationSubmitted ? (
+                    <View style={styles.validatedNotice}>
+                      <Ionicons
+                        name="checkmark-circle-outline"
+                        size={18}
+                        color={MUTED}
+                      />
+                      <Text style={styles.validatedNoticeText}>
+                        Validated — waiting for admin review
+                      </Text>
                     </View>
-
-                    <View style={styles.infoRow}>
-                      <View style={styles.infoIconCircle}>
-                        <Feather
-                          name={
-                            selectedComplaint.concernType === "Emergency"
-                              ? "alert-triangle"
-                              : "check-circle"
-                          }
-                          size={15}
-                          color={GREEN}
-                        />
-                      </View>
-
-                      <View style={styles.infoTextBox}>
-                        <Text style={styles.infoLabel}>Concern Type</Text>
-                        <Text style={styles.infoValue}>
-                          {selectedComplaint.concernType}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.infoRow}>
-                      <View style={styles.infoIconCircle}>
-                        <Feather name="map-pin" size={15} color={GREEN} />
-                      </View>
-
-                      <View style={styles.infoTextBox}>
-                        <Text style={styles.infoLabel}>Location</Text>
-                        <Text style={styles.infoValue}>
-                          {selectedComplaint.location}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.infoRow}>
-                      <View style={styles.infoIconCircle}>
-                        <Feather name="calendar" size={15} color={GREEN} />
-                      </View>
-
-                      <View style={styles.infoTextBox}>
-                        <Text style={styles.infoLabel}>Date Submitted</Text>
-                        <Text style={styles.infoValue}>
-                          {selectedComplaint.date}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.infoRow}>
-                      <View style={styles.infoIconCircle}>
-                        <Feather name="clock" size={15} color={GREEN} />
-                      </View>
-
-                      <View style={styles.infoTextBox}>
-                        <Text style={styles.infoLabel}>Time Submitted</Text>
-                        <Text style={styles.infoValue}>
-                          {selectedComplaint.time}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.infoRow}>
-                      <View style={styles.infoIconCircle}>
-                        <Feather name="briefcase" size={15} color={GREEN} />
-                      </View>
-
-                      <View style={styles.infoTextBox}>
-                        <Text style={styles.infoLabel}>Assigned Office</Text>
-                        <Text style={styles.infoValue}>
-                          {selectedComplaint.assignedOffice}
-                        </Text>
-                      </View>
-                    </View>
-                  </View>
+                  ) : null}
                 </ScrollView>
               )}
             </View>
+
+            <FullscreenPhotoViewer
+              variant="overlay"
+              visible={photoViewerVisible && complaintModalVisible}
+              uri={selectedPhoto}
+              onClose={closePhotoViewer}
+            />
           </View>
         </Modal>
+
+        <FullscreenPhotoViewer
+          visible={photoViewerVisible && !complaintModalVisible}
+          uri={selectedPhoto}
+          onClose={closePhotoViewer}
+        />
       </View>
     </SafeAreaView>
   );
@@ -1172,7 +1578,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: H_PADDING,
     paddingTop: 0,
-    paddingBottom: 100,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   logoRow: {
@@ -1395,17 +1801,13 @@ const styles = StyleSheet.create({
   },
 
   complaintCard: {
-    minHeight: 96,
     borderWidth: 1,
     borderColor: BORDER,
-    borderRadius: 12,
+    borderRadius: 16,
     backgroundColor: WHITE,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 13,
     marginBottom: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     shadowColor: "#000000",
     shadowOpacity: 0.03,
     shadowRadius: 4,
@@ -1413,16 +1815,98 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
 
+  cardTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 9,
+  },
+
+  complaintImageWrapper: {
+    width: 64,
+    height: 58,
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: "#E8E8E8",
+    marginRight: 10,
+  },
+
+  complaintImage: {
+    width: "100%",
+    height: "100%",
+    resizeMode: "cover",
+  },
+
   complaintInfo: {
     flex: 1,
-    paddingRight: 8,
+  },
+
+  idRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+
+  complaintId: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: 10,
+    color: MUTED,
+  },
+
+  priorityPill: {
+    minWidth: 48,
+    height: 21,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+
+  priorityText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 9.5,
   },
 
   complaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
     color: TEXT,
-    marginBottom: 1,
+    marginTop: 2,
+  },
+
+  categoryConcernRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 3,
+    gap: 6,
+  },
+
+  categoryText: {
+    flex: 1,
+    flexShrink: 1,
+    fontFamily: "Poppins_500Medium",
+    fontSize: 10.5,
+    color: MUTED,
+    paddingRight: 2,
+  },
+
+  concernPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    borderRadius: 11,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    minHeight: 21,
+    flexShrink: 0,
+    maxWidth: "58%",
+    overflow: "hidden",
+  },
+
+  concernText: {
+    flexShrink: 1,
+    fontFamily: "Poppins_700Bold",
+    fontSize: 8.5,
   },
 
   detailRow: {
@@ -1439,25 +1923,39 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
 
-  complaintRight: {
-    width: 145,
+  cardBottomRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    marginTop: 11,
   },
 
   statusBadge: {
-    minWidth: 112,
+    minWidth: 105,
     height: 26,
     borderRadius: 15,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 10,
+    gap: 5,
   },
 
   statusBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.3,
+  },
+
+  viewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+  },
+
+  viewText: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: 11.5,
+    color: GREEN,
   },
 
   bottomNav: {
@@ -1557,132 +2055,172 @@ const styles = StyleSheet.create({
     marginBottom: 13,
   },
 
-  modalTitleSection: {
-    marginBottom: 10,
+  detailsPhotoRow: {
+    gap: 10,
+    paddingRight: 8,
+    marginBottom: 13,
+  },
+
+  detailsGalleryPhoto: {
+    width: 176,
+    height: 165,
+    borderRadius: 16,
+    backgroundColor: "#E8E8E8",
+  },
+
+  detailsValidationPhotosBox: {
+    marginBottom: 8,
   },
 
   complaintDetailsTitle: {
     fontFamily: "Poppins_700Bold",
-    fontSize: 17,
+    fontSize: 16,
     color: TEXT,
   },
 
-  complaintDetailsId: {
-    fontFamily: "Poppins_500Medium",
-    fontSize: 10.5,
-    color: MUTED,
-    marginTop: 1,
-  },
-
-  badgeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    gap: 8,
-    marginBottom: 12,
-  },
-
-  modalStatusBadge: {
-    minWidth: 98,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 10,
-  },
-
-  modalStatusText: {
-    fontFamily: "Poppins_700Bold",
-    fontSize: 10.5,
-  },
-
-  modalPriorityBadge: {
-    minWidth: 105,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 10,
-  },
-
-  modalPriorityText: {
-    fontFamily: "Poppins_700Bold",
-    fontSize: 10.5,
-  },
-
-  modalConcernBadge: {
-    minWidth: 108,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 10,
-  },
-
-  modalConcernText: {
-    fontFamily: "Poppins_700Bold",
-    fontSize: 10.5,
-  },
-
-  descriptionBox: {
-    borderRadius: 14,
-    backgroundColor: BG,
-    borderWidth: 1,
-    borderColor: BORDER,
-    paddingHorizontal: 13,
-    paddingVertical: 11,
-    marginBottom: 12,
-  },
-
-  descriptionText: {
+  detailsDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
     color: "#333333",
     lineHeight: 18,
-    marginTop: 3,
+    marginTop: 5,
+    marginBottom: 12,
   },
 
-  infoCard: {
+  detailsInfoCard: {
     borderRadius: 14,
-    backgroundColor: WHITE,
     borderWidth: 1,
     borderColor: BORDER,
+    backgroundColor: BG,
     paddingHorizontal: 13,
     paddingVertical: 12,
     marginBottom: 14,
   },
 
-  infoRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    marginBottom: 12,
-  },
-
-  infoIconCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: LIGHT_GREEN,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
-  },
-
-  infoTextBox: {
-    flex: 1,
-  },
-
-  infoLabel: {
+  detailsLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
     color: GREEN,
+    marginTop: 8,
   },
 
-  infoValue: {
+  detailsValue: {
     fontFamily: "Poppins_400Regular",
-    fontSize: 11.5,
+    fontSize: 12,
     color: TEXT,
-    lineHeight: 16,
+    marginTop: 2,
+  },
+
+  timelineTitle: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 14,
+    color: TEXT,
+    marginBottom: 10,
+  },
+
+  timelineBox: {
+    marginBottom: 14,
+  },
+
+  timelineRow: {
+    flexDirection: "row",
+    minHeight: 46,
+  },
+
+  timelineIndicatorBox: {
+    width: 22,
+    alignItems: "center",
+    marginRight: 10,
+  },
+
+  timelineCircle: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: BORDER,
+    backgroundColor: WHITE,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  timelineCircleDone: {
+    backgroundColor: GREEN,
+    borderColor: GREEN,
+  },
+
+  timelineLine: {
+    width: 2,
+    flex: 1,
+    backgroundColor: BORDER,
+    marginTop: 3,
+    marginBottom: 3,
+  },
+
+  timelineLineDone: {
+    backgroundColor: GREEN,
+  },
+
+  timelineTextBox: {
+    flex: 1,
+    paddingBottom: 12,
+  },
+
+  timelineStep: {
+    fontFamily: "Poppins_500Medium",
+    fontSize: 12,
+    color: MUTED,
+  },
+
+  timelineStepDone: {
+    color: TEXT,
+    fontFamily: "Poppins_600SemiBold",
+  },
+
+  timelineTime: {
+    fontFamily: "Poppins_400Regular",
+    fontSize: 10.5,
+    color: MUTED,
     marginTop: 1,
+  },
+
+  returnedActionButton: {
+    marginTop: 4,
+    marginBottom: 8,
+    backgroundColor: GREEN,
+    borderRadius: 12,
+    minHeight: 46,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+
+  returnedActionText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 13,
+    color: WHITE,
+  },
+
+  validatedNotice: {
+    marginTop: 4,
+    marginBottom: 8,
+    backgroundColor: BG,
+    borderRadius: 12,
+    minHeight: 46,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+
+  validatedNoticeText: {
+    fontFamily: "Poppins_600SemiBold",
+    fontSize: 12,
+    color: MUTED,
   },
 });
