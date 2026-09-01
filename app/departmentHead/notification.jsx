@@ -1,4 +1,5 @@
-import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -10,7 +11,6 @@ import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   Platform,
   RefreshControl,
@@ -22,8 +22,22 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { NotificationListSkeleton, PageSkeleton } from "../../components/skeletons";
+import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
+import {
+  buildNotificationPageQuery,
+  computeNotificationHasMore,
+  getNotificationCacheKey,
+  getNotificationPageSize,
+  isNearContentBottom,
+  mergeNotificationPages,
+} from "../../lib/notificationPagination";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { writeAuditLog } from "../../lib/auditLogService";
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const GREEN = "#087A0D";
 const LIGHT_GREEN = "#EAF6E4";
@@ -35,9 +49,9 @@ const BORDER = "#E2E7E0";
 const RED = "#D71920";
 const BLUE = "#315A9A";
 const ORANGE = "#F4A24C";
-const YELLOW = "#A97700";
 
 const H_PADDING = 20;
+const DEPT_NOTIFICATIONS_CACHE_KEY = "departmentHead.notifications";
 
 const filterOptions = [
   "All",
@@ -202,16 +216,16 @@ function getNotificationStyle(type, status) {
 
   if (displayType === "Returned") {
     return {
-      bg: "#FFF2E8",
-      color: ORANGE,
-      icon: "alert-circle-outline",
+      bg: "#FFF0F0",
+      color: RED,
+      icon: "arrow-u-left-top",
     };
   }
 
   if (displayType === "Validation") {
     return {
-      bg: "#FFF2C2",
-      color: YELLOW,
+      bg: "#F3EAFF",
+      color: "#7A3EA8",
       icon: "clipboard-check-outline",
     };
   }
@@ -250,6 +264,9 @@ function mapNotification(row) {
     location:
       row.location_text || metadata.location_text || "Pinned location not available",
     status: row.status || metadata.new_status || "Update",
+    returnReason: metadata.return_reason || "",
+    citizenFeedback: metadata.citizen_feedback || "",
+    citizenValidationAnswer: metadata.citizen_validation_answer || "",
     date: formatDate(row.created_at),
     time: formatTime(row.created_at),
     unread: row.is_read === false,
@@ -269,20 +286,42 @@ export default function DepartmentHeadNotification() {
     resetUnreadNotificationCount,
   } = useDepartmentHeadUnreadNotifications();
 
-  const [notifications, setNotifications] = useState([]);
+  const cachedNotifications = getPageCache(DEPT_NOTIFICATIONS_CACHE_KEY);
+  const [notifications, setNotifications] = useState(
+    cachedNotifications?.notifications ?? []
+  );
+  const [notificationsTotal, setNotificationsTotal] = useState(
+    cachedNotifications?.notificationsTotal ??
+      cachedNotifications?.notifications?.length ??
+      0
+  );
   const [selectedFilter, setSelectedFilter] = useState("All");
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [detailsVisible, setDetailsVisible] = useState(false);
-  const [currentDepartmentHeadId, setCurrentDepartmentHeadId] = useState(null);
-  const [loadingNotifications, setLoadingNotifications] = useState(true);
+  const [currentDepartmentHeadId, setCurrentDepartmentHeadId] = useState(
+    cachedNotifications?.currentDepartmentHeadId ?? null
+  );
+  const [loadingNotifications, setLoadingNotifications] = useState(
+    !cachedNotifications
+  );
+  const [loadingMoreNotifications, setLoadingMoreNotifications] = useState(false);
+  const [hasMoreNotifications, setHasMoreNotifications] = useState(
+    cachedNotifications?.hasMore !== false
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [markingAllRead, setMarkingAllRead] = useState(false);
+
+  useHideBottomNav(detailsVisible);
 
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
   const notificationChannelRef = useRef(null);
   const loadNotificationsRef = useRef(null);
   const reloadUnreadRef = useRef(null);
+  const notificationsDataRef = useRef(cachedNotifications?.notifications ?? []);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(cachedNotifications?.hasMore !== false);
+  const listViewportHeightRef = useRef(0);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -320,9 +359,48 @@ export default function DepartmentHeadNotification() {
     };
   }, []);
 
-  const loadNotifications = useCallback(async (showLoader = true) => {
+  useEffect(() => {
+    notificationsDataRef.current = notifications;
+  }, [notifications]);
+
+  const loadNotifications = useCallback(async (options = {}) => {
+    const normalized =
+      typeof options === "boolean" ? { showLoader: options } : options;
+    const append = normalized.append === true;
+    const cacheKey = getNotificationCacheKey(
+      DEPT_NOTIFICATIONS_CACHE_KEY,
+      selectedFilter
+    );
+    const cached = !append ? getPageCache(cacheKey) : null;
+
+    if (!append && cached) {
+      setNotifications(cached.notifications ?? []);
+      setNotificationsTotal(
+        cached.notificationsTotal ?? cached.notifications?.length ?? 0
+      );
+      hasMoreRef.current = cached.hasMore !== false;
+      setHasMoreNotifications(cached.hasMore !== false);
+    }
+
+    const showLoader =
+      normalized.showLoader ??
+      (!append && shouldShowPageLoader(cacheKey));
+
+    if (append) {
+      if (loadingMoreRef.current || !hasMoreRef.current) {
+        return;
+      }
+
+      loadingMoreRef.current = true;
+      setLoadingMoreNotifications(true);
+    } else {
+      hasMoreRef.current = cached?.hasMore !== false;
+    }
+
     try {
-      if (showLoader) setLoadingNotifications(true);
+      if (showLoader) {
+        setLoadingNotifications(true);
+      }
 
       const {
         data: { user },
@@ -330,34 +408,106 @@ export default function DepartmentHeadNotification() {
       } = await supabase.auth.getUser();
 
       if (userError || !user?.id) {
-        setCurrentDepartmentHeadId(null);
-        setNotifications([]);
+        if (!cached) {
+          setCurrentDepartmentHeadId(null);
+          setNotifications([]);
+          setNotificationsTotal(0);
+          hasMoreRef.current = false;
+          setHasMoreNotifications(false);
+        }
         return;
       }
 
       setCurrentDepartmentHeadId(user.id);
 
-      const { data, error } = await supabase
-        .from("moderator_notifications")
-        .select("*")
-        .eq("moderator_id", user.id)
-        .order("created_at", { ascending: false });
+      const offset = append ? notificationsDataRef.current.length : 0;
+      const pageSize = getNotificationPageSize(
+        append,
+        cached?.notifications?.length || 0
+      );
+
+      const { data, error, count } = await buildNotificationPageQuery(supabase, {
+        role: "departmentHead",
+        ownerId: user.id,
+        offset,
+        pageSize,
+        selectedFilter,
+      });
 
       if (error) {
         console.log("Load department head notifications error:", error);
-        setNotifications([]);
+        if (!cached) {
+          setNotifications([]);
+          setNotificationsTotal(0);
+          hasMoreRef.current = false;
+          setHasMoreNotifications(false);
+        }
         return;
       }
 
-      setNotifications((data || []).map(mapNotification));
+      const mapped = (data || []).map(mapNotification);
+      const nextNotifications = append
+        ? mergeNotificationPages(
+            notificationsDataRef.current,
+            mapped,
+            (item) => item.id
+          )
+        : mapped;
+
+      const total = count ?? nextNotifications.length;
+      const loadedCount = nextNotifications.length;
+      const hasMore = computeNotificationHasMore(mapped, loadedCount, total);
+
+      setNotifications(nextNotifications);
+      setNotificationsTotal(total);
+      hasMoreRef.current = hasMore;
+      setHasMoreNotifications(hasMore);
+      setPageCache(cacheKey, {
+        notifications: nextNotifications,
+        notificationsTotal: total,
+        hasMore,
+        currentDepartmentHeadId: user.id,
+        selectedFilter,
+      });
     } catch (error) {
       console.log("Load moderator notifications catch error:", error);
-      setNotifications([]);
+      if (!cached) {
+        setNotifications([]);
+        setNotificationsTotal(0);
+        hasMoreRef.current = false;
+        setHasMoreNotifications(false);
+      }
     } finally {
-      if (showLoader) setLoadingNotifications(false);
+      if (append) {
+        loadingMoreRef.current = false;
+        setLoadingMoreNotifications(false);
+      }
+      setLoadingNotifications(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [selectedFilter]);
+
+  const loadMoreNotifications = useCallback(() => {
+    loadNotifications({ append: true, showLoader: false });
+  }, [loadNotifications]);
+
+  const handleNotificationsScroll = ({ nativeEvent }) => {
+    if (isNearContentBottom(nativeEvent)) {
+      loadMoreNotifications();
+    }
+  };
+
+  const maybeFillViewport = (contentHeight) => {
+    if (
+      hasMoreRef.current &&
+      !loadingMoreRef.current &&
+      !loadingNotifications &&
+      listViewportHeightRef.current > 0 &&
+      contentHeight < listViewportHeightRef.current + 80
+    ) {
+      loadMoreNotifications();
+    }
+  };
 
   useEffect(() => {
     loadNotificationsRef.current = loadNotifications;
@@ -506,7 +656,7 @@ export default function DepartmentHeadNotification() {
         .eq("is_read", false);
 
       if (error) {
-        Alert.alert("Update Failed", error.message);
+        notify("Update Failed", error.message);
         loadNotifications(false);
         reloadUnreadNotificationCount?.();
         return;
@@ -514,9 +664,15 @@ export default function DepartmentHeadNotification() {
 
       await reloadUnreadNotificationCount?.();
       await loadNotifications(false);
+      writeAuditLog({
+        action: "notifications_read",
+        title: "Notifications Marked as Read",
+        description: "All department head notifications were marked as read.",
+        actorRole: "moderator",
+      });
     } catch (error) {
       console.log("Mark all moderator notifications read error:", error);
-      Alert.alert("Update Failed", "Unable to mark notifications as read.");
+      notify("Update Failed", "Unable to mark notifications as read.");
       loadNotifications(false);
       reloadUnreadNotificationCount?.();
     } finally {
@@ -556,12 +712,8 @@ export default function DepartmentHeadNotification() {
     });
   };
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  if (!fontsLoaded && !cachedNotifications) {
+    return <PageSkeleton variant="notifications" />;
   }
 
   return (
@@ -569,18 +721,7 @@ export default function DepartmentHeadNotification() {
       <StatusBar barStyle="dark-content" backgroundColor={BG} />
 
       <View style={styles.mainContainer}>
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={GREEN}
-              colors={[GREEN]}
-            />
-          }
-          contentContainerStyle={styles.scrollContent}
-        >
+        <View style={styles.stickyHeader}>
           <View style={styles.headerTopRow}>
             <Text style={styles.headerTitle}>Notifications</Text>
 
@@ -602,6 +743,7 @@ export default function DepartmentHeadNotification() {
 
           <ScrollView
             horizontal
+            nestedScrollEnabled
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.filterScrollContent}
           >
@@ -630,13 +772,30 @@ export default function DepartmentHeadNotification() {
               );
             })}
           </ScrollView>
+        </View>
 
+        <ScrollView
+          style={styles.listScroll}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={GREEN}
+              colors={[GREEN]}
+            />
+          }
+          contentContainerStyle={styles.scrollContent}
+          scrollEventThrottle={16}
+          onScroll={handleNotificationsScroll}
+          onLayout={(event) => {
+            listViewportHeightRef.current = event.nativeEvent.layout.height;
+          }}
+          onContentSizeChange={(_, height) => maybeFillViewport(height)}
+        >
           <View style={styles.notificationList}>
-            {loadingNotifications ? (
-              <View style={styles.emptyCard}>
-                <ActivityIndicator size="large" color={GREEN} />
-                <Text style={styles.emptyTitle}>Loading notifications...</Text>
-              </View>
+            {loadingNotifications && notifications.length === 0 ? (
+              <NotificationListSkeleton count={5} />
             ) : filteredNotifications.length === 0 ? (
               <View style={styles.emptyCard}>
                 <Ionicons
@@ -685,7 +844,7 @@ export default function DepartmentHeadNotification() {
                         {item.unread && <View style={styles.unreadDot} />}
                       </View>
 
-                      <Text style={styles.notificationMessage} numberOfLines={2}>
+                      <Text style={styles.notificationMessage} numberOfLines={item.returnReason ? 3 : 2}>
                         {item.message}
                       </Text>
 
@@ -720,9 +879,12 @@ export default function DepartmentHeadNotification() {
                 );
               })
             )}
+            <ComplaintsLoadMoreFooter
+              loading={loadingMoreNotifications}
+              label="Loading more notifications..."
+            />
           </View>
         </ScrollView>
-
 
         <Modal
           visible={detailsVisible}
@@ -778,6 +940,15 @@ export default function DepartmentHeadNotification() {
                       {selectedNotification.message}
                     </Text>
                   </View>
+
+                  {selectedNotification.citizenFeedback ? (
+                    <View style={styles.citizenFeedbackBox}>
+                      <Text style={styles.infoLabel}>Citizen Feedback</Text>
+                      <Text style={styles.messageText}>
+                        {selectedNotification.citizenFeedback}
+                      </Text>
+                    </View>
+                  ) : null}
 
                   <View style={styles.complaintInfoCard}>
                     <Text style={styles.sectionTitle}>Complaint Information</Text>
@@ -850,6 +1021,20 @@ const styles = StyleSheet.create({
     backgroundColor: BG,
   },
 
+  stickyHeader: {
+    backgroundColor: BG,
+    paddingHorizontal: H_PADDING,
+    paddingTop: 4,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+    zIndex: 2,
+  },
+
+  listScroll: {
+    flex: 1,
+  },
+
   loader: {
     flex: 1,
     backgroundColor: BG,
@@ -859,12 +1044,12 @@ const styles = StyleSheet.create({
 
   scrollContent: {
     paddingHorizontal: H_PADDING,
-    paddingTop: 4,
-    paddingBottom: 116,
+    paddingTop: 12,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   headerTopRow: {
-    marginBottom: 14,
+    marginBottom: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -898,7 +1083,6 @@ const styles = StyleSheet.create({
   filterScrollContent: {
     gap: 8,
     paddingRight: 10,
-    marginBottom: 13,
   },
 
   filterChip: {
@@ -996,7 +1180,7 @@ const styles = StyleSheet.create({
   complaintTitleText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.2,
-    color: GREEN,
+    color: TEXT,
     marginTop: 4,
   },
 
@@ -1220,6 +1404,16 @@ const styles = StyleSheet.create({
     color: "#333333",
     lineHeight: 18,
     marginTop: 3,
+  },
+
+  citizenFeedbackBox: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: BG,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    marginBottom: 12,
   },
 
   complaintInfoCard: {
