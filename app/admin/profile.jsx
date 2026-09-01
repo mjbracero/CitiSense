@@ -1,4 +1,5 @@
-import { Feather, Ionicons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -12,10 +13,8 @@ import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Keyboard,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -29,7 +28,14 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import AuditLogsModal from "../../components/AuditLogsModal";
+import { PageSkeleton } from "../../components/skeletons";
+import { writeAuditLog } from "../../lib/auditLogService";
+import { clearPageCache, getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { setProfileAvatarUrl } from "../../lib/profileAvatarStore";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
 import {
   loadPushEnabled,
   registerDevicePushToken,
@@ -37,6 +43,7 @@ import {
   updatePushEnabled,
 } from "../../lib/pushNotifications";
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const GREEN = "#087A0D";
 const LIGHT_GREEN = "#EAF6E4";
@@ -51,6 +58,7 @@ const BLUE = "#315A9A";
 
 const H_PADDING = 20;
 const AVATAR_BUCKET = "avatars";
+const ADMIN_PROFILE_CACHE_KEY = "admin.profile";
 
 const MAIN_LOGO = require("../../assets/images/mainlogo.png");
 
@@ -195,15 +203,21 @@ export default function AdminProfile() {
   const pathname = usePathname();
   const { unreadNotificationCount } = useAdminUnreadNotifications();
 
-  const [user, setUser] = useState(null);
-  const [profileInfo, setProfileInfo] = useState(cachedAdminProfile);
-  const [loadingUser, setLoadingUser] = useState(true);
+  const cachedPage = getPageCache(ADMIN_PROFILE_CACHE_KEY);
+  const [user, setUser] = useState(cachedPage?.user ?? null);
+  const [profileInfo, setProfileInfo] = useState(
+    cachedPage?.profileInfo ?? cachedAdminProfile
+  );
+  const [loadingUser, setLoadingUser] = useState(!cachedPage);
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
 
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
+  const [auditLogsVisible, setAuditLogsVisible] = useState(false);
+
+  useHideBottomNav(editModalVisible || passwordModalVisible);
 
   const [fullNameDraft, setFullNameDraft] = useState("");
   const [emailDraft, setEmailDraft] = useState("");
@@ -214,8 +228,9 @@ export default function AdminProfile() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
-  const [pushEnabled, setPushEnabled] = useState(true);
-  const [emailAlertsEnabled, setEmailAlertsEnabled] = useState(true);
+  const [pushEnabled, setPushEnabled] = useState(
+    cachedPage?.pushEnabled ?? true
+  );
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -234,7 +249,9 @@ export default function AdminProfile() {
 
   const loadUser = useCallback(async () => {
     try {
-      setLoadingUser(true);
+      if (shouldShowPageLoader(ADMIN_PROFILE_CACHE_KEY)) {
+        setLoadingUser(true);
+      }
 
       const {
         data: { user: currentUser },
@@ -242,7 +259,9 @@ export default function AdminProfile() {
       } = await supabase.auth.getUser();
 
       if (error || !currentUser) {
-        setUser(null);
+        if (shouldShowPageLoader(ADMIN_PROFILE_CACHE_KEY)) {
+          setUser(null);
+        }
         return;
       }
 
@@ -297,17 +316,45 @@ export default function AdminProfile() {
         rawAvatarValue: rawAvatarValue || null,
       };
 
+      if (
+        currentUser.id &&
+        !normalizeSpace(profileRow?.department) &&
+        nextProfileInfo.office
+      ) {
+        supabase
+          .from("profiles")
+          .update({ department: nextProfileInfo.office })
+          .eq("id", currentUser.id)
+          .then(({ error: officeError }) => {
+            if (officeError) {
+              console.log("Auto-set admin office error:", officeError);
+            }
+          });
+      }
+
       cachedAdminProfile = nextProfileInfo;
       setProfileInfo(nextProfileInfo);
       setUser(currentUser);
+      if (readableAvatarUrl) {
+        setProfileAvatarUrl(readableAvatarUrl);
+      }
 
+      let enabled = getPageCache(ADMIN_PROFILE_CACHE_KEY)?.pushEnabled ?? true;
       if (currentUser?.id) {
-        const enabled = await loadPushEnabled(currentUser.id);
+        enabled = await loadPushEnabled(currentUser.id);
         setPushEnabled(enabled);
       }
+
+      setPageCache(ADMIN_PROFILE_CACHE_KEY, {
+        user: currentUser,
+        profileInfo: nextProfileInfo,
+        pushEnabled: enabled,
+      });
     } catch (error) {
       console.log("Load admin profile error:", error);
-      setUser(null);
+      if (shouldShowPageLoader(ADMIN_PROFILE_CACHE_KEY)) {
+        setUser(null);
+      }
     } finally {
       setLoadingUser(false);
     }
@@ -325,10 +372,8 @@ export default function AdminProfile() {
     setFullNameDraft(displayName === DEFAULT_ADMIN_PROFILE.fullName ? "" : displayName);
     setEmailDraft(displayEmail === DEFAULT_ADMIN_PROFILE.email ? "" : displayEmail);
     setContactDraft(displayContact === DEFAULT_ADMIN_PROFILE.contact ? "" : displayContact);
-    setOfficeDraft(displayOffice === DEFAULT_ADMIN_PROFILE.office ? "" : displayOffice);
-    setLocationDraft(
-      displayLocation === DEFAULT_ADMIN_PROFILE.location ? "" : displayLocation
-    );
+    setOfficeDraft(displayOffice || DEFAULT_ADMIN_PROFILE.office);
+    setLocationDraft(displayLocation || DEFAULT_ADMIN_PROFILE.location);
     setEditModalVisible(true);
   };
 
@@ -368,14 +413,14 @@ export default function AdminProfile() {
   const pickProfilePhoto = async () => {
     try {
       if (!user?.id) {
-        Alert.alert("Account Required", "Please sign in again.");
+        notify("Account Required", "Please sign in again.");
         return;
       }
 
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (permission.status !== "granted") {
-        Alert.alert(
+        notify(
           "Permission Needed",
           "Please allow photo access so you can change your profile picture."
         );
@@ -395,7 +440,7 @@ export default function AdminProfile() {
       const asset = result.assets[0];
 
       if (!asset.base64) {
-        Alert.alert(
+        notify(
           "Upload Failed",
           "The selected image could not be prepared for upload. Please choose another photo."
         );
@@ -417,7 +462,7 @@ export default function AdminProfile() {
         });
 
       if (uploadError) {
-        Alert.alert(
+        notify(
           "Upload Failed",
           "Please make sure the Supabase Storage bucket named avatars exists and has the correct upload policies."
         );
@@ -441,7 +486,7 @@ export default function AdminProfile() {
       });
 
       if (error) {
-        Alert.alert("Update Failed", error.message);
+        notify("Update Failed", error.message);
         return;
       }
 
@@ -464,11 +509,18 @@ export default function AdminProfile() {
       cachedAdminProfile = nextProfileInfo;
       setProfileInfo(nextProfileInfo);
       setUser(data?.user || user);
+      setProfileAvatarUrl(readableAvatarUrl);
 
-      Alert.alert("Profile Picture Updated", "Your admin picture has been changed.");
+      notify("Profile Picture Updated", "Your admin picture has been changed.");
+      await writeAuditLog({
+        action: "avatar_update",
+        title: "Profile Picture Updated",
+        description: "Admin profile picture was changed.",
+        actorRole: "admin",
+      });
     } catch (error) {
       console.log("Admin avatar upload error:", error);
-      Alert.alert("Upload Failed", "Unable to update your profile picture.");
+      notify("Upload Failed", "Unable to update your profile picture.");
     } finally {
       setUploadingAvatar(false);
     }
@@ -478,16 +530,22 @@ export default function AdminProfile() {
     const cleanName = normalizeSpace(fullNameDraft);
     const cleanEmail = normalizeSpace(emailDraft);
     const cleanContact = normalizeSpace(contactDraft);
-    const cleanOffice = normalizeSpace(officeDraft);
-    const cleanLocation = normalizeSpace(locationDraft);
+    const cleanOffice =
+      normalizeSpace(officeDraft) ||
+      displayOffice ||
+      DEFAULT_ADMIN_PROFILE.office;
+    const cleanLocation =
+      normalizeSpace(locationDraft) ||
+      displayLocation ||
+      DEFAULT_ADMIN_PROFILE.location;
 
     if (!cleanName) {
-      Alert.alert("Name Required", "Please enter your full name.");
+      notify("Name Required", "Please enter your full name.");
       return;
     }
 
     if (!cleanEmail) {
-      Alert.alert("Email Required", "Please enter your email address.");
+      notify("Email Required", "Please enter your email address.");
       return;
     }
 
@@ -509,7 +567,7 @@ export default function AdminProfile() {
       });
 
       if (error) {
-        Alert.alert("Update Failed", error.message);
+        notify("Update Failed", error.message);
         return;
       }
 
@@ -530,17 +588,25 @@ export default function AdminProfile() {
         });
 
         if (emailError) {
-          Alert.alert("Email Update Failed", emailError.message);
+          notify("Email Update Failed", emailError.message);
           return;
         }
 
-        Alert.alert(
+        notify(
           "Confirm New Email",
           "We sent a confirmation link to your new email address. Please confirm it before the email change becomes complete."
         );
       } else {
-        Alert.alert("Profile Updated", "Your admin information was saved.");
+        notify("Profile Updated", "Your admin information was saved.");
       }
+
+      await writeAuditLog({
+        action: "profile_update",
+        title: "Profile Updated",
+        description: "Admin account information was updated.",
+        actorRole: "admin",
+        actorName: cleanName,
+      });
 
       const nextProfileInfo = {
         fullName: cleanName,
@@ -560,7 +626,7 @@ export default function AdminProfile() {
       loadUser();
     } catch (error) {
       console.log("Save admin profile error:", error);
-      Alert.alert("Update Failed", "Unable to save your profile changes.");
+      notify("Update Failed", "Unable to save your profile changes.");
     } finally {
       setSavingProfile(false);
     }
@@ -568,12 +634,12 @@ export default function AdminProfile() {
 
   const handleChangePassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
-      Alert.alert("Password Required", "Please enter and confirm your password.");
+      notify("Password Required", "Please enter and confirm your password.");
       return;
     }
 
     if (newPassword.length < 6) {
-      Alert.alert(
+      notify(
         "Weak Password",
         "Your new password must be at least 6 characters."
       );
@@ -581,7 +647,7 @@ export default function AdminProfile() {
     }
 
     if (newPassword !== confirmPassword) {
-      Alert.alert("Password Mismatch", "Your passwords do not match.");
+      notify("Password Mismatch", "Your passwords do not match.");
       return;
     }
 
@@ -593,18 +659,25 @@ export default function AdminProfile() {
       });
 
       if (error) {
-        Alert.alert("Password Update Failed", error.message);
+        notify("Password Update Failed", error.message);
         return;
       }
 
-      Alert.alert(
+      notify(
         "Password Changed",
         "Your password has been updated successfully."
       );
 
+      await writeAuditLog({
+        action: "password_change",
+        title: "Password Changed",
+        description: "Admin account password was updated.",
+        actorRole: "admin",
+      });
+
       closePasswordModal();
     } catch {
-      Alert.alert("Password Update Failed", "Unable to change your password.");
+      notify("Password Update Failed", "Unable to change your password.");
     } finally {
       setChangingPassword(false);
     }
@@ -619,7 +692,7 @@ export default function AdminProfile() {
     const { error } = await updatePushEnabled(user.id, value);
 
     if (error) {
-      Alert.alert(
+      notify(
         "Push Notifications",
         "Unable to update push notification preference."
       );
@@ -628,13 +701,22 @@ export default function AdminProfile() {
 
     setPushEnabled(value);
 
+    writeAuditLog({
+      action: "push_preference",
+      title: value ? "Push Notifications Enabled" : "Push Notifications Disabled",
+      description: value
+        ? "Push notifications were turned on."
+        : "Push notifications were turned off.",
+      actorRole: "admin",
+    });
+
     if (value) {
       await registerDevicePushToken(user.id);
     }
   };
 
   const handlePrivacy = () => {
-    Alert.alert(
+    notify(
       "Privacy & Security",
       "CitiSense protects admin accounts by allowing only authorized users to access complaint records, analytics, notifications, and system management tools.\n\n" +
         "Your admin account information is used for identification, access control, and LGU system activity tracking.\n\n" +
@@ -643,7 +725,7 @@ export default function AdminProfile() {
   };
 
   const handleLogout = () => {
-    Alert.alert("Log Out", "Are you sure you want to log out?", [
+    notify("Log Out", "Are you sure you want to log out?", [
       {
         text: "Cancel",
         style: "cancel",
@@ -652,13 +734,21 @@ export default function AdminProfile() {
         text: "Log Out",
         style: "destructive",
         onPress: async () => {
+          await writeAuditLog({
+            action: "logout",
+            title: "Signed Out",
+            description: "Admin signed out of CitiSense.",
+            actorRole: "admin",
+          });
           await removePushTokensForUser(user?.id);
           const { error } = await supabase.auth.signOut();
 
           if (error) {
-            Alert.alert("Logout Failed", error.message);
+            notify("Logout Failed", error.message);
             return;
           }
+
+          clearPageCache();
 
           setUser(null);
           router.replace("/auth/login");
@@ -668,11 +758,7 @@ export default function AdminProfile() {
   };
 
   if (!fontsLoaded || loadingUser) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+    return <PageSkeleton variant="profile" />;
   }
 
   return (
@@ -779,14 +865,6 @@ export default function AdminProfile() {
                 description="Receive complaint and system updates."
                 value={pushEnabled}
                 onValueChange={handlePushToggle}
-              />
-
-              <SwitchRow
-                icon="mail"
-                label="Email Alerts"
-                description="Receive important alerts through email."
-                value={emailAlertsEnabled}
-                onValueChange={setEmailAlertsEnabled}
                 last
               />
             </View>
@@ -802,6 +880,14 @@ export default function AdminProfile() {
                 title="Change Password"
                 subtitle="Update your admin account password."
                 onPress={() => setPasswordModalVisible(true)}
+              />
+
+              <ActionRow
+                icon="activity"
+                iconColor={BLUE}
+                title="Audit Logs"
+                subtitle="Review account and system activity."
+                onPress={() => setAuditLogsVisible(true)}
               />
 
               <ActionRow
@@ -825,7 +911,6 @@ export default function AdminProfile() {
           </TouchableOpacity>
         </ScrollView>
 
-
         <Modal
           visible={editModalVisible}
           animationType="slide"
@@ -834,10 +919,6 @@ export default function AdminProfile() {
         >
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <View style={styles.modalOverlay}>
-              <KeyboardAvoidingView
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
-                style={styles.keyboardView}
-              >
                 <View style={styles.editSheet}>
                   <View style={styles.modalHandle} />
 
@@ -853,9 +934,9 @@ export default function AdminProfile() {
                     </TouchableOpacity>
                   </View>
 
-                  <ScrollView
+                  <KeyboardAwareScrollView
+                    modal
                     showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="handled"
                     contentContainerStyle={styles.modalScrollContent}
                   >
                     <Text style={styles.inputLabel}>Full Name</Text>
@@ -918,9 +999,8 @@ export default function AdminProfile() {
                         <Text style={styles.saveButtonText}>Save Changes</Text>
                       )}
                     </TouchableOpacity>
-                  </ScrollView>
+                  </KeyboardAwareScrollView>
                 </View>
-              </KeyboardAvoidingView>
             </View>
           </TouchableWithoutFeedback>
         </Modal>
@@ -933,10 +1013,6 @@ export default function AdminProfile() {
         >
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <View style={styles.modalOverlay}>
-              <KeyboardAvoidingView
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
-                style={styles.keyboardView}
-              >
                 <View style={styles.passwordSheet}>
                   <View style={styles.modalHandle} />
 
@@ -952,6 +1028,11 @@ export default function AdminProfile() {
                     </TouchableOpacity>
                   </View>
 
+                  <KeyboardAwareScrollView
+                    modal
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.modalScrollContent}
+                  >
                   <Text style={styles.inputLabel}>New Password</Text>
                   <TextInput
                     style={styles.input}
@@ -984,11 +1065,16 @@ export default function AdminProfile() {
                       <Text style={styles.saveButtonText}>Update Password</Text>
                     )}
                   </TouchableOpacity>
+                  </KeyboardAwareScrollView>
                 </View>
-              </KeyboardAvoidingView>
             </View>
           </TouchableWithoutFeedback>
         </Modal>
+
+        <AuditLogsModal
+          visible={auditLogsVisible}
+          onClose={() => setAuditLogsVisible(false)}
+        />
       </View>
     </SafeAreaView>
   );
@@ -1112,7 +1198,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: H_PADDING,
     paddingTop: 0,
-    paddingBottom: 116,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   profileHeroCard: {
