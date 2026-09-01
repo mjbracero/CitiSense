@@ -1,27 +1,30 @@
-import { useState, useEffect, useRef } from "react";
+import {
+  useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
-  Image,
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Alert,
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import {
-  Ionicons,
-  MaterialCommunityIcons,
-  FontAwesome5,
-} from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
+import Animated, { FadeIn, FadeInDown, FadeInUp } from "react-native-reanimated";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
 import { markPasswordRecoveryActive } from "../../lib/passwordReset";
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
+import {
+  AuthLogoStage,
+  AuthScreenBackground,
+  AUTH_BG_TOP,
+  AUTH_GREEN,
+} from "../../components/AuthScreenChrome";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import { writeAuditLog } from "../../lib/auditLogService";
+import { setPageCacheUser } from "../../lib/pageDataCache";
 
 import {
   useFonts,
@@ -31,20 +34,17 @@ import {
   Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
 
-const logo = require("../../assets/images/logowname.png");
-
 export default function LoginScreen() {
   const router = useRouter();
   const { confirmed } = useLocalSearchParams();
   const shownEmailConfirmedRef = useRef(false);
 
-  const [selectedRole, setSelectedRole] = useState("citizen");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const [fontsLoaded] = useFonts({
+  useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
     Poppins_600SemiBold,
@@ -54,42 +54,16 @@ export default function LoginScreen() {
   useEffect(() => {
     if (confirmed === "1" && !shownEmailConfirmedRef.current) {
       shownEmailConfirmedRef.current = true;
-      Alert.alert(
+      notify(
         "Email confirmed",
         "Your email is verified. Please log in with your password."
       );
     }
   }, [confirmed]);
 
-  if (!fontsLoaded) return null;
-
-  const roles = [
-    {
-      id: "citizen",
-      label: "Citizen",
-      icon: ({ size, color }) => (
-        <Ionicons name="people" size={size} color={color} />
-      ),
-    },
-    {
-      id: "departmentHead",
-      label: "Department Head",
-      icon: ({ size, color }) => (
-        <MaterialCommunityIcons name="account-check" size={size} color={color} />
-      ),
-    },
-    {
-      id: "admin",
-      label: "Admin",
-      icon: ({ size, color }) => (
-        <FontAwesome5 name="user-shield" size={size} color={color} />
-      ),
-    },
-  ];
-
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
-      Alert.alert("Missing fields", "Please enter email and password.");
+      notify("Missing fields", "Please enter email and password.");
       return;
     }
 
@@ -106,61 +80,84 @@ export default function LoginScreen() {
 
       if (authError) {
         console.log("Supabase auth error:", authError);
-        Alert.alert("Login failed", authError.message);
+
+        if (/ban/i.test(authError.message || "")) {
+          notify(
+            "Account banned",
+            "This account has been banned by an administrator."
+          );
+          return;
+        }
+
+        notify("Login failed", authError.message);
         return;
       }
 
       if (!authData?.user?.id) {
-        Alert.alert("Login failed", "User account was not found.");
+        notify("Login failed", "User account was not found.");
         return;
       }
 
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
-        .select("id, role, email")
+        .select("id, role, email, banned_at")
         .eq("id", authData.user.id)
         .single();
 
       if (profileError) {
         console.log("Profile fetch error:", profileError);
-        Alert.alert("Login failed", profileError.message);
+        notify("Login failed", profileError.message);
         return;
       }
 
       if (!profile) {
-        Alert.alert("Login failed", "User profile not found.");
+        notify("Login failed", "User profile not found.");
         return;
       }
 
-      if (profile.role !== selectedRole && !(selectedRole === "departmentHead" && profile.role === "moderator")) {
-        const displayRole =
-          profile.role === "moderator" ? "department head" : profile.role;
-
-        Alert.alert(
-          "Role mismatch",
-          `This account is registered as ${displayRole}. Please select the correct role.`
+      if (profile.banned_at) {
+        await supabase.auth.signOut();
+        notify(
+          "Account banned",
+          "This account has been banned by an administrator."
         );
         return;
       }
 
-      // Clear leftover recovery flag from a mistaken email-confirm deep link.
       await markPasswordRecoveryActive(false);
 
-      if (profile.role === "citizen") {
-        await registerPushTokenForCurrentUser();
-        router.replace("/citizen/dashboard");
-      } else if (profile.role === "moderator" || profile.role === "departmentHead") {
-        await registerPushTokenForCurrentUser();
-        router.replace("/departmentHead/dashboard");
-      } else if (profile.role === "admin") {
-        await registerPushTokenForCurrentUser();
-        router.replace("/admin/dashboard");
-      } else {
-        Alert.alert("Login failed", "Unknown user role.");
+      setPageCacheUser(profile.id);
+
+      const homeRoute =
+        profile.role === "citizen"
+          ? "/citizen/dashboard"
+          : profile.role === "moderator" || profile.role === "departmentHead"
+            ? "/departmentHead/dashboard"
+            : profile.role === "admin"
+              ? "/admin/dashboard"
+              : null;
+
+      if (!homeRoute) {
+        notify("Login failed", "Unknown user role.");
+        return;
       }
+
+      router.replace(homeRoute);
+
+      void writeAuditLog({
+        action: "login",
+        title: "Signed In",
+        description: `Signed in as ${
+          profile.role === "moderator" ? "department head" : profile.role
+        }.`,
+        actorRole: profile.role,
+        actorName: profile.email || cleanEmail,
+      });
+
+      void registerPushTokenForCurrentUser();
     } catch (err) {
       console.log("Unexpected login error:", err);
-      Alert.alert("Error", String(err?.message || err));
+      notify("Error", String(err?.message || err));
     } finally {
       setLoading(false);
     }
@@ -171,63 +168,39 @@ export default function LoginScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <ScrollView
+    <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
+      <AuthScreenBackground />
+
+      <KeyboardAwareScrollView
           contentContainerStyle={styles.container}
-          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Image source={logo} style={styles.logo} resizeMode="contain" />
+          <AuthLogoStage />
 
-          <Text style={[styles.subtitle, { fontFamily: "Poppins_400Regular" }]}>
+          <Animated.Text
+            entering={FadeInDown.delay(120).duration(520)}
+            style={[styles.welcomeTitle, { fontFamily: "Poppins_700Bold" }]}
+          >
+            Welcome Back
+          </Animated.Text>
+
+          <Animated.Text
+            entering={FadeInDown.delay(180).duration(520)}
+            style={[styles.subtitle, { fontFamily: "Poppins_400Regular" }]}
+          >
             Sign in to continue improving our community together.
-          </Text>
+          </Animated.Text>
 
-          <View style={styles.roleContainer}>
-            {roles.map((role) => {
-              const isSelected = selectedRole === role.id;
-              const color = isSelected ? "#0A760A" : "#000000";
-
-              return (
-                <TouchableOpacity
-                  key={role.id}
-                  style={[styles.roleCard, isSelected && styles.activeRoleCard]}
-                  onPress={() => setSelectedRole(role.id)}
-                  activeOpacity={0.8}
-                >
-                  {role.icon({ size: 30, color })}
-
-                  <Text
-                    style={{
-                      fontFamily: isSelected
-                        ? "Poppins_700Bold"
-                        : "Poppins_600SemiBold",
-                      color,
-                      fontSize: 12,
-                      marginTop: 5,
-                      textAlign: "center",
-                      width: "100%",
-                      paddingHorizontal: 4,
-                    }}
-                  >
-                    {role.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <View style={styles.form}>
+          <Animated.View
+            entering={FadeInUp.delay(260).duration(560)}
+            style={styles.form}
+          >
             <Text style={[styles.label, { fontFamily: "Poppins_600SemiBold" }]}>
               Email
             </Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="mail" size={18} color="#0A760A" />
+              <Ionicons name="mail" size={18} color={AUTH_GREEN} />
 
               <TextInput
                 style={[styles.input, { fontFamily: "Poppins_400Regular" }]}
@@ -246,7 +219,7 @@ export default function LoginScreen() {
             </Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="lock-closed" size={18} color="#0A760A" />
+              <Ionicons name="lock-closed" size={18} color={AUTH_GREEN} />
 
               <TextInput
                 style={[
@@ -310,10 +283,13 @@ export default function LoginScreen() {
                 </Text>
               )}
             </TouchableOpacity>
-          </View>
+          </Animated.View>
 
-          <View style={styles.registerContainer}>
-            <Text style={{ fontFamily: "Poppins_400Regular" }}>
+          <Animated.View
+            entering={FadeIn.delay(420).duration(500)}
+            style={styles.registerContainer}
+          >
+            <Text style={{ fontFamily: "Poppins_400Regular", color: "#41493E" }}>
               Don&apos;t have an account?{" "}
             </Text>
 
@@ -321,15 +297,14 @@ export default function LoginScreen() {
               <Text
                 style={{
                   fontFamily: "Poppins_700Bold",
-                  color: "#0A760A",
+                  color: AUTH_GREEN,
                 }}
               >
                 Register
               </Text>
             </TouchableOpacity>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          </Animated.View>
+        </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }
@@ -337,65 +312,46 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
-  },
-
-  keyboardView: {
-    flex: 1,
+    backgroundColor: AUTH_BG_TOP,
   },
 
   container: {
     flexGrow: 1,
     alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: 31,
-    paddingTop: 12,
-    paddingBottom: 30,
+    paddingTop: 28,
+    paddingBottom: 40,
   },
 
-  logo: {
-    width: 180,
-    height: 180,
+  welcomeTitle: {
+    width: 280,
+    textAlign: "center",
+    fontSize: 24,
+    color: AUTH_GREEN,
     marginTop: 4,
   },
 
   subtitle: {
-    width: 270,
+    width: 280,
     textAlign: "center",
-    fontSize: 12,
+    fontSize: 13,
     color: "#41493E",
-    lineHeight: 17,
-    marginTop: 5,
-  },
-
-  roleContainer: {
-    width: "100%",
-    height: 79,
-    borderWidth: 1,
-    borderColor: "#D9D9D9",
-    borderRadius: 8,
-    flexDirection: "row",
-    marginTop: 24,
-    overflow: "hidden",
-    backgroundColor: "#FFFFFF",
-  },
-
-  roleCard: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-  },
-
-  activeRoleCard: {
-    backgroundColor: "#E7F5DB",
-    borderWidth: 1,
-    borderColor: "#0A760A",
-    borderRadius: 8,
+    lineHeight: 20,
+    marginTop: 8,
+    marginBottom: 8,
   },
 
   form: {
     width: "100%",
-    marginTop: 16,
+    marginTop: 28,
+    backgroundColor: "rgba(255,255,255,0.88)",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#DCE8D6",
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 18,
   },
 
   label: {
@@ -410,10 +366,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1,
     borderColor: "#B4B4B4",
-    borderRadius: 7,
+    borderRadius: 10,
     paddingHorizontal: 12,
-    height: 48,
+    height: 50,
     marginBottom: 12,
+    backgroundColor: "#FFFFFF",
   },
 
   input: {
@@ -431,22 +388,21 @@ const styles = StyleSheet.create({
 
   forgotPasswordButton: {
     alignSelf: "flex-end",
-    marginTop: -2,
-    marginBottom: 18,
+    marginTop: 2,
+    marginBottom: 22,
   },
 
   forgotPasswordText: {
     fontSize: 13,
-    color: "#0A760A",
+    color: AUTH_GREEN,
   },
 
   loginButton: {
-    backgroundColor: "#0A760A",
+    backgroundColor: AUTH_GREEN,
     borderRadius: 50,
-    height: 50,
+    height: 52,
     justifyContent: "center",
     alignItems: "center",
-    marginTop: 0,
   },
 
   disabledButton: {
@@ -460,7 +416,7 @@ const styles = StyleSheet.create({
 
   registerContainer: {
     flexDirection: "row",
-    marginTop: 16,
+    marginTop: 28,
     alignItems: "center",
   },
 });
