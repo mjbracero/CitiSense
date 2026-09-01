@@ -1,4 +1,5 @@
-import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -9,8 +10,6 @@ import {
 import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
   Modal,
   Platform,
   ScrollView,
@@ -21,8 +20,22 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { NotificationListSkeleton, PageSkeleton } from "../../components/skeletons";
+import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
+import {
+  buildNotificationPageQuery,
+  computeNotificationHasMore,
+  getNotificationCacheKey,
+  getNotificationPageSize,
+  isNearContentBottom,
+  mergeNotificationPages,
+} from "../../lib/notificationPagination";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { writeAuditLog } from "../../lib/auditLogService";
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const GREEN = "#087A0D";
 const LIGHT_GREEN = "#EAF6E4";
@@ -33,9 +46,9 @@ const MUTED = "#6F776F";
 const BORDER = "#E2E7E0";
 const RED = "#D71920";
 const BLUE = "#315A9A";
-const YELLOW = "#A97700";
 
 const H_PADDING = 20;
+const ADMIN_NOTIFICATIONS_CACHE_KEY = "admin.notifications";
 
 const filterOptions = [
   "All",
@@ -199,8 +212,8 @@ function getNotificationStyle(type) {
 
   if (displayType === "Citizen Validation") {
     return {
-      bg: LIGHT_GREEN,
-      color: GREEN,
+      bg: "#F3EAFF",
+      color: "#7A3EA8",
       icon: "account-check-outline",
     };
   }
@@ -215,8 +228,8 @@ function getNotificationStyle(type) {
 
   if (displayType === "Final Confirmation") {
     return {
-      bg: "#FFF2C2",
-      color: YELLOW,
+      bg: "#DFF0DF",
+      color: GREEN,
       icon: "check-decagram-outline",
     };
   }
@@ -281,12 +294,30 @@ export default function AdminNotification() {
   const router = useRouter();
   const pathname = usePathname();
 
-  const [notifications, setNotifications] = useState([]);
+  const cachedNotifications = getPageCache(ADMIN_NOTIFICATIONS_CACHE_KEY);
+  const [notifications, setNotifications] = useState(
+    cachedNotifications?.notifications ?? []
+  );
+  const [notificationsTotal, setNotificationsTotal] = useState(
+    cachedNotifications?.notificationsTotal ??
+      cachedNotifications?.notifications?.length ??
+      0
+  );
   const [selectedFilter, setSelectedFilter] = useState("All");
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [detailsVisible, setDetailsVisible] = useState(false);
-  const [currentAdminId, setCurrentAdminId] = useState(null);
-  const [loadingNotifications, setLoadingNotifications] = useState(true);
+  const [currentAdminId, setCurrentAdminId] = useState(
+    cachedNotifications?.currentAdminId ?? null
+  );
+  const [loadingNotifications, setLoadingNotifications] = useState(
+    !cachedNotifications
+  );
+  const [loadingMoreNotifications, setLoadingMoreNotifications] = useState(false);
+  const [hasMoreNotifications, setHasMoreNotifications] = useState(
+    cachedNotifications?.hasMore !== false
+  );
+
+  useHideBottomNav(detailsVisible);
 
   const { unreadNotificationCount, reloadUnreadNotificationCount } =
     useAdminUnreadNotifications();
@@ -296,6 +327,10 @@ export default function AdminNotification() {
   const notificationChannelRef = useRef(null);
   const loadNotificationsRef = useRef(null);
   const reloadUnreadRef = useRef(null);
+  const notificationsDataRef = useRef(cachedNotifications?.notifications ?? []);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(cachedNotifications?.hasMore !== false);
+  const listViewportHeightRef = useRef(0);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -333,7 +368,44 @@ export default function AdminNotification() {
     };
   }, []);
 
-  const loadNotifications = useCallback(async (showLoader = true) => {
+  useEffect(() => {
+    notificationsDataRef.current = notifications;
+  }, [notifications]);
+
+  const loadNotifications = useCallback(async (options = {}) => {
+    const normalized =
+      typeof options === "boolean" ? { showLoader: options } : options;
+    const append = normalized.append === true;
+    const cacheKey = getNotificationCacheKey(
+      ADMIN_NOTIFICATIONS_CACHE_KEY,
+      selectedFilter
+    );
+    const cached = !append ? getPageCache(cacheKey) : null;
+
+    if (!append && cached) {
+      setNotifications(cached.notifications ?? []);
+      setNotificationsTotal(
+        cached.notificationsTotal ?? cached.notifications?.length ?? 0
+      );
+      hasMoreRef.current = cached.hasMore !== false;
+      setHasMoreNotifications(cached.hasMore !== false);
+    }
+
+    const showLoader =
+      normalized.showLoader ??
+      (!append && shouldShowPageLoader(cacheKey));
+
+    if (append) {
+      if (loadingMoreRef.current || !hasMoreRef.current) {
+        return;
+      }
+
+      loadingMoreRef.current = true;
+      setLoadingMoreNotifications(true);
+    } else {
+      hasMoreRef.current = cached?.hasMore !== false;
+    }
+
     try {
       if (showLoader) {
         setLoadingNotifications(true);
@@ -345,37 +417,107 @@ export default function AdminNotification() {
       } = await supabase.auth.getUser();
 
       if (userError || !user?.id) {
-        setCurrentAdminId(null);
-        setNotifications([]);
+        if (!cached) {
+          setCurrentAdminId(null);
+          setNotifications([]);
+          setNotificationsTotal(0);
+          hasMoreRef.current = false;
+          setHasMoreNotifications(false);
+        }
         return;
       }
 
       setCurrentAdminId(user.id);
 
-      const { data, error } = await supabase
-        .from("admin_notifications")
-        .select("*")
-        .eq("admin_id", user.id)
-        .order("created_at", { ascending: false });
+      const offset = append ? notificationsDataRef.current.length : 0;
+      const pageSize = getNotificationPageSize(
+        append,
+        cached?.notifications?.length || 0
+      );
+
+      const { data, error, count } = await buildNotificationPageQuery(supabase, {
+        role: "admin",
+        ownerId: user.id,
+        offset,
+        pageSize,
+        selectedFilter,
+      });
 
       if (error) {
         console.log("Load admin notifications error:", error);
-        Alert.alert("Load Failed", error.message);
-        setNotifications([]);
+        notify("Load Failed", error.message);
+        if (!cached) {
+          setNotifications([]);
+          setNotificationsTotal(0);
+          hasMoreRef.current = false;
+          setHasMoreNotifications(false);
+        }
         return;
       }
 
-      setNotifications((data || []).map(mapNotification));
+      const mapped = (data || []).map(mapNotification);
+      const nextNotifications = append
+        ? mergeNotificationPages(
+            notificationsDataRef.current,
+            mapped,
+            (item) => item.rawId || item.id
+          )
+        : mapped;
+
+      const total = count ?? nextNotifications.length;
+      const loadedCount = nextNotifications.length;
+      const hasMore = computeNotificationHasMore(mapped, loadedCount, total);
+
+      setNotifications(nextNotifications);
+      setNotificationsTotal(total);
+      hasMoreRef.current = hasMore;
+      setHasMoreNotifications(hasMore);
+      setPageCache(cacheKey, {
+        notifications: nextNotifications,
+        notificationsTotal: total,
+        hasMore,
+        currentAdminId: user.id,
+        selectedFilter,
+      });
     } catch (error) {
       console.log("Load admin notifications catch error:", error);
-      Alert.alert("Load Failed", "Unable to load admin notifications.");
-      setNotifications([]);
-    } finally {
-      if (showLoader) {
-        setLoadingNotifications(false);
+      if (!cached) {
+        notify("Load Failed", "Unable to load admin notifications.");
+        setNotifications([]);
+        setNotificationsTotal(0);
+        hasMoreRef.current = false;
+        setHasMoreNotifications(false);
       }
+    } finally {
+      if (append) {
+        loadingMoreRef.current = false;
+        setLoadingMoreNotifications(false);
+      }
+      setLoadingNotifications(false);
     }
-  }, []);
+  }, [selectedFilter]);
+
+  const loadMoreNotifications = useCallback(() => {
+    loadNotifications({ append: true, showLoader: false });
+  }, [loadNotifications]);
+
+  const handleNotificationsScroll = ({ nativeEvent }) => {
+    if (isNearContentBottom(nativeEvent)) {
+      loadMoreNotifications();
+    }
+  };
+
+  const maybeFillViewport = (contentHeight) => {
+    if (
+      hasMoreRef.current &&
+      !loadingMoreRef.current &&
+      !loadingNotifications &&
+      listViewportHeightRef.current > 0 &&
+      contentHeight < listViewportHeightRef.current + 80
+    ) {
+      loadMoreNotifications();
+    }
+  };
 
   useEffect(() => {
     loadNotificationsRef.current = loadNotifications;
@@ -507,12 +649,18 @@ export default function AdminNotification() {
       .eq("is_read", false);
 
     if (error) {
-      Alert.alert("Update Failed", error.message);
+      notify("Update Failed", error.message);
       loadNotifications(false);
       return;
     }
 
     reloadUnreadNotificationCount();
+    writeAuditLog({
+      action: "notifications_read",
+      title: "Notifications Marked as Read",
+      description: "All admin notifications were marked as read.",
+      actorRole: "admin",
+    });
   };
 
   const openNotificationDetails = async (notification) => {
@@ -530,11 +678,7 @@ export default function AdminNotification() {
   };
 
   if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+    return <PageSkeleton variant="notifications" />;
   }
 
   return (
@@ -542,21 +686,11 @@ export default function AdminNotification() {
       <StatusBar barStyle="dark-content" backgroundColor={BG} />
 
       <View style={styles.mainContainer}>
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
+        <View style={styles.stickyHeader}>
           <View style={styles.headerTopRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.headerTitle}>Notifications</Text>
-              <Text
-                style={{
-                  fontFamily: "Poppins_500Medium",
-                  fontSize: 11.5,
-                  color: MUTED,
-                  marginTop: 2,
-                }}
-              >
+              <Text style={styles.headerSubtitle}>
                 {unreadNotificationCount > 0
                   ? `${unreadNotificationCount} unread notification${
                       unreadNotificationCount > 1 ? "s" : ""
@@ -569,30 +703,16 @@ export default function AdminNotification() {
               <TouchableOpacity
                 activeOpacity={0.75}
                 onPress={markAllAsRead}
-                style={{
-                  minHeight: 32,
-                  borderRadius: 16,
-                  backgroundColor: GREEN,
-                  paddingHorizontal: 12,
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
+                style={styles.markAllReadButton}
               >
-                <Text
-                  style={{
-                    fontFamily: "Poppins_700Bold",
-                    fontSize: 10.5,
-                    color: WHITE,
-                  }}
-                >
-                  Mark all read
-                </Text>
+                <Text style={styles.markAllReadButtonText}>Mark all read</Text>
               </TouchableOpacity>
             )}
           </View>
 
           <ScrollView
             horizontal
+            nestedScrollEnabled
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.filterScrollContent}
           >
@@ -621,13 +741,22 @@ export default function AdminNotification() {
               );
             })}
           </ScrollView>
+        </View>
 
+        <ScrollView
+          style={styles.listScroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+          scrollEventThrottle={16}
+          onScroll={handleNotificationsScroll}
+          onLayout={(event) => {
+            listViewportHeightRef.current = event.nativeEvent.layout.height;
+          }}
+          onContentSizeChange={(_, height) => maybeFillViewport(height)}
+        >
           <View style={styles.notificationList}>
-            {loadingNotifications ? (
-              <View style={styles.emptyCard}>
-                <ActivityIndicator size="large" color={GREEN} />
-                <Text style={styles.emptyTitle}>Loading notifications...</Text>
-              </View>
+            {loadingNotifications && notifications.length === 0 ? (
+              <NotificationListSkeleton count={5} />
             ) : filteredNotifications.length === 0 ? (
               <View style={styles.emptyCard}>
                 <Ionicons
@@ -711,9 +840,12 @@ export default function AdminNotification() {
                 );
               })
             )}
+            <ComplaintsLoadMoreFooter
+              loading={loadingMoreNotifications}
+              label="Loading more notifications..."
+            />
           </View>
         </ScrollView>
-
 
         <Modal
           visible={detailsVisible}
@@ -856,6 +988,20 @@ const styles = StyleSheet.create({
     backgroundColor: BG,
   },
 
+  stickyHeader: {
+    backgroundColor: BG,
+    paddingHorizontal: H_PADDING,
+    paddingTop: 4,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+    zIndex: 2,
+  },
+
+  listScroll: {
+    flex: 1,
+  },
+
   loader: {
     flex: 1,
     backgroundColor: BG,
@@ -865,12 +1011,12 @@ const styles = StyleSheet.create({
 
   scrollContent: {
     paddingHorizontal: H_PADDING,
-    paddingTop: 4,
-    paddingBottom: 116,
+    paddingTop: 12,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   headerTopRow: {
-    marginBottom: 14,
+    marginBottom: 12,
     flexDirection: "row",
     alignItems: "center",
   },
@@ -883,10 +1029,31 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
+  headerSubtitle: {
+    fontFamily: "Poppins_500Medium",
+    fontSize: 11.5,
+    color: MUTED,
+    marginTop: 2,
+  },
+
+  markAllReadButton: {
+    minHeight: 32,
+    borderRadius: 16,
+    backgroundColor: GREEN,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  markAllReadButtonText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 10.5,
+    color: WHITE,
+  },
+
   filterScrollContent: {
     gap: 8,
     paddingRight: 10,
-    marginBottom: 13,
   },
 
   filterChip: {
@@ -984,7 +1151,7 @@ const styles = StyleSheet.create({
   complaintTitleText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.2,
-    color: GREEN,
+    color: TEXT,
     marginTop: 4,
   },
 
