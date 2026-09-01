@@ -1,4 +1,5 @@
-import { useState } from "react";
+import {
+  useState } from "react";
 import {
   View,
   Text,
@@ -6,17 +7,16 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Alert,
   ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
 import { getPasswordResetRedirectTo } from "../../lib/passwordReset";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import { PageSkeleton } from "../../components/skeletons";
 
 import {
   useFonts,
@@ -42,18 +42,18 @@ export default function ForgotPasswordScreen() {
     Poppins_700Bold,
   });
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded) return <PageSkeleton variant="auth" />;
 
   const handleResetPassword = async () => {
     const cleanEmail = email.trim().toLowerCase();
 
     if (!cleanEmail) {
-      Alert.alert("Missing Email", "Please enter your registered email.");
+      notify("Missing Email", "Please enter your registered email.");
       return;
     }
 
     if (!cleanEmail.includes("@") || !cleanEmail.includes(".")) {
-      Alert.alert("Invalid Email", "Please enter a valid email address.");
+      notify("Invalid Email", "Please enter a valid email address.");
       return;
     }
 
@@ -67,18 +67,18 @@ export default function ForgotPasswordScreen() {
       });
 
       if (error) {
-        Alert.alert("Reset Failed", error.message);
+        notify("Reset Failed", error.message);
         return;
       }
 
       setEmailSent(true);
 
-      Alert.alert(
+      notify(
         "Password Reset Sent",
         "Check your email and tap the reset link on this phone. It must open CitiSense (not only a browser) before you can set a new password."
       );
     } catch (err) {
-      Alert.alert("Error", String(err?.message || err));
+      notify("Error", String(err?.message || err));
     } finally {
       setLoading(false);
     }
@@ -86,13 +86,8 @@ export default function ForgotPasswordScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <ScrollView
+      <KeyboardAwareScrollView
           contentContainerStyle={styles.container}
-          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
           <TouchableOpacity
@@ -216,8 +211,7 @@ export default function ForgotPasswordScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }
