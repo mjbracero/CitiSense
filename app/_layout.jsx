@@ -1,9 +1,17 @@
 import "react-native-gesture-handler";
 import { useEffect } from "react";
+import { Platform } from "react-native";
 import { Stack, useRouter } from "expo-router";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
+import {
+  SafeAreaProvider,
+  initialWindowMetrics,
+} from "react-native-safe-area-context";
 import * as SplashScreen from "expo-splash-screen";
 import * as Linking from "expo-linking";
+import AndroidSystemChrome from "../components/AndroidSystemChrome";
+import ConfirmDialogHost from "../components/ConfirmDialogHost";
+import ToastHost from "../components/ToastHost";
 import usePushNotifications from "../hooks/usePushNotifications";
 import { supabase } from "../lib/supabase";
 import {
@@ -77,7 +85,9 @@ export default function RootLayout() {
   }, [router]);
 
   return (
-    <SafeAreaProvider>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <StatusBar style="dark" translucent={Platform.OS === "android"} />
+      <AndroidSystemChrome />
       <Stack
         screenOptions={{
           headerShown: false,
@@ -86,6 +96,8 @@ export default function RootLayout() {
           fullScreenGestureEnabled: false,
         }}
       />
+      <ToastHost />
+      <ConfirmDialogHost />
     </SafeAreaProvider>
   );
 }
