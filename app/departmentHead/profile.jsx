@@ -1,4 +1,5 @@
-import { Feather, Ionicons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -13,10 +14,8 @@ import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Keyboard,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -30,7 +29,14 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import AuditLogsModal from "../../components/AuditLogsModal";
+import { PageSkeleton } from "../../components/skeletons";
+import { writeAuditLog } from "../../lib/auditLogService";
+import { clearPageCache, getPageCache, setPageCache } from "../../lib/pageDataCache";
+import { setProfileAvatarUrl } from "../../lib/profileAvatarStore";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
 import {
   loadLocationPreference,
   saveLocationPreference,
@@ -42,6 +48,7 @@ import {
   updatePushEnabled,
 } from "../../lib/pushNotifications";
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const GREEN = "#087A0D";
 const LIGHT_GREEN = "#EAF6E4";
@@ -56,6 +63,7 @@ const BLUE = "#315A9A";
 
 const H_PADDING = 20;
 const AVATAR_BUCKET = "avatars";
+const DEPT_PROFILE_CACHE_KEY = "departmentHead.profile";
 
 const MAIN_LOGO = require("../../assets/images/mainlogo.png");
 
@@ -179,14 +187,16 @@ function buildDepartmentHeadProfileInfo(currentUser, databaseProfile = null) {
   };
 }
 
-
 export default function DepartmentHeadProfile() {
   const router = useRouter();
   const pathname = usePathname();
   const { unreadNotificationCount } = useDepartmentHeadUnreadNotifications();
 
-  const [user, setUser] = useState(null);
-  const [profileInfo, setProfileInfo] = useState(cachedDepartmentHeadProfile);
+  const cachedPage = getPageCache(DEPT_PROFILE_CACHE_KEY);
+  const [user, setUser] = useState(cachedPage?.user ?? null);
+  const [profileInfo, setProfileInfo] = useState(
+    cachedPage?.profileInfo ?? cachedDepartmentHeadProfile
+  );
 
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
@@ -194,6 +204,9 @@ export default function DepartmentHeadProfile() {
 
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
+  const [auditLogsVisible, setAuditLogsVisible] = useState(false);
+
+  useHideBottomNav(editModalVisible || passwordModalVisible);
 
   const [fullNameDraft, setFullNameDraft] = useState("");
   const [emailDraft, setEmailDraft] = useState("");
@@ -202,8 +215,12 @@ export default function DepartmentHeadProfile() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
-  const [pushEnabled, setPushEnabled] = useState(true);
-  const [locationEnabled, setLocationEnabled] = useState(cachedLocationEnabled);
+  const [pushEnabled, setPushEnabled] = useState(
+    cachedPage?.pushEnabled ?? true
+  );
+  const [locationEnabled, setLocationEnabled] = useState(
+    cachedPage?.locationEnabled ?? cachedLocationEnabled
+  );
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -252,11 +269,23 @@ export default function DepartmentHeadProfile() {
       cachedDepartmentHeadProfile = nextProfileInfo;
       setProfileInfo(nextProfileInfo);
       setUser(currentUser);
+      if (nextProfileInfo.avatarUrl) {
+        setProfileAvatarUrl(nextProfileInfo.avatarUrl);
+      }
 
+      let enabled = getPageCache(DEPT_PROFILE_CACHE_KEY)?.pushEnabled ?? true;
       if (currentUser?.id) {
-        const enabled = await loadPushEnabled(currentUser.id);
+        enabled = await loadPushEnabled(currentUser.id);
         setPushEnabled(enabled);
       }
+
+      const previousCache = getPageCache(DEPT_PROFILE_CACHE_KEY) || {};
+      setPageCache(DEPT_PROFILE_CACHE_KEY, {
+        ...previousCache,
+        user: currentUser,
+        profileInfo: nextProfileInfo,
+        pushEnabled: enabled,
+      });
     } catch (error) {
       console.log("Load department head profile error:", error);
       // Keep cached profile to avoid UI jumping.
@@ -273,6 +302,11 @@ export default function DepartmentHeadProfile() {
       cachedLocationEnabled = enabled;
       hasCheckedLocationPermission = true;
       setLocationEnabled(enabled);
+      const previousCache = getPageCache(DEPT_PROFILE_CACHE_KEY) || {};
+      setPageCache(DEPT_PROFILE_CACHE_KEY, {
+        ...previousCache,
+        locationEnabled: enabled,
+      });
     } catch {
       setLocationEnabled(cachedLocationEnabled);
     }
@@ -353,10 +387,16 @@ export default function DepartmentHeadProfile() {
             await saveLocationPreference(user.id, true);
           }
 
-          Alert.alert(
+          notify(
             "Location Services Enabled",
             "CitiSense can now use your location for map routing, pinned complaint navigation, and department head location tracking."
           );
+          writeAuditLog({
+            action: "location_preference",
+            title: "Location Services Enabled",
+            description: "Location access was turned on for map routing and tracking.",
+            actorRole: "moderator",
+          });
         } else {
           cachedLocationEnabled = false;
           hasCheckedLocationPermission = true;
@@ -366,7 +406,7 @@ export default function DepartmentHeadProfile() {
             await saveLocationPreference(user.id, false);
           }
 
-          Alert.alert(
+          notify(
             "Location Permission Denied",
             "Location access was not allowed. You can enable it later in your phone settings."
           );
@@ -374,7 +414,7 @@ export default function DepartmentHeadProfile() {
       } catch {
         setLocationEnabled(cachedLocationEnabled);
 
-        Alert.alert(
+        notify(
           "Location Error",
           "Unable to request location permission right now."
         );
@@ -391,23 +431,29 @@ export default function DepartmentHeadProfile() {
       await saveLocationPreference(user.id, false);
     }
 
-    Alert.alert(
+    notify(
       "Location Services",
       "Location tracking is turned off in the app. To fully disable phone permission, turn off CitiSense location access in your phone settings."
     );
+    writeAuditLog({
+      action: "location_preference",
+      title: "Location Services Disabled",
+      description: "Location access was turned off in the app.",
+      actorRole: "moderator",
+    });
   };
 
   const pickProfilePhoto = async () => {
     try {
       if (!user?.id) {
-        Alert.alert("Account Required", "Please sign in again.");
+        notify("Account Required", "Please sign in again.");
         return;
       }
 
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (permission.status !== "granted") {
-        Alert.alert(
+        notify(
           "Permission Needed",
           "Please allow photo access so you can change your profile picture."
         );
@@ -427,7 +473,7 @@ export default function DepartmentHeadProfile() {
       const asset = result.assets[0];
 
       if (!asset.base64) {
-        Alert.alert(
+        notify(
           "Upload Failed",
           "The selected image could not be prepared for upload. Please choose another photo."
         );
@@ -450,7 +496,7 @@ export default function DepartmentHeadProfile() {
         });
 
       if (uploadError) {
-        Alert.alert(
+        notify(
           "Upload Failed",
           "Please make sure the Supabase Storage bucket named avatars exists and has the correct upload policies."
         );
@@ -471,7 +517,7 @@ export default function DepartmentHeadProfile() {
       });
 
       if (error) {
-        Alert.alert("Update Failed", error.message);
+        notify("Update Failed", error.message);
         return;
       }
 
@@ -485,6 +531,7 @@ export default function DepartmentHeadProfile() {
 
       cachedDepartmentHeadProfile = nextProfileInfo;
       setProfileInfo(nextProfileInfo);
+      setProfileAvatarUrl(publicUrl);
 
       try {
         await supabase.from(PROFILE_TABLE).upsert(
@@ -525,9 +572,15 @@ export default function DepartmentHeadProfile() {
       }
 
       setUser(data?.user || user);
-      Alert.alert("Profile Picture Updated", "Your picture has been changed.");
+      notify("Profile Picture Updated", "Your picture has been changed.");
+      await writeAuditLog({
+        action: "avatar_update",
+        title: "Profile Picture Updated",
+        description: "Department head profile picture was changed.",
+        actorRole: "moderator",
+      });
     } catch {
-      Alert.alert("Upload Failed", "Unable to update your profile picture.");
+      notify("Upload Failed", "Unable to update your profile picture.");
     } finally {
       setUploadingAvatar(false);
     }
@@ -539,12 +592,12 @@ export default function DepartmentHeadProfile() {
     const cleanContact = contactDraft.trim();
 
     if (!cleanName) {
-      Alert.alert("Name Required", "Please enter your full name.");
+      notify("Name Required", "Please enter your full name.");
       return;
     }
 
     if (!cleanEmail) {
-      Alert.alert("Email Required", "Please enter your email address.");
+      notify("Email Required", "Please enter your email address.");
       return;
     }
 
@@ -563,7 +616,7 @@ export default function DepartmentHeadProfile() {
       });
 
       if (error) {
-        Alert.alert("Update Failed", error.message);
+        notify("Update Failed", error.message);
         return;
       }
 
@@ -576,7 +629,7 @@ export default function DepartmentHeadProfile() {
         });
 
         if (emailError) {
-          Alert.alert("Email Update Failed", emailError.message);
+          notify("Email Update Failed", emailError.message);
           return;
         }
       }
@@ -628,15 +681,23 @@ export default function DepartmentHeadProfile() {
       setEditModalVisible(false);
 
       if (emailChanged) {
-        Alert.alert(
+        notify(
           "Confirm New Email",
           "We sent a confirmation link to your new email address. Please confirm it before the email change becomes complete."
         );
       } else {
-        Alert.alert("Profile Updated", "Your department head information was saved.");
+        notify("Profile Updated", "Your department head information was saved.");
       }
+
+      await writeAuditLog({
+        action: "profile_update",
+        title: "Profile Updated",
+        description: "Department head account information was updated.",
+        actorRole: "moderator",
+        actorName: cleanName,
+      });
     } catch {
-      Alert.alert("Update Failed", "Unable to save your profile changes.");
+      notify("Update Failed", "Unable to save your profile changes.");
     } finally {
       setSavingProfile(false);
     }
@@ -644,12 +705,12 @@ export default function DepartmentHeadProfile() {
 
   const handleChangePassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
-      Alert.alert("Password Required", "Please enter and confirm your password.");
+      notify("Password Required", "Please enter and confirm your password.");
       return;
     }
 
     if (newPassword.length < 6) {
-      Alert.alert(
+      notify(
         "Weak Password",
         "Your new password must be at least 6 characters."
       );
@@ -657,7 +718,7 @@ export default function DepartmentHeadProfile() {
     }
 
     if (newPassword !== confirmPassword) {
-      Alert.alert("Password Mismatch", "Your passwords do not match.");
+      notify("Password Mismatch", "Your passwords do not match.");
       return;
     }
 
@@ -669,18 +730,25 @@ export default function DepartmentHeadProfile() {
       });
 
       if (error) {
-        Alert.alert("Password Update Failed", error.message);
+        notify("Password Update Failed", error.message);
         return;
       }
 
-      Alert.alert(
+      notify(
         "Password Changed",
         "Your password has been updated successfully."
       );
 
+      await writeAuditLog({
+        action: "password_change",
+        title: "Password Changed",
+        description: "Department head account password was updated.",
+        actorRole: "moderator",
+      });
+
       closePasswordModal();
     } catch {
-      Alert.alert("Password Update Failed", "Unable to change your password.");
+      notify("Password Update Failed", "Unable to change your password.");
     } finally {
       setChangingPassword(false);
     }
@@ -695,7 +763,7 @@ export default function DepartmentHeadProfile() {
     const { error } = await updatePushEnabled(user.id, value);
 
     if (error) {
-      Alert.alert(
+      notify(
         "Push Notifications",
         "Unable to update push notification preference."
       );
@@ -704,13 +772,22 @@ export default function DepartmentHeadProfile() {
 
     setPushEnabled(value);
 
+    writeAuditLog({
+      action: "push_preference",
+      title: value ? "Push Notifications Enabled" : "Push Notifications Disabled",
+      description: value
+        ? "Push notifications were turned on."
+        : "Push notifications were turned off.",
+      actorRole: "moderator",
+    });
+
     if (value) {
       await registerDevicePushToken(user.id);
     }
   };
 
   const handlePrivacy = () => {
-    Alert.alert(
+    notify(
       "Privacy & Security",
       "CitiSense protects department head accounts by allowing only authorized department heads to access assigned complaint records.\n\n" +
         "Your profile information such as name, email, contact number, department, and profile photo is used for account identification and LGU complaint coordination.\n\n" +
@@ -720,7 +797,7 @@ export default function DepartmentHeadProfile() {
   };
 
   const handleLogout = () => {
-    Alert.alert("Log Out", "Are you sure you want to log out?", [
+    notify("Log Out", "Are you sure you want to log out?", [
       {
         text: "Cancel",
         style: "cancel",
@@ -729,13 +806,21 @@ export default function DepartmentHeadProfile() {
         text: "Log Out",
         style: "destructive",
         onPress: async () => {
+          await writeAuditLog({
+            action: "logout",
+            title: "Signed Out",
+            description: "Department head signed out of CitiSense.",
+            actorRole: "moderator",
+          });
           await removePushTokensForUser(user?.id);
           const { error } = await supabase.auth.signOut();
 
           if (error) {
-            Alert.alert("Logout Failed", error.message);
+            notify("Logout Failed", error.message);
             return;
           }
+
+          clearPageCache();
 
           cachedDepartmentHeadProfile = DEFAULT_PROFILE_INFO;
           cachedLocationEnabled = false;
@@ -751,12 +836,8 @@ export default function DepartmentHeadProfile() {
     ]);
   };
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  if (!fontsLoaded && !cachedPage) {
+    return <PageSkeleton variant="profile" />;
   }
 
   return (
@@ -886,6 +967,14 @@ export default function DepartmentHeadProfile() {
               />
 
               <ActionRow
+                icon="activity"
+                iconColor={BLUE}
+                title="Audit Logs"
+                subtitle="View your recent account activity."
+                onPress={() => setAuditLogsVisible(true)}
+              />
+
+              <ActionRow
                 icon="shield"
                 iconColor={GREEN}
                 title="Privacy & Security"
@@ -915,10 +1004,6 @@ export default function DepartmentHeadProfile() {
         >
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <View style={styles.modalOverlay}>
-              <KeyboardAvoidingView
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
-                style={styles.keyboardView}
-              >
                 <View style={styles.editSheet}>
                   <View style={styles.modalHandle} />
 
@@ -934,9 +1019,9 @@ export default function DepartmentHeadProfile() {
                     </TouchableOpacity>
                   </View>
 
-                  <ScrollView
+                  <KeyboardAwareScrollView
+                    modal
                     showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="handled"
                     contentContainerStyle={styles.modalScrollContent}
                   >
                     <Text style={styles.inputLabel}>Full Name</Text>
@@ -988,9 +1073,8 @@ export default function DepartmentHeadProfile() {
                         <Text style={styles.saveButtonText}>Save Changes</Text>
                       )}
                     </TouchableOpacity>
-                  </ScrollView>
+                  </KeyboardAwareScrollView>
                 </View>
-              </KeyboardAvoidingView>
             </View>
           </TouchableWithoutFeedback>
         </Modal>
@@ -1003,10 +1087,6 @@ export default function DepartmentHeadProfile() {
         >
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <View style={styles.modalOverlay}>
-              <KeyboardAvoidingView
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
-                style={styles.keyboardView}
-              >
                 <View style={styles.passwordSheet}>
                   <View style={styles.modalHandle} />
 
@@ -1022,6 +1102,11 @@ export default function DepartmentHeadProfile() {
                     </TouchableOpacity>
                   </View>
 
+                  <KeyboardAwareScrollView
+                    modal
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.modalScrollContent}
+                  >
                   <Text style={styles.inputLabel}>New Password</Text>
                   <TextInput
                     style={styles.input}
@@ -1054,11 +1139,16 @@ export default function DepartmentHeadProfile() {
                       <Text style={styles.saveButtonText}>Update Password</Text>
                     )}
                   </TouchableOpacity>
+                  </KeyboardAwareScrollView>
                 </View>
-              </KeyboardAvoidingView>
             </View>
           </TouchableWithoutFeedback>
         </Modal>
+
+        <AuditLogsModal
+          visible={auditLogsVisible}
+          onClose={() => setAuditLogsVisible(false)}
+        />
       </View>
     </SafeAreaView>
   );
@@ -1182,7 +1272,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: H_PADDING,
     paddingTop: 0,
-    paddingBottom: 116,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   profileHeroCard: {
