@@ -14,7 +14,6 @@ import {
 import { useLocalSearchParams, usePathname, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef } from "react";
 import {
-  ActivityIndicator,
   Animated,
   Dimensions,
   Easing,
@@ -28,6 +27,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { PageSkeleton } from "../../components/skeletons";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -383,11 +383,7 @@ export default function AIAnalysisResult() {
   });
 
   if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+    return <PageSkeleton variant="analysis" />;
   }
 
   return (
