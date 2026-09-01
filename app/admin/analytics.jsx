@@ -9,7 +9,6 @@ import {
 import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Platform,
   ScrollView,
   StatusBar,
@@ -19,9 +18,28 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AnalyticsReportSkeleton, PageSkeleton } from "../../components/skeletons";
+import {
+  getPageCache,
+  setPageCache,
+  shouldShowPageLoader,
+} from "../../lib/pageDataCache";
 import { supabase } from "../../lib/supabase";
+import {
+  applyOffsetPagination,
+  COMPLAINTS_PAGE_SIZE,
+  fetchAllRowsWithOffset,
+} from "../../lib/complaintPagination";
+import {
+  COMPLAINT_CATEGORY_NAMES,
+  DEPARTMENT_OFFICES,
+  normalizeComplaintCategory,
+  resolveAssignedOfficesForAnalytics,
+} from "../../lib/complaintCategories";
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
+import { BOTTOM_NAV_CONTENT_INSET } from "../../components/PersistentBottomNav";
 
+const ANALYTICS_CACHE_KEY = "admin.analytics";
 const GREEN = "#087A0D";
 const LIGHT_GREEN = "#EAF6E4";
 const BG = "#F7FAF6";
@@ -138,7 +156,8 @@ function normalizePriority(value, isEmergency = false) {
 }
 
 function getCategoryLabel(category) {
-  const clean = cleanDisplayText(category, "Unclassified");
+  const normalized = normalizeComplaintCategory(category);
+  const clean = cleanDisplayText(normalized, "Unclassified");
 
   return clean
     .replace(/ Concerns$/i, "")
@@ -151,7 +170,24 @@ function getCategoryLabel(category) {
     .replace(/Disaster & Emergency/i, "Disaster")
     .replace(/Coastal & Marine Protection/i, "Coastal")
     .replace(/Tourism Site \/ Public Attraction/i, "Tourism")
-    .replace(/Planning & Zoning/i, "Planning");
+    .replace(/Planning & Zoning/i, "Planning")
+    .replace(/Building & Construction/i, "Building")
+    .replace(/Transport Terminal/i, "Terminal")
+    .replace(/Public Market/i, "Market")
+    .replace(/Public Plaza/i, "Plaza")
+    .replace(/City Facility/i, "Facility")
+    .replace(/Peace & Order/i, "Peace & Order")
+    .replace(/Fire Safety/i, "Fire Safety")
+    .replace(/PWD Accessibility/i, "PWD")
+    .replace(/Tax & Treasury/i, "Tax & Treasury")
+    .replace(/Property Assessment/i, "Assessment")
+    .replace(/Civil Registry/i, "Civil Registry")
+    .replace(/Business Permit & Licensing/i, "BPLO")
+    .replace(/Animal/i, "Animal")
+    .replace(/Streetlight/i, "Streetlight")
+    .replace(/Electricity/i, "Electric")
+    .replace(/Water/i, "Water")
+    .replace(/Port/i, "Port");
 }
 
 function getMostAndLeast(data, valueKey = "count") {
@@ -174,11 +210,15 @@ function getMostAndLeast(data, valueKey = "count") {
 }
 
 function mapComplaint(row) {
+  const category = normalizeComplaintCategory(
+    row.category || row.concern_category
+  );
+
   return {
     id: row.id,
     shortId: row.short_id || String(row.id || "").slice(0, 8),
     title: row.title || "Untitled Complaint",
-    category: cleanDisplayText(row.category || row.concern_category, "Unclassified"),
+    category,
     assignedOffice: cleanDisplayText(
       row.assigned_office || row.assignedOffice || row.department,
       "Unassigned"
@@ -190,22 +230,38 @@ function mapComplaint(row) {
 }
 
 function buildCategoryData(complaints) {
-  const grouped = complaints.reduce((acc, complaint) => {
-    const key = complaint.category || "Unclassified";
+  const grouped = COMPLAINT_CATEGORY_NAMES.reduce((acc, categoryName) => {
+    acc[categoryName] = {
+      label: getCategoryLabel(categoryName),
+      fullName: categoryName,
+      count: 0,
+    };
+    return acc;
+  }, {});
 
-    if (!acc[key]) {
-      acc[key] = {
+  grouped.Unclassified = {
+    label: getCategoryLabel("Unclassified"),
+    fullName: "Unclassified",
+    count: 0,
+  };
+
+  complaints.forEach((complaint) => {
+    const key = normalizeComplaintCategory(complaint.category);
+
+    if (!grouped[key]) {
+      grouped[key] = {
         label: getCategoryLabel(key),
         fullName: key,
         count: 0,
       };
     }
 
-    acc[key].count += 1;
-    return acc;
-  }, {});
+    grouped[key].count += 1;
+  });
 
-  return Object.values(grouped).sort((a, b) => b.count - a.count);
+  return Object.values(grouped)
+    .filter((item) => item.count > 0)
+    .sort((a, b) => b.count - a.count);
 }
 
 function buildPriorityData(complaints) {
@@ -233,38 +289,48 @@ function buildPriorityData(complaints) {
 }
 
 function buildDepartmentData(complaints) {
-  const grouped = complaints.reduce((acc, complaint) => {
-    const department = complaint.assignedOffice || "Unassigned";
-
-    if (!acc[department]) {
-      acc[department] = {
-        name: department,
-        handled: 0,
-        completed: 0,
-        returned: 0,
-        forValidation: 0,
-        rate: 0,
-      };
-    }
-
-    acc[department].handled += 1;
-
-    if (complaint.status === "Completed") {
-      acc[department].completed += 1;
-    }
-
-    if (complaint.status === "Returned" || complaint.status === "Unsolved") {
-      acc[department].returned += 1;
-    }
-
-    if (complaint.status === "For Validation" || complaint.status === "Validated") {
-      acc[department].forValidation += 1;
-    }
-
+  const grouped = DEPARTMENT_OFFICES.reduce((acc, office) => {
+    acc[office] = {
+      name: office,
+      handled: 0,
+      completed: 0,
+      returned: 0,
+      forValidation: 0,
+      rate: 0,
+    };
     return acc;
   }, {});
 
+  complaints.forEach((complaint) => {
+    const offices = resolveAssignedOfficesForAnalytics(
+      complaint.assignedOffice,
+      complaint.category
+    );
+
+    offices.forEach((department) => {
+      if (!grouped[department]) return;
+
+      grouped[department].handled += 1;
+
+      if (complaint.status === "Completed") {
+        grouped[department].completed += 1;
+      }
+
+      if (complaint.status === "Returned" || complaint.status === "Unsolved") {
+        grouped[department].returned += 1;
+      }
+
+      if (
+        complaint.status === "For Validation" ||
+        complaint.status === "Validated"
+      ) {
+        grouped[department].forValidation += 1;
+      }
+    });
+  });
+
   return Object.values(grouped)
+    .filter((department) => department.handled > 0)
     .map((department) => ({
       ...department,
       rate:
@@ -301,8 +367,9 @@ export default function AdminAnalytics() {
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
 
-  const [complaints, setComplaints] = useState([]);
-  const [loadingReport, setLoadingReport] = useState(true);
+  const cachedAnalytics = getPageCache(ANALYTICS_CACHE_KEY);
+  const [complaints, setComplaints] = useState(cachedAnalytics?.complaints ?? []);
+  const [loadingReport, setLoadingReport] = useState(!cachedAnalytics);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -342,29 +409,41 @@ export default function AdminAnalytics() {
 
   const loadAnalyticsReport = useCallback(async (showLoader = true) => {
     try {
-      if (showLoader) {
+      if (showLoader && shouldShowPageLoader(ANALYTICS_CACHE_KEY)) {
         setLoadingReport(true);
       }
 
-      const { data, error } = await supabase
-        .from("complaints")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const { data, error } = await fetchAllRowsWithOffset(async (offset, pageSize) => {
+        const query = applyOffsetPagination(
+          supabase
+            .from("complaints")
+            .select("*", { count: offset === 0 ? "exact" : undefined })
+            .order("created_at", { ascending: false }),
+          offset,
+          pageSize
+        );
+
+        return await query;
+      }, COMPLAINTS_PAGE_SIZE);
 
       if (error) {
         console.log("Admin analytics load error:", error);
-        setComplaints([]);
+        if (shouldShowPageLoader(ANALYTICS_CACHE_KEY)) {
+          setComplaints([]);
+        }
         return;
       }
 
-      setComplaints((data || []).map(mapComplaint));
+      const mapped = (data || []).map(mapComplaint);
+      setComplaints(mapped);
+      setPageCache(ANALYTICS_CACHE_KEY, { complaints: mapped });
     } catch (error) {
       console.log("Admin analytics load catch error:", error);
-      setComplaints([]);
-    } finally {
-      if (showLoader) {
-        setLoadingReport(false);
+      if (shouldShowPageLoader(ANALYTICS_CACHE_KEY)) {
+        setComplaints([]);
       }
+    } finally {
+      setLoadingReport(false);
     }
   }, []);
 
@@ -436,11 +515,7 @@ export default function AdminAnalytics() {
   }, [departmentData]);
 
   if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+    return <PageSkeleton variant="analytics" />;
   }
 
   return (
@@ -448,22 +523,22 @@ export default function AdminAnalytics() {
       <StatusBar barStyle="dark-content" backgroundColor={BG} />
 
       <View style={styles.mainContainer}>
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
+        <View style={styles.stickyHeader}>
           <View style={styles.headerContainer}>
             <Text style={styles.headerTitle}>Full Report</Text>
             <Text style={styles.headerSubtitle}>
               Real-time analytics from all citizen-submitted complaints across all departments.
             </Text>
           </View>
+        </View>
 
+        <ScrollView
+          style={styles.listScroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+        >
           {loadingReport ? (
-            <View style={styles.loadingReportCard}>
-              <ActivityIndicator size="large" color={GREEN} />
-              <Text style={styles.loadingText}>Loading full report...</Text>
-            </View>
+            <AnalyticsReportSkeleton hideIntro />
           ) : (
             <>
               <View style={styles.sectionRow}>
@@ -730,6 +805,20 @@ const styles = StyleSheet.create({
     backgroundColor: BG,
   },
 
+  stickyHeader: {
+    backgroundColor: BG,
+    paddingHorizontal: H_PADDING,
+    paddingTop: 4,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+    zIndex: 2,
+  },
+
+  listScroll: {
+    flex: 1,
+  },
+
   loader: {
     flex: 1,
     backgroundColor: BG,
@@ -739,12 +828,12 @@ const styles = StyleSheet.create({
 
   scrollContent: {
     paddingHorizontal: H_PADDING,
-    paddingTop: 4,
-    paddingBottom: 116,
+    paddingTop: 12,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   headerContainer: {
-    marginBottom: 13,
+    marginBottom: 0,
   },
 
   headerTitle: {
@@ -1178,7 +1267,6 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
     paddingHorizontal: 2,
   },
-
 
   navIconWrap: {
     position: "relative",
