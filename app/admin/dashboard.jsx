@@ -9,7 +9,6 @@ import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Dimensions,
   Image,
   Platform,
@@ -21,9 +20,25 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  DashboardStatsSkeleton,
+  PageSkeleton,
+} from "../../components/skeletons";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import {
+  applyOffsetPagination,
+  COMPLAINTS_PAGE_SIZE,
+  fetchAllRowsWithOffset,
+} from "../../lib/complaintPagination";
+import {
+  getProfileAvatarUrl,
+  setProfileAvatarUrl,
+  subscribeProfileAvatar,
+} from "../../lib/profileAvatarStore";
 import { supabase } from "../../lib/supabase";
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
+import { BOTTOM_NAV_CONTENT_INSET } from "../../components/PersistentBottomNav";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -46,6 +61,7 @@ const TRACK = "#EDF1EC";
 const H_PADDING = 20;
 const CARD_GAP = 8;
 const CARD_WIDTH = (SCREEN_WIDTH - H_PADDING * 2 - CARD_GAP * 3) / 4;
+const ADMIN_DASHBOARD_CACHE_KEY = "admin.dashboard";
 
 const dashboardCardConfig = [
   {
@@ -456,9 +472,15 @@ export default function AdminDashboard() {
   const pathname = usePathname();
   const { unreadNotificationCount } = useAdminUnreadNotifications();
 
+  const cachedDashboard = getPageCache(ADMIN_DASHBOARD_CACHE_KEY);
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [complaintsData, setComplaintsData] = useState([]);
-  const [loadingComplaints, setLoadingComplaints] = useState(true);
+  const [complaintsData, setComplaintsData] = useState(
+    cachedDashboard?.complaints ?? []
+  );
+  const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState(
+    getProfileAvatarUrl() || cachedDashboard?.profilePhotoUrl || null
+  );
 
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
@@ -469,6 +491,68 @@ export default function AdminDashboard() {
     Poppins_600SemiBold,
     Poppins_700Bold,
   });
+
+  useEffect(() => {
+    return subscribeProfileAvatar((url) => {
+      setProfilePhotoUrl(url);
+      const prev = getPageCache(ADMIN_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(ADMIN_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        profilePhotoUrl: url,
+      });
+    });
+  }, []);
+
+  const loadUserProfilePhoto = useCallback(async () => {
+    try {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+
+      if (error || !user) {
+        setProfilePhotoUrl(null);
+        return;
+      }
+
+      const raw =
+        user.user_metadata?.avatar_url ||
+        user.user_metadata?.avatar ||
+        null;
+
+      if (!raw) {
+        setProfilePhotoUrl(null);
+        setProfileAvatarUrl(null);
+        return;
+      }
+
+      let nextUrl = null;
+
+      if (/^https?:\/\//i.test(String(raw))) {
+        nextUrl = String(raw);
+      } else {
+        const path = String(raw).replace(/^avatars\//, "").replace(/^\/+/, "");
+        const { data: signedData } = await supabase.storage
+          .from("avatars")
+          .createSignedUrl(path, 60 * 60);
+
+        nextUrl =
+          signedData?.signedUrl ||
+          supabase.storage.from("avatars").getPublicUrl(path)?.data?.publicUrl ||
+          null;
+      }
+
+      setProfilePhotoUrl(nextUrl);
+      if (nextUrl) setProfileAvatarUrl(nextUrl);
+      const prev = getPageCache(ADMIN_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(ADMIN_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        profilePhotoUrl: nextUrl,
+      });
+    } catch {
+      // Keep current avatar if refresh fails.
+    }
+  }, []);
 
   const smoothNavigate = useCallback(
     (route, isActive = false) => {
@@ -509,18 +593,28 @@ export default function AdminDashboard() {
 
   const loadAllComplaints = useCallback(async (showLoader = true) => {
     try {
-      if (showLoader) {
+      if (showLoader && shouldShowPageLoader(ADMIN_DASHBOARD_CACHE_KEY)) {
         setLoadingComplaints(true);
       }
 
-      const { data, error } = await supabase
-        .from("complaints")
-        .select("*")
-        .order("created_at", { ascending: false });
+      const { data, error } = await fetchAllRowsWithOffset(async (offset, pageSize) => {
+        const query = applyOffsetPagination(
+          supabase
+            .from("complaints")
+            .select("*", { count: offset === 0 ? "exact" : undefined })
+            .order("created_at", { ascending: false }),
+          offset,
+          pageSize
+        );
+
+        return await query;
+      }, COMPLAINTS_PAGE_SIZE);
 
       if (error) {
         console.log("Admin dashboard complaints load error:", error);
-        setComplaintsData([]);
+        if (shouldShowPageLoader(ADMIN_DASHBOARD_CACHE_KEY)) {
+          setComplaintsData([]);
+        }
         return;
       }
 
@@ -535,21 +629,23 @@ export default function AdminDashboard() {
       );
 
       setComplaintsData(mappedComplaints);
+      setPageCache(ADMIN_DASHBOARD_CACHE_KEY, { complaints: mappedComplaints });
     } catch (error) {
       console.log("Admin dashboard complaints catch error:", error);
-      setComplaintsData([]);
-    } finally {
-      if (showLoader) {
-        setLoadingComplaints(false);
+      if (shouldShowPageLoader(ADMIN_DASHBOARD_CACHE_KEY)) {
+        setComplaintsData([]);
       }
+    } finally {
+      setLoadingComplaints(false);
     }
   }, []);
 
   useFocusEffect(
     useCallback(() => {
+      loadUserProfilePhoto();
       loadAllComplaints(true);
       registerPushTokenForCurrentUser();
-    }, [loadAllComplaints])
+    }, [loadAllComplaints, loadUserProfilePhoto])
   );
 
   useEffect(() => {
@@ -691,11 +787,7 @@ export default function AdminDashboard() {
   };
 
   if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+    return <PageSkeleton variant="dashboard" />;
   }
 
   return (
@@ -717,7 +809,15 @@ export default function AdminDashboard() {
             style={styles.avatarCircle}
             onPress={() => smoothNavigate("/admin/profile")}
           >
-            <Ionicons name="person" size={25} color={GREEN} />
+            {profilePhotoUrl ? (
+              <Image
+                source={{ uri: profilePhotoUrl }}
+                style={styles.avatar}
+                onError={() => setProfilePhotoUrl(null)}
+              />
+            ) : (
+              <Ionicons name="person" size={25} color={GREEN} />
+            )}
           </TouchableOpacity>
         </View>
 
@@ -733,9 +833,11 @@ export default function AdminDashboard() {
 
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Dashboard</Text>
-            {loadingComplaints && <ActivityIndicator size="small" color={GREEN} />}
           </View>
 
+          {loadingComplaints ? (
+            <DashboardStatsSkeleton />
+          ) : (
           <View style={styles.dashboardCardsRow}>
             {dashboardCards.map((item, index) => (
               <View
@@ -757,6 +859,7 @@ export default function AdminDashboard() {
               </View>
             ))}
           </View>
+          )}
 
           <TouchableOpacity
             activeOpacity={0.78}
@@ -930,10 +1033,16 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
 
+  avatar: {
+    width: "100%",
+    height: "100%",
+    resizeMode: "cover",
+  },
+
   scrollContent: {
     paddingHorizontal: H_PADDING,
     paddingTop: 0,
-    paddingBottom: 116,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   greetingContainer: {
@@ -1391,7 +1500,6 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
     paddingHorizontal: 2,
   },
-
 
   navIconWrap: {
     position: "relative",
