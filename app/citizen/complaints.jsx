@@ -1,4 +1,5 @@
-import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import {
+  Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   Poppins_400Regular,
   Poppins_500Medium,
@@ -16,13 +17,11 @@ import {
   usePathname,
   useRouter,
 } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Keyboard,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -34,15 +33,45 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
+import { ComplaintListSkeleton, PageSkeleton } from "../../components/skeletons";
+import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
+import Skeleton from "../../components/Skeleton";
 import {
   getProfileDisplayName,
   notifyAdminsCitizenValidated,
 } from "../../lib/adminNotificationService";
+import { notifyCitizenAiValidationResult } from "../../lib/citizenNotificationService";
+import { writeAuditLog } from "../../lib/auditLogService";
 import {
   buildResolutionValidationDbPayload,
   validateResolutionWithGemini,
 } from "../../lib/geminiResolutionValidation";
+import {
+  applyComplaintOffsetFilters,
+  applyOffsetPagination,
+  COMPLAINTS_PAGE_SIZE,
+  isNearContentBottom,
+  mergeComplaintPages,
+} from "../../lib/complaintPagination";
+import {
+  canCitizenSubmitValidation,
+  getLatestFeedbackStatusByComplaintIds,
+  insertComplaintFeedback,
+  isValidationResubmit,
+  updateComplaintFeedbackAi,
+} from "../../lib/complaintFeedbackService";
+import {
+  calculatePriorityFromKeywords,
+  detectComplaintCategoryFromKeywords,
+  getAssignedOffice as getAssignedOfficeFromCategory,
+  normalizeComplaintCategory,
+} from "../../lib/complaintCategories";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const GREEN = "#087A0D";
 const LIGHT_GREEN = "#EAF6E4";
@@ -63,6 +92,11 @@ const PHOTO_PLACEHOLDER =
   "https://placehold.co/900x600/eaf6e4/087a0d?text=CitiSense+Complaint";
 
 const COMPLAINT_PHOTOS_BUCKET = "complaint-photos";
+const CITIZEN_COMPLAINTS_LAST_FILTER_KEY = "citizen.complaints.lastFilter";
+
+function citizenComplaintsCacheKey(filter) {
+  return `citizen.complaints:${filter || "All"}`;
+}
 
 const bottomTabs = [
   {
@@ -99,7 +133,31 @@ const bottomTabs = [
   },
 ];
 
-const filters = ["All", "Pending", "In Progress", "For Validation", "Completed"];
+const filters = [
+  "All",
+  "Pending",
+  "In Progress",
+  "For Validation",
+  "Returned",
+  "Completed",
+];
+
+const FILTER_OPTIONS = [...filters, "All Emergency", "All Non-Emergency"];
+const FOR_VALIDATION_STATUSES = ["For Validation"];
+
+function resolveComplaintsFilter(params, lastFilter) {
+  const requested = params?.filter ? String(params.filter) : "";
+
+  if (FILTER_OPTIONS.includes(requested)) return requested;
+
+  return lastFilter || "All";
+}
+
+function getStatusSortRank(status) {
+  if (status === "Returned") return 0;
+  if (status === "For Validation") return 1;
+  return 2;
+}
 
 const CATEGORY_DEPARTMENT_MAP = {
   "Water Concerns": "Bogo Water District",
@@ -817,7 +875,7 @@ async function resolveComplaintPhotoUrls(row) {
     const { data: files, error } = await supabase.storage
       .from("complaint-photos")
       .list(String(row.id), {
-        limit: 10,
+        limit: 20,
         sortBy: { column: "name", order: "asc" },
       });
 
@@ -825,6 +883,9 @@ async function resolveComplaintPhotoUrls(row) {
 
     const imageFiles = files.filter((file) => {
       const name = String(file.name || "").toLowerCase();
+
+      // Skip citizen validation uploads stored in the same folder.
+      if (name.startsWith("validation-")) return false;
 
       return (
         name.endsWith(".jpg") ||
@@ -849,6 +910,63 @@ async function resolveComplaintPhotoUrls(row) {
     return listedUrls;
   } catch (error) {
     console.log("List complaint photos error:", error);
+    return [];
+  }
+}
+
+async function resolveValidationPhotoUrls(row) {
+  const rawUrls = normalizeValidationPhotoUrls(
+    row?.citizen_validation_photo_urls ||
+      row?.validation_photo_urls ||
+      row?.citizen_feedback_photo_urls
+  );
+
+  const resolvedUrls = [];
+
+  for (const rawUrl of rawUrls) {
+    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
+
+    if (resolvedUrl) {
+      resolvedUrls.push(resolvedUrl);
+    }
+  }
+
+  if (resolvedUrls.length > 0) {
+    return resolvedUrls;
+  }
+
+  // Fallback: list validation-* files from the complaint storage folder.
+  if (!row?.id) return [];
+
+  try {
+    const { data: files, error } = await supabase.storage
+      .from("complaint-photos")
+      .list(String(row.id), {
+        limit: 20,
+        sortBy: { column: "name", order: "asc" },
+      });
+
+    if (error || !files?.length) return [];
+
+    const validationFiles = files.filter((file) => {
+      const name = String(file.name || "").toLowerCase();
+      return name.startsWith("validation-");
+    });
+
+    const listedUrls = [];
+
+    for (const file of validationFiles) {
+      const storagePath = `${row.id}/${file.name}`;
+      const resolvedUrl = await createReadableComplaintPhotoUrl(storagePath);
+
+      if (resolvedUrl) {
+        listedUrls.push(resolvedUrl);
+      }
+    }
+
+    return listedUrls;
+  } catch (error) {
+    console.log("List validation photos error:", error);
     return [];
   }
 }
@@ -934,21 +1052,24 @@ async function mapDatabaseComplaint(row) {
   const createdAt =
     row.created_at || row.submitted_at || row.submitted_date_time || new Date().toISOString();
 
-  const detectedCategory = detectComplaintCategory(row.title, row.description);
+  const detectedCategory = detectComplaintCategoryFromKeywords(
+    row.title,
+    row.description
+  );
 
   const category =
     !row.category ||
     row.category === "Unclassified" ||
     row.category === "Unassigned"
       ? detectedCategory
-      : normalizeCategory(row.category || row.concern_category);
+      : normalizeComplaintCategory(row.category || row.concern_category);
 
-  const assignedOffice = getAssignedOffice(
+  const assignedOffice = getAssignedOfficeFromCategory(
     category,
     row.assigned_office || row.assignedOffice || row.department
   );
 
-  const priority = calculatePriority(
+  const priority = calculatePriorityFromKeywords(
     row.title,
     row.description,
     Boolean(row.is_emergency)
@@ -962,6 +1083,7 @@ async function mapDatabaseComplaint(row) {
 
   const photoUrls = await resolveComplaintPhotoUrls(row);
   const firstPhoto = photoUrls[0] || PHOTO_PLACEHOLDER;
+  const validationPhotoUrls = await resolveValidationPhotoUrls(row);
 
   return {
     id: row.id,
@@ -977,14 +1099,11 @@ async function mapDatabaseComplaint(row) {
     assignedOffice,
     priority,
     status: row.status || "Pending",
+    latestFeedbackStatus: row.latest_feedback_status || null,
     validationSubmitted: getValidationSubmitted(row),
     validationResult: getValidationResult(row),
     validationFeedback: getValidationFeedback(row),
-    validationPhotoUrls: normalizeValidationPhotoUrls(
-      row.citizen_validation_photo_urls ||
-        row.validation_photo_urls ||
-        row.citizen_feedback_photo_urls
-    ),
+    validationPhotoUrls,
     description: row.description || "No description provided.",
     photo: firstPhoto,
     photoUrls,
@@ -1003,25 +1122,33 @@ function getStatusStyle(status) {
 
   if (status === "In Progress") {
     return {
-      bg: "#FFF2C2",
-      color: "#A97700",
+      bg: "#FFF8D6",
+      color: "#C9A000",
       icon: "progress-wrench",
     };
   }
 
   if (status === "For Validation") {
     return {
-      bg: LIGHT_GREEN,
-      color: GREEN,
+      bg: "#F3EAFF",
+      color: "#7A3EA8",
       icon: "clipboard-check-outline",
     };
   }
 
   if (status === "Completed") {
     return {
-      bg: LIGHT_GREEN,
+      bg: "#DFF0DF",
       color: GREEN,
       icon: "check-circle-outline",
+    };
+  }
+
+  if (status === "Returned") {
+    return {
+      bg: "#FFF0F0",
+      color: RED,
+      icon: "arrow-u-left-top",
     };
   }
 
@@ -1155,7 +1282,6 @@ async function prepareValidationPhotoAsset(asset) {
     return null;
   }
 }
-
 
 function getValidationSubmitted(row) {
   const directFlags = [
@@ -1359,11 +1485,43 @@ export default function CitizenComplaints() {
     ? String(params.complaintId)
     : null;
 
-  const [complaintsData, setComplaintsData] = useState([]);
-  const [loadingComplaints, setLoadingComplaints] = useState(true);
-  const [currentUserId, setCurrentUserId] = useState(null);
+  const lastComplaintsFilter =
+    getPageCache(CITIZEN_COMPLAINTS_LAST_FILTER_KEY)?.filter || "All";
+  const cachedComplaintsPage = getPageCache(
+    citizenComplaintsCacheKey(
+      resolveComplaintsFilter(params, lastComplaintsFilter)
+    )
+  );
+
+  const [complaintsData, setComplaintsData] = useState(
+    cachedComplaintsPage?.complaints ?? []
+  );
+  const [complaintsTotal, setComplaintsTotal] = useState(
+    cachedComplaintsPage?.total ?? 0
+  );
+  const [submittedCount, setSubmittedCount] = useState(
+    cachedComplaintsPage?.submittedCount ?? 0
+  );
+  const [emergencyCount, setEmergencyCount] = useState(
+    cachedComplaintsPage?.emergencyCount ?? 0
+  );
+  const [nonEmergencyCount, setNonEmergencyCount] = useState(
+    cachedComplaintsPage?.nonEmergencyCount ?? 0
+  );
+  const [loadingComplaints, setLoadingComplaints] = useState(
+    !cachedComplaintsPage
+  );
+  const [loadingMoreComplaints, setLoadingMoreComplaints] = useState(false);
+  const [hasMoreComplaints, setHasMoreComplaints] = useState(
+    cachedComplaintsPage?.hasMore !== false
+  );
+  const [currentUserId, setCurrentUserId] = useState(
+    cachedComplaintsPage?.currentUserId ?? null
+  );
   const [autoOpenedComplaintId, setAutoOpenedComplaintId] = useState(null);
-  const [activeFilter, setActiveFilter] = useState("All");
+  const [activeFilter, setActiveFilter] = useState(
+    resolveComplaintsFilter(params, lastComplaintsFilter)
+  );
   const [selectedComplaint, setSelectedComplaint] = useState(null);
   const [detailsVisible, setDetailsVisible] = useState(false);
   const [validationVisible, setValidationVisible] = useState(false);
@@ -1371,6 +1529,10 @@ export default function CitizenComplaints() {
   const [validationPhotos, setValidationPhotos] = useState([]);
   const [validationAnswer, setValidationAnswer] = useState(null);
   const [submittingValidation, setSubmittingValidation] = useState(false);
+  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
+
+  useHideBottomNav(detailsVisible || validationVisible);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -1379,9 +1541,85 @@ export default function CitizenComplaints() {
     Poppins_700Bold,
   });
 
-  const loadComplaints = useCallback(async () => {
+  const applyCachedComplaintsPage = (cached) => {
+    if (!cached?.complaints) return false;
+
+    complaintsDataRef.current = cached.complaints;
+    setComplaintsData(cached.complaints);
+    setComplaintsTotal(cached.total ?? cached.complaints.length);
+    setHasMoreComplaints(cached.hasMore !== false);
+    hasMoreRef.current = cached.hasMore !== false;
+
+    if (cached.submittedCount != null) setSubmittedCount(cached.submittedCount);
+    if (cached.emergencyCount != null) setEmergencyCount(cached.emergencyCount);
+    if (cached.nonEmergencyCount != null) {
+      setNonEmergencyCount(cached.nonEmergencyCount);
+    }
+    if (cached.currentUserId) setCurrentUserId(cached.currentUserId);
+
+    return true;
+  };
+
+  const applyListFilter = (filter) => {
+    setActiveFilter(filter);
+    setPageCache(CITIZEN_COMPLAINTS_LAST_FILTER_KEY, { filter });
+    applyCachedComplaintsPage(getPageCache(citizenComplaintsCacheKey(filter)));
+  };
+
+  const appliedQueryFilterRef = useRef(
+    params?.filter ? String(params.filter) : null
+  );
+
+  useEffect(() => {
+    const next = params?.filter ? String(params.filter) : "";
+
+    if (!FILTER_OPTIONS.includes(next)) return;
+    if (appliedQueryFilterRef.current === next) return;
+
+    appliedQueryFilterRef.current = next;
+    applyListFilter(next);
+  }, [params?.filter]);
+
+  const complaintsDataRef = useRef(cachedComplaintsPage?.complaints ?? []);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(cachedComplaintsPage?.hasMore !== false);
+  const listViewportHeightRef = useRef(0);
+  const loadingListRef = useRef(false);
+  const openingValidationRef = useRef(false);
+  const validationOpenTimerRef = useRef(null);
+
+  useEffect(() => {
+    complaintsDataRef.current = complaintsData;
+  }, [complaintsData]);
+
+  const loadComplaints = useCallback(async (options = {}) => {
+    const append = options.append === true;
+    const cacheKey = citizenComplaintsCacheKey(activeFilter);
+    const cached = !append ? getPageCache(cacheKey) : null;
+
+    if (!append && cached) {
+      applyCachedComplaintsPage(cached);
+    }
+
+    const showLoader =
+      options.showLoader ??
+      (!append && shouldShowPageLoader(cacheKey));
+
+    if (append) {
+      if (loadingMoreRef.current || loadingListRef.current || !hasMoreRef.current) {
+        return;
+      }
+      loadingMoreRef.current = true;
+      setLoadingMoreComplaints(true);
+    } else {
+      hasMoreRef.current = cached?.hasMore !== false;
+      loadingListRef.current = true;
+    }
+
     try {
-      setLoadingComplaints(true);
+      if (showLoader) {
+        setLoadingComplaints(true);
+      }
 
       const {
         data: { user },
@@ -1389,41 +1627,116 @@ export default function CitizenComplaints() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        setCurrentUserId(null);
-        setComplaintsData([]);
+        if (!cached) {
+          setCurrentUserId(null);
+          setComplaintsData([]);
+          setComplaintsTotal(0);
+          setSubmittedCount(0);
+          setEmergencyCount(0);
+          setNonEmergencyCount(0);
+          hasMoreRef.current = false;
+          setHasMoreComplaints(false);
+        }
         return;
       }
 
       setCurrentUserId(user.id);
 
-      const { data, error } = await supabase
+      const offset = append ? complaintsDataRef.current.length : 0;
+      const pageSize = append
+        ? COMPLAINTS_PAGE_SIZE
+        : Math.max(COMPLAINTS_PAGE_SIZE, cached?.complaints?.length || 0);
+
+      let listQuery = supabase
         .from("complaints")
-        .select("*")
+        .select("*", { count: "exact" })
         .eq("citizen_id", user.id)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false });
+
+      if (activeFilter === "All Emergency") {
+        listQuery = applyComplaintOffsetFilters(listQuery, {
+          isEmergency: true,
+        });
+      } else if (activeFilter === "All Non-Emergency") {
+        listQuery = applyComplaintOffsetFilters(listQuery, {
+          isEmergency: false,
+        });
+      } else if (activeFilter === "For Validation") {
+        listQuery = applyComplaintOffsetFilters(listQuery, {
+          statusIn: FOR_VALIDATION_STATUSES,
+        });
+      } else if (activeFilter !== "All") {
+        listQuery = applyComplaintOffsetFilters(listQuery, {
+          status: activeFilter,
+        });
+      }
+
+      listQuery = applyOffsetPagination(listQuery, offset, pageSize);
+
+      const listPromise = listQuery;
+      const summaryPromise = append
+        ? Promise.resolve({ data: null })
+        : supabase
+            .from("complaints")
+            .select("is_emergency")
+            .eq("citizen_id", user.id);
+
+      const [{ data, error, count }, { data: summaryRows }] = await Promise.all([
+        listPromise,
+        summaryPromise,
+      ]);
 
       if (error) {
-        Alert.alert("Load Failed", error.message);
-        setComplaintsData([]);
+        if (!cached) {
+          notify("Load Failed", error.message);
+        }
+        if (!append && !cached) {
+          setComplaintsData([]);
+          setComplaintsTotal(0);
+        }
         return;
       }
 
+      const total = count ?? 0;
+      setComplaintsTotal(total);
+
+      const nextSubmittedCount =
+        !append && summaryRows ? summaryRows.length : undefined;
+      const nextEmergencyCount =
+        !append && summaryRows
+          ? summaryRows.filter((row) => Boolean(row.is_emergency)).length
+          : undefined;
+      const nextNonEmergencyCount =
+        !append && summaryRows
+          ? summaryRows.filter((row) => !row.is_emergency).length
+          : undefined;
+
+      if (nextSubmittedCount != null) setSubmittedCount(nextSubmittedCount);
+      if (nextEmergencyCount != null) setEmergencyCount(nextEmergencyCount);
+      if (nextNonEmergencyCount != null) {
+        setNonEmergencyCount(nextNonEmergencyCount);
+      }
+
       const routedRows = (data || []).map((row) => {
-        const detectedCategory = detectComplaintCategory(row.title, row.description);
+        const detectedCategory = detectComplaintCategoryFromKeywords(
+          row.title,
+          row.description
+        );
 
         const fixedCategory =
           !row.category ||
           row.category === "Unclassified" ||
           row.category === "Unassigned"
             ? detectedCategory
-            : normalizeCategory(row.category || row.concern_category);
+            : normalizeComplaintCategory(row.category || row.concern_category);
 
-        const fixedOffice = getAssignedOffice(
+        const fixedOffice = getAssignedOfficeFromCategory(
           fixedCategory,
           row.assigned_office || row.assignedOffice || row.department
         );
 
-        const fixedPriority = calculatePriority(
+        const fixedPriority = calculatePriorityFromKeywords(
           row.title,
           row.description,
           Boolean(row.is_emergency)
@@ -1458,19 +1771,89 @@ export default function CitizenComplaints() {
         })
       );
 
-      const mappedComplaints = await Promise.all(
-        routedRows.map((row) => mapDatabaseComplaint(row))
+      const feedbackStatusById = await getLatestFeedbackStatusByComplaintIds(
+        routedRows.map((row) => row.id)
       );
 
-      setComplaintsData(mappedComplaints);
+      const mappedComplaints = await Promise.all(
+        routedRows.map((row) =>
+          mapDatabaseComplaint({
+            ...row,
+            latest_feedback_status: feedbackStatusById[row.id] || null,
+          })
+        )
+      );
+
+      const nextComplaints = append
+        ? mergeComplaintPages(complaintsDataRef.current, mappedComplaints)
+        : mappedComplaints;
+
+      complaintsDataRef.current = nextComplaints;
+      setComplaintsData(nextComplaints);
+
+      const loadedCount = nextComplaints.length;
+      const hasMore = mappedComplaints.length > 0 && loadedCount < total;
+      hasMoreRef.current = hasMore;
+      setHasMoreComplaints(hasMore);
+
+      const previousCache = getPageCache(cacheKey) || {};
+      setPageCache(cacheKey, {
+        ...previousCache,
+        complaints: nextComplaints,
+        total,
+        hasMore,
+        currentUserId: user.id,
+        ...(nextSubmittedCount != null ? { submittedCount: nextSubmittedCount } : {}),
+        ...(nextEmergencyCount != null ? { emergencyCount: nextEmergencyCount } : {}),
+        ...(nextNonEmergencyCount != null
+          ? { nonEmergencyCount: nextNonEmergencyCount }
+          : {}),
+      });
+      setPageCache(CITIZEN_COMPLAINTS_LAST_FILTER_KEY, { filter: activeFilter });
     } catch (error) {
       console.log("Load complaints error:", error);
-      Alert.alert("Load Failed", "Unable to load complaints.");
-      setComplaintsData([]);
+
+      if (!append && !cached) {
+        hasMoreRef.current = false;
+        setHasMoreComplaints(false);
+        notify("Load Failed", "Unable to load complaints.");
+        setComplaintsData([]);
+      }
     } finally {
+      loadingListRef.current = false;
       setLoadingComplaints(false);
+
+      if (append) {
+        loadingMoreRef.current = false;
+        setLoadingMoreComplaints(false);
+      }
     }
-  }, []);
+  }, [activeFilter]);
+
+  const loadComplaintsRef = useRef(loadComplaints);
+  loadComplaintsRef.current = loadComplaints;
+
+  const loadMoreComplaints = useCallback(() => {
+    loadComplaints({ append: true, showLoader: false });
+  }, [loadComplaints]);
+
+  const handleComplaintsScroll = ({ nativeEvent }) => {
+    if (isNearContentBottom(nativeEvent)) {
+      loadMoreComplaints();
+    }
+  };
+
+  const maybeFillViewport = (contentHeight) => {
+    if (
+      hasMoreRef.current &&
+      !loadingMoreRef.current &&
+      !loadingListRef.current &&
+      listViewportHeightRef.current > 0 &&
+      contentHeight < listViewportHeightRef.current + 80
+    ) {
+      loadMoreComplaints();
+    }
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -1501,7 +1884,7 @@ export default function CitizenComplaints() {
           filter: `citizen_id=eq.${currentUserId}`,
         },
         () => {
-          loadComplaints();
+          loadComplaintsRef.current?.();
         }
       )
       .subscribe((status) => {
@@ -1511,25 +1894,16 @@ export default function CitizenComplaints() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentUserId, loadComplaints]);
-
-  const emergencyCount = useMemo(
-    () =>
-      complaintsData.filter((item) => item.concernType === "Emergency").length,
-    [complaintsData]
-  );
-
-  const nonEmergencyCount = useMemo(
-    () =>
-      complaintsData.filter((item) => item.concernType === "Non-Emergency")
-        .length,
-    [complaintsData]
-  );
+  }, [currentUserId]);
 
   const sortedComplaintsData = useMemo(() => {
-    return [...complaintsData].sort(
-      (a, b) => parseSubmittedAt(b.submittedAt) - parseSubmittedAt(a.submittedAt)
-    );
+    return [...complaintsData].sort((a, b) => {
+      const rank = getStatusSortRank(a.status) - getStatusSortRank(b.status);
+
+      if (rank !== 0) return rank;
+
+      return parseSubmittedAt(b.submittedAt) - parseSubmittedAt(a.submittedAt);
+    });
   }, [complaintsData]);
 
   const filteredComplaints = useMemo(() => {
@@ -1544,6 +1918,12 @@ export default function CitizenComplaints() {
     if (activeFilter === "All Non-Emergency") {
       return sortedComplaintsData.filter(
         (item) => item.concernType === "Non-Emergency"
+      );
+    }
+
+    if (activeFilter === "For Validation") {
+      return sortedComplaintsData.filter((item) =>
+        FOR_VALIDATION_STATUSES.includes(item.status)
       );
     }
 
@@ -1562,9 +1942,32 @@ export default function CitizenComplaints() {
     if (matchedComplaint) {
       setSelectedComplaint(matchedComplaint);
       setDetailsVisible(true);
-      setActiveFilter("All");
       setAutoOpenedComplaintId(targetComplaintId);
+      return;
     }
+
+    let cancelled = false;
+
+    const openFromQuery = async () => {
+      const { data, error } = await supabase
+        .from("complaints")
+        .select("*")
+        .eq("id", targetComplaintId)
+        .maybeSingle();
+
+      if (cancelled || error || !data) return;
+
+      const mappedComplaint = await mapDatabaseComplaint(data);
+      setSelectedComplaint(mappedComplaint);
+      setDetailsVisible(true);
+      setAutoOpenedComplaintId(targetComplaintId);
+    };
+
+    openFromQuery();
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     autoOpenedComplaintId,
     loadingComplaints,
@@ -1573,34 +1976,81 @@ export default function CitizenComplaints() {
   ]);
 
   const openDetails = (complaint) => {
+    if (openingValidationRef.current || validationVisible) return;
     setSelectedComplaint(complaint);
     setDetailsVisible(true);
+  };
+
+  const closeDetails = () => {
+    setDetailsVisible(false);
+    setPhotoViewerVisible(false);
+    setSelectedPhoto(null);
+  };
+
+  const openPhotoViewer = (uri) => {
+    if (!uri) return;
+    if (
+      String(uri).includes("placehold.co") ||
+      String(uri).includes("placeholder")
+    ) {
+      return;
+    }
+    setSelectedPhoto(uri);
+    setPhotoViewerVisible(true);
+  };
+
+  const closePhotoViewer = () => {
+    setPhotoViewerVisible(false);
+    setTimeout(() => {
+      setSelectedPhoto(null);
+    }, 160);
   };
 
   const openValidation = (complaint) => {
     Keyboard.dismiss();
 
-    if (complaint?.validationSubmitted) {
-      Alert.alert(
+    if (!canCitizenSubmitValidation(complaint)) {
+      notify(
         "Already Validated",
         "You already submitted your validation feedback for this complaint. Please wait for the admin review."
       );
       return;
     }
 
+    if (validationOpenTimerRef.current) {
+      clearTimeout(validationOpenTimerRef.current);
+      validationOpenTimerRef.current = null;
+    }
+
+    openingValidationRef.current = true;
     setSelectedComplaint(complaint);
     setFeedback("");
     setValidationPhotos([]);
     setValidationAnswer(null);
     setDetailsVisible(false);
-    setValidationVisible(true);
+    setPhotoViewerVisible(false);
+
+    // Wait for the details modal to finish closing so both sheets don't fight.
+    validationOpenTimerRef.current = setTimeout(() => {
+      setValidationVisible(true);
+      openingValidationRef.current = false;
+      validationOpenTimerRef.current = null;
+    }, 280);
   };
+
+  useEffect(() => {
+    return () => {
+      if (validationOpenTimerRef.current) {
+        clearTimeout(validationOpenTimerRef.current);
+      }
+    };
+  }, []);
 
   const addValidationPhotoAssets = async (assets = []) => {
     const remainingSlots = MAX_VALIDATION_PHOTOS - validationPhotos.length;
 
     if (remainingSlots <= 0) {
-      Alert.alert(
+      notify(
         "Photo Limit Reached",
         "You can only upload up to 3 validation photos."
       );
@@ -1638,7 +2088,7 @@ export default function CitizenComplaints() {
     }
 
     if (invalidFormatCount > 0 || invalidSizeCount > 0 || failedPrepareCount > 0) {
-      Alert.alert(
+      notify(
         "Some Photos Were Not Added",
         "Only PNG, JPG, JPEG, HEIC, and HEIF files are allowed, with a maximum size of 10MB per photo."
       );
@@ -1656,7 +2106,7 @@ export default function CitizenComplaints() {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
 
       if (permission.status !== "granted") {
-        Alert.alert(
+        notify(
           "Permission Needed",
           "Please allow camera access so you can take validation evidence photos."
         );
@@ -1673,7 +2123,7 @@ export default function CitizenComplaints() {
       await addValidationPhotoAssets(result.assets);
     } catch (error) {
       console.log("Validation camera error:", error);
-      Alert.alert(
+      notify(
         "Camera Error",
         "The app could not open the camera. Please try again or choose a photo from your gallery."
       );
@@ -1685,7 +2135,7 @@ export default function CitizenComplaints() {
       const remainingSlots = MAX_VALIDATION_PHOTOS - validationPhotos.length;
 
       if (remainingSlots <= 0) {
-        Alert.alert(
+        notify(
           "Photo Limit Reached",
           "You can only upload up to 3 validation photos."
         );
@@ -1695,7 +2145,7 @@ export default function CitizenComplaints() {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (permission.status !== "granted") {
-        Alert.alert(
+        notify(
           "Permission Needed",
           "Please allow photo access so you can upload validation evidence."
         );
@@ -1714,7 +2164,7 @@ export default function CitizenComplaints() {
       await addValidationPhotoAssets(result.assets);
     } catch (error) {
       console.log("Validation gallery error:", error);
-      Alert.alert(
+      notify(
         "Photo Error",
         "The app could not open or load the selected photo. Please try again."
       );
@@ -1725,14 +2175,14 @@ export default function CitizenComplaints() {
     Keyboard.dismiss();
 
     if (validationPhotos.length >= MAX_VALIDATION_PHOTOS) {
-      Alert.alert(
+      notify(
         "Photo Limit Reached",
         "You can only upload up to 3 validation photos."
       );
       return;
     }
 
-    Alert.alert(
+    notify(
       "Add Validation Photo",
       "Take a photo with your camera or choose from your gallery.",
       [
@@ -1756,12 +2206,12 @@ export default function CitizenComplaints() {
     if (submittingValidation) return;
 
     if (!selectedComplaint?.id) {
-      Alert.alert("Validation Failed", "Complaint record was not found.");
+      notify("Validation Failed", "Complaint record was not found.");
       return;
     }
 
     if (!validationAnswer) {
-      Alert.alert(
+      notify(
         "Validation Required",
         "Please choose whether the issue was resolved or not."
       );
@@ -1769,7 +2219,7 @@ export default function CitizenComplaints() {
     }
 
     if (!feedback.trim()) {
-      Alert.alert(
+      notify(
         "Feedback Required",
         "Please provide your feedback before submitting validation."
       );
@@ -1777,9 +2227,17 @@ export default function CitizenComplaints() {
     }
 
     if (validationPhotos.length === 0) {
-      Alert.alert(
+      notify(
         "Photo Evidence Required",
         "Please upload at least one photo evidence to support your validation."
+      );
+      return;
+    }
+
+    if (!canCitizenSubmitValidation(selectedComplaint)) {
+      notify(
+        "Already Validated",
+        "You already submitted your validation feedback for this complaint. Please wait for the admin review."
       );
       return;
     }
@@ -1792,9 +2250,22 @@ export default function CitizenComplaints() {
         validationPhotos
       );
 
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const citizenId = user?.id || currentUserId;
       const validationSubmittedAt = new Date().toISOString();
 
+      const { data: feedbackRow } = await insertComplaintFeedback({
+        complaintId: selectedComplaint.id,
+        citizenId,
+        answer: validationAnswer,
+        feedback: feedback.trim(),
+        photoUrls: uploadedValidationPhotos,
+      });
+
       const updatePayload = {
+        status: "For Validation",
         validation_status: "Validated",
         citizen_validation_status: "Validated",
         citizen_validation_answer: validationAnswer,
@@ -1809,14 +2280,27 @@ export default function CitizenComplaints() {
         ai_validated_at: null,
       };
 
-      const { error } = await supabase
+      let { error } = await supabase
         .from("complaints")
         .update(updatePayload)
         .eq("id", selectedComplaint.id);
 
       if (error) {
-        Alert.alert("Validation Failed", error.message);
+        const { status: _status, ...withoutStatus } = updatePayload;
+        const retry = await supabase
+          .from("complaints")
+          .update(withoutStatus)
+          .eq("id", selectedComplaint.id);
+        error = retry.error;
+      }
+
+      if (error && !feedbackRow?.id) {
+        notify("Validation Failed", error.message);
         return;
+      }
+
+      if (error) {
+        console.log("Complaint snapshot update after feedback error:", error);
       }
 
       let aiValidation = null;
@@ -1857,6 +2341,11 @@ export default function CitizenComplaints() {
         if (aiError) {
           console.log("Save AI validation result error:", aiError);
         }
+
+        await updateComplaintFeedbackAi(
+          feedbackRow?.id,
+          buildResolutionValidationDbPayload(aiValidation)
+        );
       } catch (aiError) {
         console.log("AI resolution validation error:", aiError);
         aiValidation = {
@@ -1881,14 +2370,34 @@ export default function CitizenComplaints() {
             ai_validated_at: aiValidation.validated_at,
           })
           .eq("id", selectedComplaint.id);
+
+        await updateComplaintFeedbackAi(feedbackRow?.id, {
+          ai_validation_status: "error",
+          ai_validation_approved: false,
+          ai_validation_summary: aiValidation.summary,
+          ai_validation_reason: aiValidation.reason,
+          ai_validation_result: aiValidation,
+        });
+      }
+
+      const resolvedValidationPhotoUrls = [];
+
+      for (const path of uploadedValidationPhotos) {
+        const readable = await createReadableComplaintPhotoUrl(path);
+        if (readable) resolvedValidationPhotoUrls.push(readable);
       }
 
       const updatedComplaint = {
         ...selectedComplaint,
+        status: "For Validation",
+        latestFeedbackStatus: "submitted",
         validationSubmitted: true,
         validationResult: validationAnswer,
         validationFeedback: feedback.trim(),
-        validationPhotoUrls: uploadedValidationPhotos,
+        validationPhotoUrls:
+          resolvedValidationPhotoUrls.length > 0
+            ? resolvedValidationPhotoUrls
+            : uploadedValidationPhotos,
         aiValidationStatus: aiValidation?.status || "pending",
         aiValidationApproved: Boolean(aiValidation?.approved),
         aiValidationSummary: aiValidation?.summary || null,
@@ -1901,10 +2410,12 @@ export default function CitizenComplaints() {
           item.id === selectedComplaint.id
             ? {
                 ...item,
+                status: "For Validation",
+                latestFeedbackStatus: "submitted",
                 validationSubmitted: true,
                 validationResult: validationAnswer,
                 validationFeedback: feedback.trim(),
-                validationPhotoUrls: uploadedValidationPhotos,
+                validationPhotoUrls: updatedComplaint.validationPhotoUrls,
                 aiValidationStatus: updatedComplaint.aiValidationStatus,
                 aiValidationApproved: updatedComplaint.aiValidationApproved,
                 aiValidationSummary: updatedComplaint.aiValidationSummary,
@@ -1922,10 +2433,7 @@ export default function CitizenComplaints() {
       setValidationPhotos([]);
       setValidationAnswer(null);
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const citizenName = await getProfileDisplayName(user?.id);
+      const citizenName = await getProfileDisplayName(citizenId);
 
       const notifyResult = await notifyAdminsCitizenValidated({
         complaint: {
@@ -1935,7 +2443,7 @@ export default function CitizenComplaints() {
           category: selectedComplaint.category,
           assigned_office: selectedComplaint.assignedOffice,
           location_text: selectedComplaint.location,
-          status: selectedComplaint.status,
+          status: "For Validation",
         },
         validationAnswer,
         citizenName,
@@ -1945,6 +2453,26 @@ export default function CitizenComplaints() {
         console.log("Admin validation notification error:", notifyResult);
       }
 
+      const aiStatus = String(aiValidation?.status || "").toLowerCase();
+
+      if (aiStatus === "approved" || aiStatus === "rejected") {
+        const citizenNotifyResult = await notifyCitizenAiValidationResult({
+          citizenId: citizenId || currentUserId,
+          complaintId: selectedComplaint.id,
+          shortId: selectedComplaint.shortId || selectedComplaint.id,
+          approved: aiStatus === "approved",
+          reason: aiValidation?.reason,
+          summary: aiValidation?.summary,
+        });
+
+        if (!citizenNotifyResult?.success) {
+          console.log(
+            "Citizen AI validation notification error:",
+            citizenNotifyResult
+          );
+        }
+      }
+
       const aiNote =
         aiValidation?.status === "approved"
           ? " AI also approved the validation evidence."
@@ -1952,17 +2480,31 @@ export default function CitizenComplaints() {
             ? " AI flagged the validation evidence for admin review."
             : " AI validation is pending or needs admin review.";
 
-      Alert.alert(
+      notify(
         "Validation Submitted",
         validationAnswer === "resolved"
           ? `Thank you. Your feedback was submitted.${aiNote} The admin will review it before marking the complaint as completed.`
           : `Thank you. Your feedback was submitted.${aiNote} The admin may return the complaint to the department if further action is needed.`
       );
 
+      writeAuditLog({
+        action: "citizen_validation",
+        title: "Validation Submitted",
+        description: `Validation feedback was submitted for complaint #${
+          selectedComplaint.shortId || selectedComplaint.id
+        }.`,
+        entityType: "complaint",
+        entityId: selectedComplaint.id,
+        actorRole: "citizen",
+        metadata: {
+          validation_answer: validationAnswer,
+        },
+      });
+
       await loadComplaints();
     } catch (error) {
       console.log("Submit validation error:", error);
-      Alert.alert(
+      notify(
         "Validation Failed",
         error?.message || "Unable to submit validation feedback."
       );
@@ -1971,12 +2513,8 @@ export default function CitizenComplaints() {
     }
   };
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  if (!fontsLoaded && !cachedComplaintsPage) {
+    return <PageSkeleton variant="list" />;
   }
 
   return (
@@ -1984,74 +2522,85 @@ export default function CitizenComplaints() {
       <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
 
       <View style={styles.mainContainer}>
-        <View style={styles.header}>
+        <View style={styles.stickyHeader}>
           <View style={styles.headerTitleBox}>
             <Text style={styles.headerTitle}>My Complaints</Text>
             <Text style={styles.headerDescription}>
               Monitor complaint status and validate resolved reports.
             </Text>
           </View>
-        </View>
 
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
+          <View style={styles.sectionRow}>
+            <Text style={styles.sectionTitle}>Complaint Records</Text>
+            {loadingComplaints && complaintsData.length === 0 ? (
+              <Skeleton width={72} height={12} borderRadius={6} />
+            ) : (
+              <Text style={styles.sectionCount}>
+                {`${complaintsData.length} of ${complaintsTotal}`}
+              </Text>
+            )}
+          </View>
+
           <View style={styles.summaryCard}>
-            <View style={styles.summaryIconCircle}>
-              <MaterialCommunityIcons
-                name="file-document-multiple-outline"
-                size={28}
-                color={WHITE}
-              />
+            <View style={styles.summaryTopRow}>
+              <View style={styles.summaryIconCircle}>
+                <MaterialCommunityIcons
+                  name="file-document-multiple-outline"
+                  size={28}
+                  color={WHITE}
+                />
+              </View>
+
+              <View style={styles.summaryTextBox}>
+                {loadingComplaints && complaintsData.length === 0 ? (
+                  <Skeleton width={180} height={16} borderRadius={7} />
+                ) : (
+                  <Text style={styles.summaryTitle}>
+                    {`${submittedCount} submitted complaints`}
+                  </Text>
+                )}
+                <Text style={styles.summarySubtitle}>
+                  Track each report from submission to final resolution.
+                </Text>
+              </View>
             </View>
 
-            <View style={styles.summaryTextBox}>
-              <Text style={styles.summaryTitle}>
-                {loadingComplaints
-                  ? "Loading complaints..."
-                  : `${complaintsData.length} submitted complaints`}
-              </Text>
-              <Text style={styles.summarySubtitle}>
-                Track each report from submission to final resolution.
-              </Text>
+            <View style={styles.concernSummaryRow}>
+              <TouchableOpacity
+                activeOpacity={0.78}
+                style={[
+                  styles.concernSummaryPillEmergency,
+                  activeFilter === "All Emergency" &&
+                    styles.concernSummaryPillActive,
+                ]}
+                onPress={() => applyListFilter("All Emergency")}
+              >
+                <Feather name="alert-triangle" size={12} color={WHITE} />
+                <Text style={styles.concernSummaryText} numberOfLines={1}>
+                  {emergencyCount} Emergency
+                </Text>
+              </TouchableOpacity>
 
-              <View style={styles.concernSummaryRow}>
-                <TouchableOpacity
-                  activeOpacity={0.78}
-                  style={[
-                    styles.concernSummaryPillEmergency,
-                    activeFilter === "All Emergency" &&
-                      styles.concernSummaryPillActive,
-                  ]}
-                  onPress={() => setActiveFilter("All Emergency")}
-                >
-                  <Feather name="alert-triangle" size={15} color={WHITE} />
-                  <Text style={styles.concernSummaryText}>
-                    {emergencyCount} Emergency
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  activeOpacity={0.78}
-                  style={[
-                    styles.concernSummaryPillNormal,
-                    activeFilter === "All Non-Emergency" &&
-                      styles.concernSummaryPillActive,
-                  ]}
-                  onPress={() => setActiveFilter("All Non-Emergency")}
-                >
-                  <Feather name="check-circle" size={15} color={WHITE} />
-                  <Text style={styles.concernSummaryText}>
-                    {nonEmergencyCount} Non-Emergency
-                  </Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity
+                activeOpacity={0.78}
+                style={[
+                  styles.concernSummaryPillNormal,
+                  activeFilter === "All Non-Emergency" &&
+                    styles.concernSummaryPillActive,
+                ]}
+                onPress={() => applyListFilter("All Non-Emergency")}
+              >
+                <Feather name="check-circle" size={12} color={WHITE} />
+                <Text style={styles.concernSummaryText} numberOfLines={1}>
+                  {nonEmergencyCount} Non-Emergency
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
 
           <ScrollView
             horizontal
+            nestedScrollEnabled
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.filterRow}
           >
@@ -2062,8 +2611,11 @@ export default function CitizenComplaints() {
                 <TouchableOpacity
                   key={filter}
                   activeOpacity={0.75}
-                  style={[styles.filterPill, isActive && styles.filterPillActive]}
-                  onPress={() => setActiveFilter(filter)}
+                  style={[
+                    styles.filterPill,
+                    isActive && styles.filterPillActive,
+                  ]}
+                  onPress={() => applyListFilter(filter)}
                 >
                   <Text
                     style={[
@@ -2077,27 +2629,35 @@ export default function CitizenComplaints() {
               );
             })}
           </ScrollView>
+        </View>
 
-          <View style={styles.sectionRow}>
-            <Text style={styles.sectionTitle}>Complaint Records</Text>
-            <Text style={styles.sectionCount}>
-              {loadingComplaints
-                ? "Loading..."
-                : `${filteredComplaints.length} shown`}
-            </Text>
-          </View>
-
-          {loadingComplaints ? (
-            <View style={styles.loadingCard}>
-              <ActivityIndicator size="large" color={GREEN} />
-              <Text style={styles.loadingText}>Loading complaints...</Text>
-            </View>
+        <ScrollView
+          style={styles.listScroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+          scrollEventThrottle={16}
+          onScroll={handleComplaintsScroll}
+          onLayout={(event) => {
+            listViewportHeightRef.current = event.nativeEvent.layout.height;
+          }}
+          onContentSizeChange={(_, height) => maybeFillViewport(height)}
+        >
+          {loadingComplaints && complaintsData.length === 0 ? (
+            <ComplaintListSkeleton count={COMPLAINTS_PAGE_SIZE} />
           ) : filteredComplaints.length === 0 ? (
             <View style={styles.emptyCard}>
               <Ionicons name="document-text-outline" size={38} color={MUTED} />
-              <Text style={styles.emptyTitle}>No submitted complaints yet</Text>
+              <Text style={styles.emptyTitle}>
+                {activeFilter === "Returned"
+                  ? "No returned complaints"
+                  : activeFilter === "For Validation"
+                    ? "No complaints waiting for validation"
+                    : "No submitted complaints yet"}
+              </Text>
               <Text style={styles.emptyText}>
-                Complaints you submit will appear here.
+                {activeFilter === "Returned"
+                  ? "When a complaint is returned, it will show up here so you can submit validation again."
+                  : "Complaints you submit will appear here."}
               </Text>
             </View>
           ) : (
@@ -2108,106 +2668,110 @@ export default function CitizenComplaints() {
                 const concernStyle = getConcernStyle(item.concernType);
 
                 return (
-                  <TouchableOpacity
-                    key={item.id}
-                    activeOpacity={0.78}
-                    style={styles.complaintCard}
-                    onPress={() => openDetails(item)}
-                  >
-                    <View style={styles.cardTopRow}>
-                      <View style={styles.complaintImageWrapper}>
-                        <Image
-                          source={{ uri: item.photo }}
-                          style={styles.complaintImage}
-                        />
-                      </View>
+                  <View key={item.id} style={styles.complaintCard}>
+                    <TouchableOpacity
+                      activeOpacity={0.78}
+                      onPress={() => openDetails(item)}
+                    >
+                      <View style={styles.cardTopRow}>
+                        <TouchableOpacity
+                          activeOpacity={0.85}
+                          style={styles.complaintImageWrapper}
+                          onPress={() => openPhotoViewer(item.photo)}
+                        >
+                          <Image
+                            source={{ uri: item.photo }}
+                            style={styles.complaintImage}
+                          />
+                        </TouchableOpacity>
 
-                      <View style={styles.complaintInfo}>
-                        <View style={styles.idRow}>
-                          <Text style={styles.complaintId}>
-                            {item.shortId}
-                          </Text>
+                        <View style={styles.complaintInfo}>
+                          <View style={styles.idRow}>
+                            <Text style={styles.complaintId}>
+                              #{item.shortId || item.id}
+                            </Text>
 
-                          <View
-                            style={[
-                              styles.priorityPill,
-                              { backgroundColor: priorityStyle.bg },
-                            ]}
-                          >
-                            <Text
+                            <View
                               style={[
-                                styles.priorityText,
-                                { color: priorityStyle.color },
+                                styles.priorityPill,
+                                { backgroundColor: priorityStyle.bg },
                               ]}
                             >
-                              {item.priority}
+                              <Text
+                                style={[
+                                  styles.priorityText,
+                                  { color: priorityStyle.color },
+                                ]}
+                              >
+                                {item.priority}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <Text style={styles.complaintTitle} numberOfLines={1}>
+                            {item.title}
+                          </Text>
+
+                          <View style={styles.categoryConcernRow}>
+                            <Text style={styles.categoryText} numberOfLines={1}>
+                              {item.category}
                             </Text>
+
+                            <View
+                              style={[
+                                styles.concernPill,
+                                { backgroundColor: concernStyle.bg },
+                              ]}
+                            >
+                              <Feather
+                                name={concernStyle.icon}
+                                size={10}
+                                color={concernStyle.color}
+                              />
+                              <Text
+                                style={[
+                                  styles.concernText,
+                                  { color: concernStyle.color },
+                                ]}
+                              >
+                                {item.concernType}
+                              </Text>
+                            </View>
                           </View>
                         </View>
+                      </View>
 
-                        <Text style={styles.complaintTitle} numberOfLines={1}>
-                          {item.title}
+                      <View style={styles.detailRow}>
+                        <Feather name="tag" size={13} color={MUTED} />
+                        <Text style={styles.detailText} numberOfLines={1}>
+                          Category: {item.category}
                         </Text>
-
-                        <View style={styles.categoryConcernRow}>
-                          <Text style={styles.categoryText} numberOfLines={1}>
-                            {item.category}
-                          </Text>
-
-                          <View
-                            style={[
-                              styles.concernPill,
-                              { backgroundColor: concernStyle.bg },
-                            ]}
-                          >
-                            <Feather
-                              name={concernStyle.icon}
-                              size={10}
-                              color={concernStyle.color}
-                            />
-                            <Text
-                              style={[
-                                styles.concernText,
-                                { color: concernStyle.color },
-                              ]}
-                            >
-                              {item.concernType}
-                            </Text>
-                          </View>
-                        </View>
                       </View>
-                    </View>
 
-                    <View style={styles.detailRow}>
-                      <Feather name="tag" size={13} color={MUTED} />
-                      <Text style={styles.detailText} numberOfLines={1}>
-                        Category: {item.category}
-                      </Text>
-                    </View>
+                      <View style={styles.detailRow}>
+                        <Feather name="briefcase" size={13} color={MUTED} />
+                        <Text style={styles.detailText} numberOfLines={1}>
+                          Assigned Office: {item.assignedOffice}
+                        </Text>
+                      </View>
 
-                    <View style={styles.detailRow}>
-                      <Feather name="briefcase" size={13} color={MUTED} />
-                      <Text style={styles.detailText} numberOfLines={1}>
-                        Assigned Office: {item.assignedOffice}
-                      </Text>
-                    </View>
+                      <View style={styles.detailRow}>
+                        <Feather name="map-pin" size={13} color={MUTED} />
+                        <Text style={styles.detailText} numberOfLines={1}>
+                          {item.location}
+                        </Text>
+                      </View>
 
-                    <View style={styles.detailRow}>
-                      <Feather name="map-pin" size={13} color={MUTED} />
-                      <Text style={styles.detailText} numberOfLines={1}>
-                        {item.location}
-                      </Text>
-                    </View>
+                      <View style={styles.detailRow}>
+                        <Feather name="calendar" size={13} color={MUTED} />
+                        <Text style={styles.detailText}>{item.date}</Text>
+                      </View>
 
-                    <View style={styles.detailRow}>
-                      <Feather name="calendar" size={13} color={MUTED} />
-                      <Text style={styles.detailText}>{item.date}</Text>
-                    </View>
-
-                    <View style={styles.detailRow}>
-                      <Feather name="clock" size={13} color={MUTED} />
-                      <Text style={styles.detailText}>{item.time}</Text>
-                    </View>
+                      <View style={styles.detailRow}>
+                        <Feather name="clock" size={13} color={MUTED} />
+                        <Text style={styles.detailText}>{item.time}</Text>
+                      </View>
+                    </TouchableOpacity>
 
                     <View style={styles.cardBottomRow}>
                       <View
@@ -2231,39 +2795,46 @@ export default function CitizenComplaints() {
                         </Text>
                       </View>
 
-                      {item.status === "For Validation" ? (
+                      {canCitizenSubmitValidation(item) ? (
+                        <TouchableOpacity
+                          activeOpacity={0.75}
+                          style={styles.validateButton}
+                          onPress={() => openValidation(item)}
+                        >
+                          <Text style={styles.validateButtonText}>
+                            {isValidationResubmit(item) ? "Resubmit" : "Validate"}
+                          </Text>
+                        </TouchableOpacity>
+                      ) : item.status === "For Validation" &&
                         item.validationSubmitted ? (
-                          <View style={styles.validatedButton}>
-                            <Ionicons
-                              name="checkmark-circle-outline"
-                              size={15}
-                              color={MUTED}
-                            />
-                            <Text style={styles.validatedButtonText}>
-                              Validated
-                            </Text>
-                          </View>
-                        ) : (
-                          <TouchableOpacity
-                            activeOpacity={0.75}
-                            style={styles.validateButton}
-                            onPress={() => openValidation(item)}
-                          >
-                            <Text style={styles.validateButtonText}>Validate</Text>
-                          </TouchableOpacity>
-                        )
+                        <View style={styles.validatedButton}>
+                          <Ionicons
+                            name="checkmark-circle-outline"
+                            size={15}
+                            color={MUTED}
+                          />
+                          <Text style={styles.validatedButtonText}>
+                            Validated
+                          </Text>
+                        </View>
                       ) : (
-                        <View style={styles.viewRow}>
+                        <TouchableOpacity
+                          activeOpacity={0.75}
+                          style={styles.viewRow}
+                          onPress={() => openDetails(item)}
+                        >
                           <Text style={styles.viewText}>View Details</Text>
                           <Feather name="chevron-right" size={16} color={GREEN} />
-                        </View>
+                        </TouchableOpacity>
                       )}
                     </View>
-                  </TouchableOpacity>
+                  </View>
                 );
               })}
             </View>
           )}
+
+          <ComplaintsLoadMoreFooter loading={loadingMoreComplaints} />
         </ScrollView>
 
 
@@ -2271,7 +2842,7 @@ export default function CitizenComplaints() {
           visible={detailsVisible}
           animationType="slide"
           transparent
-          onRequestClose={() => setDetailsVisible(false)}
+          onRequestClose={closeDetails}
         >
           <View style={styles.modalOverlay}>
             <View style={styles.detailsSheet}>
@@ -2283,7 +2854,7 @@ export default function CitizenComplaints() {
                 <TouchableOpacity
                   activeOpacity={0.7}
                   style={styles.modalCloseButton}
-                  onPress={() => setDetailsVisible(false)}
+                  onPress={closeDetails}
                 >
                   <Feather name="x" size={21} color={TEXT} />
                 </TouchableOpacity>
@@ -2291,10 +2862,88 @@ export default function CitizenComplaints() {
 
               {selectedComplaint && (
                 <ScrollView showsVerticalScrollIndicator={false}>
-                  <Image
-                    source={{ uri: selectedComplaint.photo }}
-                    style={styles.detailsImage}
-                  />
+                  {(() => {
+                    const detailPhotos = (
+                      selectedComplaint.photoUrls || []
+                    ).filter(Boolean);
+                    const photosToShow =
+                      detailPhotos.length > 0
+                        ? detailPhotos
+                        : selectedComplaint.photo
+                          ? [selectedComplaint.photo]
+                          : [];
+                    const validationPhotos = (
+                      selectedComplaint.validationPhotoUrls || []
+                    ).filter(Boolean);
+
+                    return (
+                      <>
+                        {photosToShow.length > 0 ? (
+                          photosToShow.length === 1 ? (
+                            <TouchableOpacity
+                              activeOpacity={0.85}
+                              onPress={() => openPhotoViewer(photosToShow[0])}
+                            >
+                              <Image
+                                source={{ uri: photosToShow[0] }}
+                                style={styles.detailsImage}
+                              />
+                            </TouchableOpacity>
+                          ) : (
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              contentContainerStyle={styles.detailsPhotoRow}
+                            >
+                              {photosToShow.map((photo, index) => (
+                                <TouchableOpacity
+                                  key={`${photo}-${index}`}
+                                  activeOpacity={0.85}
+                                  onPress={() => openPhotoViewer(photo)}
+                                >
+                                  <Image
+                                    source={{ uri: photo }}
+                                    style={styles.detailsGalleryPhoto}
+                                  />
+                                </TouchableOpacity>
+                              ))}
+                            </ScrollView>
+                          )
+                        ) : (
+                          <Image
+                            source={{ uri: PHOTO_PLACEHOLDER }}
+                            style={styles.detailsImage}
+                          />
+                        )}
+
+                        {validationPhotos.length > 0 && (
+                          <View style={styles.detailsValidationPhotosBox}>
+                            <Text style={styles.detailsLabel}>
+                              Validation Photos
+                            </Text>
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              contentContainerStyle={styles.detailsPhotoRow}
+                            >
+                              {validationPhotos.map((photo, index) => (
+                                <TouchableOpacity
+                                  key={`validation-${photo}-${index}`}
+                                  activeOpacity={0.85}
+                                  onPress={() => openPhotoViewer(photo)}
+                                >
+                                  <Image
+                                    source={{ uri: photo }}
+                                    style={styles.detailsGalleryPhoto}
+                                  />
+                                </TouchableOpacity>
+                              ))}
+                            </ScrollView>
+                          </View>
+                        )}
+                      </>
+                    );
+                  })()}
 
                   <Text style={styles.detailsComplaintTitle}>
                     {selectedComplaint.title}
@@ -2393,34 +3042,42 @@ export default function CitizenComplaints() {
                     ))}
                   </View>
 
-                  {selectedComplaint.status === "For Validation" && (
+                  {canCitizenSubmitValidation(selectedComplaint) ? (
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={styles.detailsValidateButton}
+                      onPress={() => openValidation(selectedComplaint)}
+                    >
+                      <Ionicons name="camera-outline" size={21} color={WHITE} />
+                      <Text style={styles.detailsValidateText}>
+                        {isValidationResubmit(selectedComplaint)
+                          ? "Submit Validation Again"
+                          : "Provide Feedback & Photo Evidence"}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : selectedComplaint.status === "For Validation" &&
                     selectedComplaint.validationSubmitted ? (
-                      <View style={styles.detailsValidatedButton}>
-                        <Ionicons
-                          name="checkmark-circle-outline"
-                          size={21}
-                          color={MUTED}
-                        />
-                        <Text style={styles.detailsValidatedText}>
-                          Validated — waiting for admin review
-                        </Text>
-                      </View>
-                    ) : (
-                      <TouchableOpacity
-                        activeOpacity={0.8}
-                        style={styles.detailsValidateButton}
-                        onPress={() => openValidation(selectedComplaint)}
-                      >
-                        <Ionicons name="camera-outline" size={21} color={WHITE} />
-                        <Text style={styles.detailsValidateText}>
-                          Provide Feedback & Photo Evidence
-                        </Text>
-                      </TouchableOpacity>
-                    )
-                  )}
+                    <View style={styles.detailsValidatedButton}>
+                      <Ionicons
+                        name="checkmark-circle-outline"
+                        size={21}
+                        color={MUTED}
+                      />
+                      <Text style={styles.detailsValidatedText}>
+                        Validated — waiting for admin review
+                      </Text>
+                    </View>
+                  ) : null}
                 </ScrollView>
               )}
             </View>
+
+            <FullscreenPhotoViewer
+              variant="overlay"
+              visible={photoViewerVisible && detailsVisible}
+              uri={selectedPhoto}
+              onClose={closePhotoViewer}
+            />
           </View>
         </Modal>
 
@@ -2430,43 +3087,53 @@ export default function CitizenComplaints() {
           transparent
           onRequestClose={() => {
             Keyboard.dismiss();
+            if (validationOpenTimerRef.current) {
+              clearTimeout(validationOpenTimerRef.current);
+              validationOpenTimerRef.current = null;
+            }
+            openingValidationRef.current = false;
             setValidationVisible(false);
           }}
         >
-          <KeyboardAvoidingView
-            style={styles.keyboardAvoidingOverlay}
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
-          >
-            <View style={styles.modalOverlay}>
-              <View style={styles.validationSheet}>
-                <View style={styles.modalHandle} />
+          <View style={styles.modalOverlay}>
+            <View style={styles.validationSheet}>
+              <View style={styles.modalHandle} />
 
-                <View style={styles.modalHeaderRow}>
-                  <Text style={styles.modalTitle}>Citizen Validation</Text>
+              <View style={styles.modalHeaderRow}>
+                <Text style={styles.modalTitle}>Citizen Validation</Text>
 
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    style={styles.modalCloseButton}
-                    onPress={() => {
-                      Keyboard.dismiss();
-                      setValidationVisible(false);
-                    }}
-                  >
-                    <Feather name="x" size={21} color={TEXT} />
-                  </TouchableOpacity>
-                </View>
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  style={styles.modalCloseButton}
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    if (validationOpenTimerRef.current) {
+                      clearTimeout(validationOpenTimerRef.current);
+                      validationOpenTimerRef.current = null;
+                    }
+                    openingValidationRef.current = false;
+                    setValidationVisible(false);
+                  }}
+                >
+                  <Feather name="x" size={21} color={TEXT} />
+                </TouchableOpacity>
+              </View>
 
-                {selectedComplaint && (
-                  <ScrollView
-                    showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="handled"
-                    keyboardDismissMode="interactive"
-                    contentContainerStyle={styles.validationScrollContent}
-                  >
+              {selectedComplaint && (
+                <KeyboardAwareScrollView
+                  modal
+                  smoothKeyboard
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode={
+                    Platform.OS === "ios" ? "interactive" : "on-drag"
+                  }
+                  contentContainerStyle={styles.validationScrollContent}
+                >
                     <Text style={styles.validationIntro}>
-                      The responsible department marked this complaint as Resolved
-                      / For Validation. Please confirm if the issue was properly
-                      addressed.
+                      {isValidationResubmit(selectedComplaint)
+                        ? "This complaint was returned for more work and is now For Validation again. Please submit your validation feedback."
+                        : "The responsible department marked this complaint as Resolved / For Validation. Please confirm if the issue was properly addressed."}
                     </Text>
 
                     <View style={styles.validationComplaintBox}>
@@ -2545,7 +3212,10 @@ export default function CitizenComplaints() {
                     <Text style={styles.inputLabel}>Feedback</Text>
 
                     <TextInput
-                      style={styles.feedbackInput}
+                      style={[
+                        styles.feedbackInput,
+                        Platform.OS === "android" && styles.feedbackInputNoOutline,
+                      ]}
                       value={feedback}
                       onChangeText={setFeedback}
                       placeholder="Write your feedback here..."
@@ -2587,10 +3257,15 @@ export default function CitizenComplaints() {
                                 key={photo.id}
                                 style={styles.validationPhotoBox}
                               >
-                                <Image
-                                  source={{ uri: photo.uri }}
-                                  style={styles.validationPhotoPreview}
-                                />
+                                <TouchableOpacity
+                                  activeOpacity={0.85}
+                                  onPress={() => openPhotoViewer(photo.uri)}
+                                >
+                                  <Image
+                                    source={{ uri: photo.uri }}
+                                    style={styles.validationPhotoPreview}
+                                  />
+                                </TouchableOpacity>
 
                                 <TouchableOpacity
                                   activeOpacity={0.8}
@@ -2649,12 +3324,26 @@ export default function CitizenComplaints() {
                         </Text>
                       )}
                     </TouchableOpacity>
-                  </ScrollView>
-                )}
-              </View>
+                </KeyboardAwareScrollView>
+              )}
             </View>
-          </KeyboardAvoidingView>
+
+            <FullscreenPhotoViewer
+              variant="overlay"
+              visible={photoViewerVisible && validationVisible}
+              uri={selectedPhoto}
+              onClose={closePhotoViewer}
+            />
+          </View>
         </Modal>
+
+        <FullscreenPhotoViewer
+          visible={
+            photoViewerVisible && !detailsVisible && !validationVisible
+          }
+          uri={selectedPhoto}
+          onClose={closePhotoViewer}
+        />
       </View>
     </SafeAreaView>
   );
@@ -2669,6 +3358,20 @@ const styles = StyleSheet.create({
   mainContainer: {
     flex: 1,
     backgroundColor: BG,
+  },
+
+  stickyHeader: {
+    backgroundColor: BG,
+    paddingHorizontal: H_PADDING,
+    paddingTop: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+    zIndex: 2,
+  },
+
+  listScroll: {
+    flex: 1,
   },
 
   loader: {
@@ -2721,22 +3424,26 @@ const styles = StyleSheet.create({
 
   scrollContent: {
     paddingHorizontal: H_PADDING,
-    paddingTop: 16,
-    paddingBottom: 120,
+    paddingTop: 12,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   summaryCard: {
     borderRadius: 18,
     backgroundColor: GREEN,
-    padding: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    marginBottom: 12,
     shadowColor: "#000000",
     shadowOpacity: 0.1,
     shadowRadius: 7,
     shadowOffset: { width: 0, height: 3 },
     elevation: 3,
+  },
+
+  summaryTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
   },
 
   summaryIconCircle: {
@@ -2751,6 +3458,7 @@ const styles = StyleSheet.create({
 
   summaryTextBox: {
     flex: 1,
+    paddingRight: 4,
   },
 
   summaryTitle: {
@@ -2771,32 +3479,35 @@ const styles = StyleSheet.create({
   concernSummaryRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 12,
-    gap: 9,
+    marginTop: 14,
+    gap: 8,
+    paddingHorizontal: 2,
   },
 
   concernSummaryPillEmergency: {
-    flex: 1,
-    minHeight: 40,
-    borderRadius: 20,
-    paddingHorizontal: 10,
+    flex: 0.92,
+    minHeight: 38,
+    borderRadius: 19,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
     backgroundColor: RED,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+    gap: 4,
   },
 
   concernSummaryPillNormal: {
-    flex: 1,
-    minHeight: 40,
-    borderRadius: 20,
-    paddingHorizontal: 10,
+    flex: 1.08,
+    minHeight: 38,
+    borderRadius: 19,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
     backgroundColor: "rgba(255,255,255,0.22)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+    gap: 4,
   },
 
   concernSummaryPillActive: {
@@ -2806,13 +3517,49 @@ const styles = StyleSheet.create({
 
   concernSummaryText: {
     fontFamily: "Poppins_700Bold",
-    fontSize: 10.5,
+    fontSize: 8.8,
     color: WHITE,
+    flexShrink: 1,
+  },
+
+  categoryConcernRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 3,
+    gap: 8,
+    paddingRight: 2,
+  },
+
+  categoryText: {
+    flex: 1,
+    fontFamily: "Poppins_500Medium",
+    fontSize: 11,
+    color: GREEN,
+    paddingRight: 4,
+  },
+
+  concernPill: {
+    height: 21,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    flexShrink: 0,
+    maxWidth: "48%",
+  },
+
+  concernText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 8.8,
   },
 
   filterRow: {
-    paddingBottom: 14,
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
+    paddingRight: 10,
   },
 
   filterPill: {
@@ -2845,7 +3592,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 10,
+    marginBottom: 12,
   },
 
   sectionTitle: {
@@ -2975,35 +3722,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  categoryConcernRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 3,
-    gap: 6,
-  },
-
-  categoryText: {
-    flex: 1,
-    fontFamily: "Poppins_500Medium",
-    fontSize: 11,
-    color: GREEN,
-  },
-
-  concernPill: {
-    height: 21,
-    borderRadius: 11,
-    paddingHorizontal: 7,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
-  },
-
-  concernText: {
-    fontFamily: "Poppins_700Bold",
-    fontSize: 8.8,
-  },
-
   detailRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3128,10 +3846,6 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
 
-  keyboardAvoidingOverlay: {
-    flex: 1,
-  },
-
   detailsSheet: {
     maxHeight: "86%",
     borderTopLeftRadius: 28,
@@ -3149,11 +3863,13 @@ const styles = StyleSheet.create({
     backgroundColor: WHITE,
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 20 : 14,
+    paddingBottom: 12,
+    overflow: "hidden",
   },
 
   validationScrollContent: {
-    paddingBottom: Platform.OS === "ios" ? 24 : 36,
+    flexGrow: 0,
+    paddingBottom: 4,
   },
 
   modalHandle: {
@@ -3194,6 +3910,23 @@ const styles = StyleSheet.create({
     resizeMode: "cover",
     backgroundColor: "#E8E8E8",
     marginBottom: 12,
+  },
+
+  detailsPhotoRow: {
+    gap: 10,
+    paddingRight: 8,
+    marginBottom: 12,
+  },
+
+  detailsGalleryPhoto: {
+    width: 168,
+    height: 155,
+    borderRadius: 16,
+    backgroundColor: "#E8E8E8",
+  },
+
+  detailsValidationPhotosBox: {
+    marginBottom: 8,
   },
 
   detailsComplaintTitle: {
@@ -3427,6 +4160,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: TEXT,
     marginBottom: 13,
+  },
+
+  feedbackInputNoOutline: {
+    outlineStyle: "none",
   },
 
   photoUploadBox: {
