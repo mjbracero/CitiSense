@@ -4,18 +4,25 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
   Modal,
-  Alert,
   ActivityIndicator,
   StyleSheet,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import Animated, { FadeIn, FadeInDown, FadeInUp } from "react-native-reanimated";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../../lib/toast";
+import { writeAuditLog } from "../../lib/auditLogService";
+import {
+  AuthScreenBackground,
+  AUTH_BG_TOP,
+  AUTH_GREEN,
+} from "../../components/AuthScreenChrome";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import { PageSkeleton } from "../../components/skeletons";
 
 import {
   useFonts,
@@ -83,7 +90,7 @@ export default function SignupScreen() {
     Poppins_700Bold,
   });
 
-  if (!fontsLoaded) return null;
+  if (!fontsLoaded) return <PageSkeleton variant="auth" />;
 
   const updateField = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -120,17 +127,17 @@ export default function SignupScreen() {
       !password.trim() ||
       !confirmPassword.trim()
     ) {
-      Alert.alert("Missing fields", "Please complete all required fields.");
+      notify("Missing fields", "Please complete all required fields.");
       return false;
     }
 
     if (!email.includes("@") || !email.includes(".")) {
-      Alert.alert("Invalid email", "Please enter a valid email address.");
+      notify("Invalid email", "Please enter a valid email address.");
       return false;
     }
 
     if (!/^\d{11}$/.test(contactNumber.trim())) {
-      Alert.alert(
+      notify(
         "Invalid contact number",
         "Contact number must be exactly 11 digits."
       );
@@ -138,12 +145,12 @@ export default function SignupScreen() {
     }
 
     if (password.length < 6) {
-      Alert.alert("Weak password", "Password must be at least 6 characters.");
+      notify("Weak password", "Password must be at least 6 characters.");
       return false;
     }
 
     if (password !== confirmPassword) {
-      Alert.alert(
+      notify(
         "Password mismatch",
         "Password and confirm password do not match."
       );
@@ -178,18 +185,18 @@ export default function SignupScreen() {
       console.log("Signup result:", data, error);
 
       if (error) {
-        Alert.alert("Signup failed", error.message);
+        notify("Signup failed", error.message);
         return;
       }
 
       if (!data?.user) {
-        Alert.alert("Signup failed", "User account was not created.");
+        notify("Signup failed", "User account was not created.");
         return;
       }
 
-      Alert.alert(
+      notify(
         "Success",
-        "Account created successfully. You can now log in as a Citizen.",
+        "Account created successfully. You can now log in.",
         [
           {
             text: "OK",
@@ -197,46 +204,67 @@ export default function SignupScreen() {
           },
         ]
       );
+
+      writeAuditLog({
+        action: "signup",
+        title: "Account Created",
+        description: "A new citizen account was created.",
+        actorRole: "citizen",
+        actorName: formData.fullName.trim(),
+      });
     } catch (error) {
       console.log("Signup unexpected error:", error);
-      Alert.alert("Signup error", String(error?.message || error));
+      notify("Signup error", String(error?.message || error));
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <ScrollView
+    <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
+      <AuthScreenBackground />
+
+      <KeyboardAwareScrollView
           contentContainerStyle={styles.container}
-          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.title}>Create Your Account</Text>
+          <Animated.Text
+            entering={FadeInDown.delay(160).duration(520)}
+            style={[styles.title, { fontFamily: "Poppins_700Bold" }]}
+          >
+            Create Your Account
+          </Animated.Text>
 
-          <Text style={styles.subtitle}>
+          <Animated.Text
+            entering={FadeInDown.delay(200).duration(520)}
+            style={[styles.subtitle, { fontFamily: "Poppins_400Regular" }]}
+          >
             Join CitiSense and help make our community better for everyone.
-          </Text>
+          </Animated.Text>
 
-          <View style={styles.form}>
-            <Text style={styles.label}>Full Name</Text>
+          <Animated.View
+            entering={FadeInUp.delay(260).duration(560)}
+            style={styles.form}
+          >
+            <Text style={[styles.label, { fontFamily: "Poppins_600SemiBold" }]}>
+              Full Name
+            </Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="person" size={16} color="#0A760A" />
+              <Ionicons name="person" size={18} color={AUTH_GREEN} />
 
               <TextInput
                 value={formData.fullName}
                 onChangeText={(text) => updateField("fullName", text)}
                 placeholder="Juan Dela Cruz"
                 placeholderTextColor="#717A6D"
-                style={styles.input}
+                style={[styles.input, { fontFamily: "Poppins_400Regular" }]}
               />
             </View>
 
-            <Text style={styles.label}>Contact Number</Text>
+            <Text style={[styles.label, { fontFamily: "Poppins_600SemiBold" }]}>
+              Contact Number
+            </Text>
 
             <View
               style={[
@@ -246,8 +274,8 @@ export default function SignupScreen() {
             >
               <Ionicons
                 name="call"
-                size={16}
-                color={contactNumberHasWarning ? "#D71920" : "#0A760A"}
+                size={18}
+                color={contactNumberHasWarning ? "#D71920" : AUTH_GREEN}
               />
 
               <TextInput
@@ -255,30 +283,38 @@ export default function SignupScreen() {
                 onChangeText={updateContactNumber}
                 placeholder="09XX XXX XXXX"
                 placeholderTextColor="#717A6D"
-                style={styles.input}
+                style={[styles.input, { fontFamily: "Poppins_400Regular" }]}
                 keyboardType="number-pad"
                 maxLength={11}
               />
             </View>
 
             {contactNumberHasWarning && (
-              <Text style={styles.contactWarningText}>
+              <Text
+                style={[
+                  styles.contactWarningText,
+                  { fontFamily: "Poppins_400Regular" },
+                ]}
+              >
                 Contact number must be exactly 11 digits.
               </Text>
             )}
 
-            <Text style={styles.label}>Barangay</Text>
+            <Text style={[styles.label, { fontFamily: "Poppins_600SemiBold" }]}>
+              Barangay
+            </Text>
 
             <TouchableOpacity
               style={styles.inputWrapper}
               activeOpacity={0.8}
               onPress={() => setShowBarangayDropdown(true)}
             >
-              <Ionicons name="location" size={16} color="#0A760A" />
+              <Ionicons name="location" size={18} color={AUTH_GREEN} />
 
               <Text
                 style={[
                   styles.dropdownText,
+                  { fontFamily: "Poppins_400Regular" },
                   !formData.barangay && styles.placeholderText,
                 ]}
               >
@@ -288,38 +324,46 @@ export default function SignupScreen() {
               <Ionicons name="chevron-down" size={16} color="#717A6D" />
             </TouchableOpacity>
 
-            <Text style={styles.label}>Email Address</Text>
+            <Text style={[styles.label, { fontFamily: "Poppins_600SemiBold" }]}>
+              Email Address
+            </Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="mail" size={16} color="#0A760A" />
+              <Ionicons name="mail" size={18} color={AUTH_GREEN} />
 
               <TextInput
                 value={formData.email}
                 onChangeText={(text) => updateField("email", text)}
                 placeholder="juandelacruz@gmail.com"
                 placeholderTextColor="#717A6D"
-                style={styles.input}
+                style={[styles.input, { fontFamily: "Poppins_400Regular" }]}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
               />
             </View>
 
-            <Text style={styles.label}>Password</Text>
+            <Text style={[styles.label, { fontFamily: "Poppins_600SemiBold" }]}>
+              Password
+            </Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="lock-closed" size={16} color="#0A760A" />
+              <Ionicons name="lock-closed" size={18} color={AUTH_GREEN} />
 
               <TextInput
                 value={formData.password}
                 onChangeText={(text) => updateField("password", text)}
                 placeholder="Enter your password"
                 placeholderTextColor="#717A6D"
-                style={styles.input}
+                style={[
+                  styles.input,
+                  { fontFamily: "Poppins_400Regular", paddingRight: 38 },
+                ]}
                 secureTextEntry={!showPassword}
               />
 
               <TouchableOpacity
+                style={styles.eyeButton}
                 onPress={() => setShowPassword(!showPassword)}
                 activeOpacity={0.7}
               >
@@ -331,21 +375,27 @@ export default function SignupScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.label}>Confirm Password</Text>
+            <Text style={[styles.label, { fontFamily: "Poppins_600SemiBold" }]}>
+              Confirm Password
+            </Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="lock-closed" size={16} color="#0A760A" />
+              <Ionicons name="lock-closed" size={18} color={AUTH_GREEN} />
 
               <TextInput
                 value={formData.confirmPassword}
                 onChangeText={(text) => updateField("confirmPassword", text)}
                 placeholder="Confirm your password"
                 placeholderTextColor="#717A6D"
-                style={styles.input}
+                style={[
+                  styles.input,
+                  { fontFamily: "Poppins_400Regular", paddingRight: 38 },
+                ]}
                 secureTextEntry={!showConfirmPassword}
               />
 
               <TouchableOpacity
+                style={styles.eyeButton}
                 onPress={() => setShowConfirmPassword(!showConfirmPassword)}
                 activeOpacity={0.7}
               >
@@ -364,25 +414,43 @@ export default function SignupScreen() {
               activeOpacity={0.8}
             >
               {isLoading ? (
-                <ActivityIndicator color="#fff" />
+                <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={styles.signupText}>Sign Up</Text>
+                <Text
+                  style={[
+                    styles.signupText,
+                    { fontFamily: "Poppins_600SemiBold" },
+                  ]}
+                >
+                  Sign Up
+                </Text>
               )}
             </TouchableOpacity>
+          </Animated.View>
 
-            <View style={styles.loginContainer}>
-              <Text style={styles.loginText}>Already have an account? </Text>
+          <Animated.View
+            entering={FadeIn.delay(420).duration(500)}
+            style={styles.loginContainer}
+          >
+            <Text style={{ fontFamily: "Poppins_400Regular", color: "#41493E" }}>
+              Already have an account?{" "}
+            </Text>
 
-              <TouchableOpacity
-                onPress={() => router.replace("/auth/login")}
-                activeOpacity={0.7}
+            <TouchableOpacity
+              onPress={() => router.replace("/auth/login")}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={{
+                  fontFamily: "Poppins_700Bold",
+                  color: AUTH_GREEN,
+                }}
               >
-                <Text style={styles.loginLink}>Log In</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+                Log In
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </KeyboardAwareScrollView>
 
       <Modal
         visible={showBarangayDropdown}
@@ -400,7 +468,11 @@ export default function SignupScreen() {
 
           <View style={styles.dropdownModal}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Barangay</Text>
+              <Text
+                style={[styles.modalTitle, { fontFamily: "Poppins_700Bold" }]}
+              >
+                Select Barangay
+              </Text>
 
               <TouchableOpacity
                 onPress={() => setShowBarangayDropdown(false)}
@@ -421,8 +493,7 @@ export default function SignupScreen() {
                   key={barangay}
                   style={[
                     styles.barangayOption,
-                    formData.barangay === barangay &&
-                      styles.selectedBarangay,
+                    formData.barangay === barangay && styles.selectedBarangay,
                   ]}
                   onPress={() => selectBarangay(barangay)}
                   activeOpacity={0.8}
@@ -430,6 +501,12 @@ export default function SignupScreen() {
                   <Text
                     style={[
                       styles.barangayText,
+                      {
+                        fontFamily:
+                          formData.barangay === barangay
+                            ? "Poppins_600SemiBold"
+                            : "Poppins_400Regular",
+                      },
                       formData.barangay === barangay &&
                         styles.selectedBarangayText,
                     ]}
@@ -438,7 +515,7 @@ export default function SignupScreen() {
                   </Text>
 
                   {formData.barangay === barangay && (
-                    <Ionicons name="checkmark" size={18} color="#0A760A" />
+                    <Ionicons name="checkmark" size={18} color={AUTH_GREEN} />
                   )}
                 </TouchableOpacity>
               ))}
@@ -453,59 +530,63 @@ export default function SignupScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
-  },
-
-  keyboardView: {
-    flex: 1,
+    backgroundColor: AUTH_BG_TOP,
   },
 
   container: {
     flexGrow: 1,
-    backgroundColor: "#FFFFFF",
+    alignItems: "center",
     paddingHorizontal: 31,
-    paddingTop: 12,
-    paddingBottom: 25,
+    paddingTop: 28,
+    paddingBottom: 40,
   },
 
   title: {
-    fontFamily: "Poppins_700Bold",
-    fontSize: 24,
-    color: "#0A760A",
+    width: 280,
     textAlign: "center",
+    fontSize: 24,
+    color: AUTH_GREEN,
+    marginTop: 8,
   },
 
   subtitle: {
-    fontFamily: "Poppins_400Regular",
-    fontSize: 12,
-    color: "#41493E",
+    width: 280,
     textAlign: "center",
-    lineHeight: 17,
+    fontSize: 13,
+    color: "#41493E",
+    lineHeight: 20,
     marginTop: 10,
-    marginBottom: 18,
+    marginBottom: 8,
   },
 
   form: {
     width: "100%",
+    marginTop: 28,
+    backgroundColor: "rgba(255,255,255,0.88)",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#DCE8D6",
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 18,
   },
 
   label: {
-    fontFamily: "Poppins_600SemiBold",
     fontSize: 13,
     color: "#41493E",
-    marginBottom: 5,
-    marginTop: 9,
+    marginBottom: 6,
+    marginTop: 8,
   },
 
   inputWrapper: {
-    width: "100%",
-    height: 45,
-    borderWidth: 1,
-    borderColor: "#B4B4B4",
-    borderRadius: 7,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 15,
+    borderWidth: 1,
+    borderColor: "#B4B4B4",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 50,
+    marginBottom: 12,
     backgroundColor: "#FFFFFF",
   },
 
@@ -514,41 +595,43 @@ const styles = StyleSheet.create({
   },
 
   input: {
-    fontFamily: "Poppins_400Regular",
     flex: 1,
     height: "100%",
     fontSize: 13,
     color: "#41493E",
-    marginLeft: 10,
+    marginLeft: 8,
   },
 
   contactWarningText: {
-    fontFamily: "Poppins_400Regular",
     fontSize: 11,
     color: "#D71920",
-    marginTop: 4,
+    marginTop: -6,
+    marginBottom: 6,
   },
 
   dropdownText: {
-    fontFamily: "Poppins_400Regular",
     flex: 1,
     fontSize: 13,
     color: "#41493E",
-    marginLeft: 10,
+    marginLeft: 8,
   },
 
   placeholderText: {
     color: "#717A6D",
   },
 
+  eyeButton: {
+    position: "absolute",
+    right: 10,
+  },
+
   signupButton: {
-    width: "100%",
-    height: 49,
-    backgroundColor: "#0A760A",
+    backgroundColor: AUTH_GREEN,
     borderRadius: 50,
-    alignItems: "center",
+    height: 52,
     justifyContent: "center",
-    marginTop: 22,
+    alignItems: "center",
+    marginTop: 10,
   },
 
   disabledButton: {
@@ -556,28 +639,14 @@ const styles = StyleSheet.create({
   },
 
   signupText: {
-    fontFamily: "Poppins_600SemiBold",
     fontSize: 16,
     color: "#FFFFFF",
   },
 
   loginContainer: {
     flexDirection: "row",
-    justifyContent: "center",
-    marginTop: 16,
+    marginTop: 28,
     alignItems: "center",
-  },
-
-  loginText: {
-    fontFamily: "Poppins_400Regular",
-    fontSize: 12,
-    color: "#41493E",
-  },
-
-  loginLink: {
-    fontFamily: "Poppins_700Bold",
-    fontSize: 12,
-    color: "#0A760A",
   },
 
   modalSafeArea: {
@@ -612,9 +681,8 @@ const styles = StyleSheet.create({
   },
 
   modalTitle: {
-    fontFamily: "Poppins_700Bold",
     fontSize: 16,
-    color: "#0A760A",
+    color: AUTH_GREEN,
   },
 
   barangayList: {
@@ -640,13 +708,11 @@ const styles = StyleSheet.create({
   },
 
   barangayText: {
-    fontFamily: "Poppins_400Regular",
     fontSize: 13,
     color: "#41493E",
   },
 
   selectedBarangayText: {
-    fontFamily: "Poppins_600SemiBold",
-    color: "#0A760A",
+    color: AUTH_GREEN,
   },
 });
