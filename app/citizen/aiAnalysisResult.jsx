@@ -12,9 +12,8 @@ import {
   useFonts,
 } from "@expo-google-fonts/poppins";
 import { useLocalSearchParams, usePathname, useRouter } from "expo-router";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import {
-  ActivityIndicator,
   Image,
   ScrollView,
   StatusBar,
@@ -24,7 +23,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { PageSkeleton } from "../../components/skeletons";
 import { getCategoryIcon } from "../../lib/complaintCategories";
+import { getPageCache, setPageCache } from "../../lib/pageDataCache";
 
 const GREEN = "#087A0D";
 const BG = "#F7FAF6";
@@ -34,6 +35,7 @@ const MUTED = "#666666";
 const BORDER = "#E0E0E0";
 const RED = "#D71920";
 const H_PADDING = 20;
+const CITIZEN_ANALYSIS_CACHE_KEY = "citizen.aiAnalysisResult";
 
 const bottomTabs = [
   {
@@ -194,6 +196,7 @@ export default function CitizenAIAnalysisResult() {
         ? "Photo may not match complaint"
         : "No photo evidence attached";
 
+  const cachedAnalysis = getPageCache(CITIZEN_ANALYSIS_CACHE_KEY);
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
@@ -201,12 +204,12 @@ export default function CitizenAIAnalysisResult() {
     Poppins_700Bold,
   });
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  useEffect(() => {
+    setPageCache(CITIZEN_ANALYSIS_CACHE_KEY, { visited: true });
+  }, []);
+
+  if (!fontsLoaded && !cachedAnalysis) {
+    return <PageSkeleton variant="analysis" />;
   }
 
   return (
