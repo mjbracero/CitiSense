@@ -9,7 +9,6 @@ import {
 import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Dimensions,
   Image,
   Modal,
@@ -23,9 +22,30 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
+import { ComplaintListSkeleton, PageSkeleton } from "../../components/skeletons";
+import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
+import {
+  complaintAppliesToDepartment,
+  CONCERN_DEPARTMENT_OPTIONS,
+  getAssignedOffice,
+  getCategoriesForDepartment,
+  normalizeOfficeKey,
+} from "../../lib/complaintCategories";
+import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import {
+  applyOffsetPagination,
+  COMPLAINTS_PAGE_SIZE,
+  fetchAllRowsWithOffset,
+} from "../../lib/complaintPagination";
+import {
+  getProfileAvatarUrl,
+  setProfileAvatarUrl,
+  subscribeProfileAvatar,
+} from "../../lib/profileAvatarStore";
 import { supabase } from "../../lib/supabase";
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
+import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -46,6 +66,7 @@ const ORANGE = "#F4A24C";
 const H_PADDING = 20;
 const CARD_GAP = 8;
 const CARD_WIDTH = (SCREEN_WIDTH - H_PADDING * 2 - CARD_GAP * 3) / 4;
+const DEPT_DASHBOARD_CACHE_KEY = "departmentHead.dashboard";
 
 const DEFAULT_DEPARTMENT_HEAD_DEPARTMENT = "";
 
@@ -55,82 +76,7 @@ const MAPTILER_API_KEY =
 const PHOTO_PLACEHOLDER =
   "https://placehold.co/900x600/eaf6e4/087a0d?text=CitiSense+Complaint";
 
-const concernDepartmentMap = [
-  { category: "Water Concerns", departments: ["Bogo Water District"] },
-  { category: "Electricity Concerns", departments: ["CEBECO II"] },
-  { category: "Streetlight Concerns", departments: ["City Engineering Office"] },
-  {
-    category: "Road and Infrastructure Concerns",
-    departments: ["City Engineering Office"],
-  },
-  {
-    category: "Drainage and Flooding Concerns",
-    departments: ["City Engineering Office"],
-  },
-  { category: "Waste and Environmental Concerns", departments: ["CENRO"] },
-  { category: "Traffic and Road Safety Concerns", departments: ["BTMO"] },
-  {
-    category: "Transport Terminal Concerns",
-    departments: ["Bogo City Central Bus Terminal Office"],
-  },
-  { category: "Port Concerns", departments: ["Polambato Port Office"] },
-  {
-    category: "Health and Sanitation Concerns",
-    departments: ["City Health Office"],
-  },
-  { category: "Animal Concerns", departments: ["City Veterinary Office"] },
-  {
-    category: "Building and Construction Concerns",
-    departments: ["Office of the Building Official"],
-  },
-  {
-    category: "Planning and Zoning Concerns",
-    departments: ["City Planning and Development Office / Zoning Office"],
-  },
-  {
-    category: "Public Market Concerns",
-    departments: ["Bogo Public Market Office"],
-  },
-  {
-    category: "Public Plaza Concerns",
-    departments: ["Bogo Public Plaza Office"],
-  },
-  { category: "City Facility Concerns", departments: ["General Services Office"] },
-  {
-    category: "Tourism Site / Public Attraction Concerns",
-    departments: ["City Tourism Office"],
-  },
-  { category: "Disaster and Emergency Concerns", departments: ["CDRRMO"] },
-  {
-    category: "Fire Safety Concerns",
-    departments: ["BFP Bogo City Fire Station"],
-  },
-  {
-    category: "Peace and Order Concerns",
-    departments: ["Bogo City Police Station / PNP"],
-  },
-  {
-    category: "Coastal and Marine Protection Concerns",
-    departments: ["Bantay Dagat"],
-  },
-  { category: "PWD Accessibility Concerns", departments: ["PDAO"] },
-  {
-    category: "Tax and Treasury Concerns",
-    departments: ["City Treasurer's Office"],
-  },
-  {
-    category: "Property Assessment Concerns",
-    departments: ["City Assessor's Office"],
-  },
-  {
-    category: "Civil Registry Concerns",
-    departments: ["City Civil Registrar's Office"],
-  },
-  {
-    category: "Business Permit and Licensing Concerns",
-    departments: ["City Business Permit and Licensing Office"],
-  },
-];
+const AVATAR_BUCKET = "avatars";
 
 const priorityFilters = [
   "All Priority",
@@ -149,7 +95,7 @@ const dashboardCardConfig = [
   },
   {
     title: "In Progress",
-    statusNames: ["In Progress"],
+    statusNames: ["In Progress", "Returned"],
     icon: "progress-wrench",
   },
   {
@@ -209,24 +155,6 @@ function normalizeOfficeName(value) {
     .trim();
 }
 
-function normalizeOfficeKey(value) {
-  return normalizeOfficeName(value).toLowerCase();
-}
-
-function getCategoriesForDepartment(department) {
-  const departmentKey = normalizeOfficeKey(department);
-
-  if (!departmentKey) return [];
-
-  return concernDepartmentMap
-    .filter((item) =>
-      item.departments.some(
-        (office) => normalizeOfficeKey(office) === departmentKey
-      )
-    )
-    .map((item) => item.category);
-}
-
 function normalizeStatus(status) {
   const clean = normalizeText(status);
 
@@ -237,6 +165,15 @@ function normalizeStatus(status) {
   if (clean === "completed" || clean === "resolved") return "Completed";
   if (clean === "assigned") return "Assigned";
   if (clean === "pending") return "Pending";
+  if (
+    clean === "returned" ||
+    clean === "returned to department" ||
+    clean === "returned to department head" ||
+    clean === "for rework" ||
+    clean === "needs revision"
+  ) {
+    return "Returned";
+  }
 
   return status || "Assigned";
 }
@@ -259,10 +196,11 @@ function getStatusStyle(status) {
   if (normalizedStatus === "Assigned") return { bg: "#E8EEFF", color: BLUE };
   if (normalizedStatus === "Pending") return { bg: "#E8EEFF", color: BLUE };
   if (normalizedStatus === "In Progress")
-    return { bg: "#FFF2C2", color: "#A97700" };
+    return { bg: "#FFF8D6", color: "#C9A000" };
   if (normalizedStatus === "For Validation")
-    return { bg: LIGHT_GREEN, color: GREEN };
+    return { bg: "#F3EAFF", color: "#7A3EA8" };
   if (normalizedStatus === "Completed") return { bg: "#DFF0DF", color: GREEN };
+  if (normalizedStatus === "Returned") return { bg: "#FFF0F0", color: RED };
 
   return { bg: "#F1F1F1", color: MUTED };
 }
@@ -430,6 +368,61 @@ async function createReadableComplaintPhotoUrl(value) {
   return null;
 }
 
+function extractAvatarPath(value) {
+  if (!value) return null;
+
+  const text = decodeURIComponent(String(value));
+  const publicMarker = `/storage/v1/object/public/${AVATAR_BUCKET}/`;
+  const signMarker = `/storage/v1/object/sign/${AVATAR_BUCKET}/`;
+
+  if (text.includes(publicMarker)) {
+    return text.split(publicMarker)[1]?.split("?")[0] || null;
+  }
+
+  if (text.includes(signMarker)) {
+    return text.split(signMarker)[1]?.split("?")[0] || null;
+  }
+
+  if (!/^https?:\/\//i.test(text)) {
+    return text.replace(/^avatars\//, "").replace(/^\/+/, "");
+  }
+
+  return null;
+}
+
+async function createReadableAvatarUrl(value) {
+  if (!value) return null;
+
+  try {
+    const rawValue = String(value);
+
+    if (/^https?:\/\//i.test(rawValue)) {
+      return rawValue;
+    }
+
+    const path = extractAvatarPath(rawValue);
+
+    if (!path) return null;
+
+    const { data: signedData, error: signedError } = await supabase.storage
+      .from(AVATAR_BUCKET)
+      .createSignedUrl(path, 60 * 60);
+
+    if (!signedError && signedData?.signedUrl) {
+      return signedData.signedUrl;
+    }
+
+    const { data: publicData } = supabase.storage
+      .from(AVATAR_BUCKET)
+      .getPublicUrl(path);
+
+    return publicData?.publicUrl || null;
+  } catch (error) {
+    console.log("Resolve avatar error:", error);
+    return null;
+  }
+}
+
 async function resolveComplaintPhotoUrls(row) {
   const rawUrls = normalizePhotoUrls(row?.photo_urls);
   const resolvedUrls = [];
@@ -501,6 +494,7 @@ async function mapComplaintRow(row, profileMap = {}) {
   return {
     id: row.short_id || row.id,
     rawId: row.id,
+    citizenId: row.citizen_id,
     title: row.title || "Untitled Complaint",
     category: row.category || row.concern_category || "Unclassified",
     department:
@@ -514,34 +508,32 @@ async function mapComplaintRow(row, profileMap = {}) {
       row.geotagged_location ||
       row.location ||
       "Pinned location not available",
-    latitude: row.latitude ? String(row.latitude) : "",
-    longitude: row.longitude ? String(row.longitude) : "",
+    latitude:
+      row.latitude != null && row.latitude !== ""
+        ? String(row.latitude).trim()
+        : "",
+    longitude:
+      row.longitude != null && row.longitude !== ""
+        ? String(row.longitude).trim()
+        : "",
     date: formatDbDate(createdAt),
     time: formatDbTime(createdAt),
     createdAt,
     status: normalizeStatus(row.status || "Assigned"),
     priority: normalizePriority(row.priority, row.is_emergency),
     description: row.description || "No description provided.",
-    citizen:
-      row.citizen_name ||
-      row.full_name ||
-      profile.full_name ||
-      profile.name ||
-      profile.username ||
-      "Citizen",
+    citizen: row.citizen_name || profile.full_name || "Citizen",
     contact:
-      row.contact_number ||
-      profile.contact_number ||
-      profile.phone_number ||
-      profile.phone ||
-      "No contact number",
+      row.contact_number || profile.contact_number || "No contact number",
     userPhoto:
-      row.user_photo ||
-      row.citizen_photo ||
-      profile.avatar_url ||
-      profile.profile_photo_url ||
-      null,
-    uploadedPhotos: uploadedPhotos.length > 0 ? uploadedPhotos : [],
+      row.user_photo || row.citizen_photo || profile.avatar_url || null,
+    reassignmentReason: row.reassignment_reason || row.reassign_reason || "",
+    reassignedFromCategory: row.reassigned_from_category || "",
+    reassignedFromOffice: row.reassigned_from_office || "",
+    reassignedToCategory: row.reassigned_to_category || "",
+    reassignedToOffice: row.reassigned_to_office || "",
+    reassignedAt: row.reassigned_at || null,
+    uploadedPhotos,
     photo: uploadedPhotos[0] || PHOTO_PLACEHOLDER,
   };
 }
@@ -778,13 +770,18 @@ export default function DepartmentHeadDashboard() {
   const pathname = usePathname();
   const { unreadNotificationCount } = useDepartmentHeadUnreadNotifications();
 
+  const cachedDashboard = getPageCache(DEPT_DASHBOARD_CACHE_KEY);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [departmentHeadDepartment, setDepartmentHeadDepartment] = useState(
-    DEFAULT_DEPARTMENT_HEAD_DEPARTMENT
+    cachedDashboard?.department ?? DEFAULT_DEPARTMENT_HEAD_DEPARTMENT
   );
-  const [currentUserId, setCurrentUserId] = useState(null);
-  const [assignedComplaintsData, setAssignedComplaintsData] = useState([]);
-  const [loadingComplaints, setLoadingComplaints] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState(
+    cachedDashboard?.currentUserId ?? null
+  );
+  const [assignedComplaintsData, setAssignedComplaintsData] = useState(
+    cachedDashboard?.complaints ?? []
+  );
+  const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
 
   const [selectedCategory, setSelectedCategory] = useState("All Category");
   const [selectedPriority, setSelectedPriority] = useState("All Priority");
@@ -794,6 +791,11 @@ export default function DepartmentHeadDashboard() {
   const [detailsVisible, setDetailsVisible] = useState(false);
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState(
+    getProfileAvatarUrl() || cachedDashboard?.profilePhotoUrl || null
+  );
+
+  useHideBottomNav(detailsVisible);
 
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
@@ -804,6 +806,53 @@ export default function DepartmentHeadDashboard() {
     Poppins_600SemiBold,
     Poppins_700Bold,
   });
+
+  useEffect(() => {
+    return subscribeProfileAvatar((url) => {
+      setProfilePhotoUrl(url);
+      const prev = getPageCache(DEPT_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(DEPT_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        profilePhotoUrl: url,
+      });
+    });
+  }, []);
+
+  const loadUserProfilePhoto = useCallback(async () => {
+    try {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+
+      if (error || !user) {
+        setProfilePhotoUrl(null);
+        return;
+      }
+
+      const metadataAvatar = user.user_metadata?.avatar_url || null;
+      let nextPhoto = metadataAvatar;
+
+      if (!nextPhoto) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("avatar_url")
+          .eq("id", user.id)
+          .maybeSingle();
+        nextPhoto = profileData?.avatar_url || null;
+      }
+
+      setProfilePhotoUrl(nextPhoto);
+      setProfileAvatarUrl(nextPhoto);
+      const prev = getPageCache(DEPT_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(DEPT_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        profilePhotoUrl: nextPhoto,
+      });
+    } catch {
+      // Keep current avatar if refresh fails.
+    }
+  }, []);
 
   const categoryFilters = useMemo(() => {
     const mappedCategories = getCategoriesForDepartment(departmentHeadDepartment);
@@ -949,23 +998,41 @@ export default function DepartmentHeadDashboard() {
   }, []);
 
   const loadCitizenProfiles = useCallback(async (citizenIds = []) => {
-    if (citizenIds.length === 0) return {};
+    const uniqueIds = Array.from(new Set((citizenIds || []).filter(Boolean)));
+
+    if (uniqueIds.length === 0) return {};
 
     try {
       const { data, error } = await supabase
         .from("profiles")
-        .select("*")
-        .in("id", citizenIds);
+        .select("id,email,full_name,contact_number,avatar_url")
+        .in("id", uniqueIds);
 
       if (error) {
         console.log("Load citizen profiles error:", error);
         return {};
       }
 
-      return (data || []).reduce((acc, profile) => {
-        acc[profile.id] = profile;
-        return acc;
-      }, {});
+      const profileEntries = await Promise.all(
+        (data || []).map(async (profile) => {
+          const readableAvatarUrl = await createReadableAvatarUrl(
+            profile.avatar_url
+          );
+
+          return [
+            profile.id,
+            {
+              id: profile.id,
+              email: profile.email || "",
+              full_name: profile.full_name || "Citizen",
+              contact_number: profile.contact_number || "No contact number",
+              avatar_url: readableAvatarUrl,
+            },
+          ];
+        })
+      );
+
+      return Object.fromEntries(profileEntries);
     } catch (error) {
       console.log("Load citizen profiles skipped:", error);
       return {};
@@ -975,7 +1042,7 @@ export default function DepartmentHeadDashboard() {
   const loadAssignedComplaints = useCallback(
     async (showLoader = true) => {
       try {
-        if (showLoader) {
+        if (showLoader && shouldShowPageLoader(DEPT_DASHBOARD_CACHE_KEY)) {
           setLoadingComplaints(true);
         }
 
@@ -984,24 +1051,43 @@ export default function DepartmentHeadDashboard() {
 
         if (!departmentKey) {
           console.log("Moderator dashboard has no department in profiles table.");
-          setAssignedComplaintsData([]);
+          if (shouldShowPageLoader(DEPT_DASHBOARD_CACHE_KEY)) {
+            setAssignedComplaintsData([]);
+          }
           return;
         }
 
-        const { data, error } = await supabase
-          .from("complaints")
-          .select("*")
-          .ilike("assigned_office", `%${department}%`)
-          .order("created_at", { ascending: false });
+        const { data, error } = await fetchAllRowsWithOffset(
+          async (offset, pageSize) => {
+            const query = applyOffsetPagination(
+              supabase
+                .from("complaints")
+                .select("*", { count: offset === 0 ? "exact" : undefined })
+                .ilike("assigned_office", `%${department}%`)
+                .order("created_at", { ascending: false }),
+              offset,
+              pageSize
+            );
+
+            return await query;
+          },
+          COMPLAINTS_PAGE_SIZE
+        );
 
         if (error) {
           console.log("Moderator dashboard complaints load error:", error);
-          setAssignedComplaintsData([]);
+          if (shouldShowPageLoader(DEPT_DASHBOARD_CACHE_KEY)) {
+            setAssignedComplaintsData([]);
+          }
           return;
         }
 
-        const matchedRows = (data || []).filter(
-          (row) => normalizeOfficeKey(row.assigned_office) === departmentKey
+        const matchedRows = (data || []).filter((row) =>
+          complaintAppliesToDepartment(
+            row.assigned_office,
+            row.category || row.concern_category,
+            department
+          )
         );
 
         console.log("Moderator dashboard assigned complaints loaded:", {
@@ -1021,13 +1107,18 @@ export default function DepartmentHeadDashboard() {
         );
 
         setAssignedComplaintsData(mappedComplaints);
+        setPageCache(DEPT_DASHBOARD_CACHE_KEY, {
+          complaints: mappedComplaints,
+          department,
+          currentUserId,
+        });
       } catch (error) {
         console.log("Load assigned complaints error:", error);
-        setAssignedComplaintsData([]);
-      } finally {
-        if (showLoader) {
-          setLoadingComplaints(false);
+        if (shouldShowPageLoader(DEPT_DASHBOARD_CACHE_KEY)) {
+          setAssignedComplaintsData([]);
         }
+      } finally {
+        setLoadingComplaints(false);
       }
     },
     [loadCitizenProfiles, loadDepartmentHeadDepartment]
@@ -1035,9 +1126,10 @@ export default function DepartmentHeadDashboard() {
 
   useFocusEffect(
     useCallback(() => {
+      loadUserProfilePhoto();
       loadAssignedComplaints(true);
       registerPushTokenForCurrentUser();
-    }, [loadAssignedComplaints])
+    }, [loadAssignedComplaints, loadUserProfilePhoto])
   );
 
   useEffect(() => {
@@ -1154,6 +1246,12 @@ export default function DepartmentHeadDashboard() {
 
   const openPhotoViewer = (uri) => {
     if (!uri) return;
+    if (
+      String(uri).includes("placehold.co") ||
+      String(uri).includes("placeholder")
+    ) {
+      return;
+    }
 
     setSelectedPhoto(uri);
     setPhotoViewerVisible(true);
@@ -1167,12 +1265,8 @@ export default function DepartmentHeadDashboard() {
     }, 180);
   };
 
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.loader}>
-        <ActivityIndicator size="large" color={GREEN} />
-      </View>
-    );
+  if (!fontsLoaded && !cachedDashboard) {
+    return <PageSkeleton variant="dashboard" />;
   }
 
   return (
@@ -1194,7 +1288,15 @@ export default function DepartmentHeadDashboard() {
             style={styles.avatarCircle}
             onPress={() => smoothNavigate("/departmentHead/profile")}
           >
-            <Ionicons name="person" size={25} color={GREEN} />
+            {profilePhotoUrl ? (
+              <Image
+                source={{ uri: profilePhotoUrl }}
+                style={styles.avatar}
+                onError={() => setProfilePhotoUrl(null)}
+              />
+            ) : (
+              <Ionicons name="person" size={25} color={GREEN} />
+            )}
           </TouchableOpacity>
         </View>
 
@@ -1277,11 +1379,8 @@ export default function DepartmentHeadDashboard() {
           </View>
 
           <View style={styles.complaintsList}>
-            {loadingComplaints ? (
-              <View style={styles.emptyCard}>
-                <ActivityIndicator size="large" color={GREEN} />
-                <Text style={styles.emptyTitle}>Loading complaints...</Text>
-              </View>
+            {loadingComplaints && assignedComplaintsData.length === 0 ? (
+              <ComplaintListSkeleton count={3} />
             ) : displayedComplaints.length === 0 ? (
               <View style={styles.emptyCard}>
                 <Ionicons name="document-text-outline" size={30} color={MUTED} />
@@ -1296,92 +1395,149 @@ export default function DepartmentHeadDashboard() {
                 const priorityStyle = getPriorityStyle(item.priority);
 
                 return (
-                  <TouchableOpacity
-                    key={item.rawId || item.id}
-                    activeOpacity={0.78}
-                    style={styles.complaintCard}
-                    onPress={() => openDetails(item)}
-                  >
-                    <View style={styles.complaintTopRow}>
-                      <View style={styles.complaintInfo}>
-                        <Text style={styles.complaintTitle} numberOfLines={1}>
-                          {item.title}
-                        </Text>
-
-                        <View style={styles.detailRow}>
-                          <Feather name="tag" size={12} color={TEXT} />
-                          <Text style={styles.detailText} numberOfLines={1}>
-                            {item.category}
+                  <View key={item.rawId || item.id} style={styles.complaintCard}>
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      onPress={() => openDetails(item)}
+                    >
+                      <View style={styles.complaintHeaderRow}>
+                        <View style={styles.complaintTitleBox}>
+                          <Text style={styles.complaintTitle} numberOfLines={1}>
+                            {item.title}
                           </Text>
-                        </View>
 
-                        <View style={styles.detailRow}>
-                          <Feather name="map-pin" size={12} color={TEXT} />
-                          <Text style={styles.detailText} numberOfLines={1}>
+                          <Text
+                            style={styles.complaintLocation}
+                            numberOfLines={2}
+                          >
                             {item.geotaggedLocation}
                           </Text>
                         </View>
+                      </View>
 
-                        <View style={styles.detailRow}>
-                          <Feather name="calendar" size={12} color={TEXT} />
-                          <Text style={styles.detailText} numberOfLines={1}>
-                            {item.date}
-                          </Text>
+                      <View style={styles.complaintCitizenRow}>
+                        <View style={styles.cardCitizenAvatar}>
+                          {item.userPhoto ? (
+                            <Image
+                              source={{ uri: item.userPhoto }}
+                              style={styles.cardCitizenAvatarImage}
+                            />
+                          ) : (
+                            <Ionicons
+                              name="person-circle-outline"
+                              size={30}
+                              color={GREEN}
+                            />
+                          )}
                         </View>
 
-                        <View style={styles.detailRow}>
-                          <Feather name="clock" size={12} color={TEXT} />
-                          <Text style={styles.detailText} numberOfLines={1}>
-                            {item.time}
+                        <View style={styles.cardCitizenTextBox}>
+                          <Text style={styles.cardCitizenName} numberOfLines={1}>
+                            {item.citizen}
+                          </Text>
+                          <Text
+                            style={styles.cardCitizenContact}
+                            numberOfLines={1}
+                          >
+                            {item.contact}
                           </Text>
                         </View>
                       </View>
 
-                      <View style={styles.complaintRight}>
-                        <Feather name="chevron-right" size={20} color={TEXT} />
+                      <View style={styles.metaAndBadgeRow}>
+                        <View style={styles.dateTimeColumn}>
+                          <View style={styles.metaItem}>
+                            <Feather name="calendar" size={12} color={MUTED} />
+                            <Text style={styles.metaText}>{item.date}</Text>
+                          </View>
 
-                        <View
-                          style={[
-                            styles.statusBadge,
-                            { backgroundColor: statusStyle.bg },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.statusBadgeText,
-                              { color: statusStyle.color },
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {item.status}
-                          </Text>
+                          <View style={styles.metaItem}>
+                            <Feather name="clock" size={12} color={MUTED} />
+                            <Text style={styles.metaText}>{item.time}</Text>
+                          </View>
                         </View>
 
-                        <View
-                          style={[
-                            styles.priorityBadge,
-                            { backgroundColor: priorityStyle.bg },
-                          ]}
-                        >
-                          <Text
+                        <View style={styles.badgeRowBeside}>
+                          <View
                             style={[
-                              styles.priorityBadgeText,
-                              { color: priorityStyle.color },
+                              styles.statusBadge,
+                              { backgroundColor: statusStyle.bg },
                             ]}
-                            numberOfLines={1}
                           >
-                            {item.priority}
-                          </Text>
+                            <Text
+                              style={[
+                                styles.statusBadgeText,
+                                { color: statusStyle.color },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {item.status}
+                            </Text>
+                          </View>
+
+                          <View
+                            style={[
+                              styles.priorityBadge,
+                              { backgroundColor: priorityStyle.bg },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.priorityBadgeText,
+                                { color: priorityStyle.color },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {item.priority}
+                            </Text>
+                          </View>
                         </View>
                       </View>
+                    </TouchableOpacity>
+
+                    <View style={styles.cardActionRow}>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        style={styles.manageButton}
+                        onPress={() =>
+                          smoothNavigate(
+                            "/departmentHead/assignedComplaints"
+                          )
+                        }
+                      >
+                        <MaterialCommunityIcons
+                          name="progress-check"
+                          size={15}
+                          color={WHITE}
+                        />
+                        <Text style={styles.manageButtonText}>
+                          Update Status
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        style={styles.reassignButton}
+                        onPress={() =>
+                          smoothNavigate(
+                            "/departmentHead/assignedComplaints"
+                          )
+                        }
+                      >
+                        <MaterialCommunityIcons
+                          name="swap-horizontal"
+                          size={16}
+                          color={GREEN}
+                        />
+                        <Text style={styles.reassignButtonText}>Reassign</Text>
+                      </TouchableOpacity>
                     </View>
-                  </TouchableOpacity>
+                  </View>
                 );
               })
             )}
           </View>
         </ScrollView>
-
 
         <DropdownModal
           visible={categoryDropdownVisible}
@@ -1485,8 +1641,7 @@ export default function DepartmentHeadDashboard() {
                     <View style={styles.locationBox}>
                       <Text style={styles.locationLabel}>Pinned Location</Text>
                       <Text style={styles.locationValue}>
-                        {selectedComplaint.geotaggedLocation ||
-                          selectedComplaint.location}
+                        {selectedComplaint.geotaggedLocation}
                       </Text>
 
                       {selectedComplaint.latitude &&
@@ -1557,6 +1712,20 @@ export default function DepartmentHeadDashboard() {
                       label="Assigned Office"
                       value={selectedComplaint.department}
                     />
+                    {!!selectedComplaint.reassignmentReason && (
+                      <>
+                        <InfoRow
+                          label="Reassignment Reason"
+                          value={selectedComplaint.reassignmentReason}
+                        />
+                        {!!selectedComplaint.reassignedFromOffice && (
+                          <InfoRow
+                            label="Previous Office"
+                            value={selectedComplaint.reassignedFromOffice}
+                          />
+                        )}
+                      </>
+                    )}
                     <InfoRow label="Priority" value={selectedComplaint.priority} />
                     <InfoRow label="Status" value={selectedComplaint.status} />
                     <InfoRow
@@ -1571,24 +1740,22 @@ export default function DepartmentHeadDashboard() {
                   </View>
                 </ScrollView>
               )}
-
-              {photoViewerVisible && selectedPhoto && (
-                <TouchableOpacity
-                  activeOpacity={1}
-                  style={styles.photoViewerOverlay}
-                  onPress={closePhotoViewer}
-                >
-                  <Image
-                    pointerEvents="none"
-                    source={{ uri: selectedPhoto }}
-                    style={styles.fullscreenPhoto}
-                    resizeMode="contain"
-                  />
-                </TouchableOpacity>
-              )}
             </View>
+
+            <FullscreenPhotoViewer
+              variant="overlay"
+              visible={photoViewerVisible && detailsVisible}
+              uri={selectedPhoto}
+              onClose={closePhotoViewer}
+            />
           </View>
         </Modal>
+
+        <FullscreenPhotoViewer
+          visible={photoViewerVisible && !detailsVisible}
+          uri={selectedPhoto}
+          onClose={closePhotoViewer}
+        />
       </View>
     </SafeAreaView>
   );
@@ -1729,10 +1896,16 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
 
+  avatar: {
+    width: "100%",
+    height: "100%",
+    resizeMode: "cover",
+  },
+
   scrollContent: {
     paddingHorizontal: H_PADDING,
     paddingTop: 0,
-    paddingBottom: 116,
+    paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
   greetingContainer: {
@@ -1878,80 +2051,190 @@ const styles = StyleSheet.create({
   complaintCard: {
     borderWidth: 1,
     borderColor: BORDER,
-    borderRadius: 12,
+    borderRadius: 14,
     backgroundColor: WHITE,
     paddingHorizontal: 14,
     paddingVertical: 12,
     shadowColor: "#000000",
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
+    shadowOpacity: 0.04,
+    shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
     elevation: 1,
   },
 
-  complaintTopRow: {
+  complaintHeaderRow: {
     flexDirection: "row",
     alignItems: "flex-start",
   },
 
-  complaintInfo: {
+  complaintTitleBox: {
     flex: 1,
-    paddingRight: 10,
   },
 
   complaintTitle: {
     fontFamily: "Poppins_700Bold",
-    fontSize: 13,
+    fontSize: 13.5,
     color: TEXT,
-    marginBottom: 4,
   },
 
-  detailRow: {
-    flexDirection: "row",
-    alignItems: "center",
+  complaintLocation: {
+    fontFamily: "Poppins_500Medium",
+    fontSize: 10.5,
+    color: MUTED,
+    lineHeight: 15,
     marginTop: 3,
   },
 
-  detailText: {
-    flex: 1,
-    fontFamily: "Poppins_500Medium",
-    fontSize: 10.2,
-    color: TEXT,
-    marginLeft: 7,
+  complaintCitizenRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 9,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: "#FCFFFB",
+    borderWidth: 1,
+    borderColor: "#DDEFD8",
   },
 
-  complaintRight: {
-    width: 112,
-    alignItems: "flex-end",
-    gap: 8,
+  cardCitizenAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: LIGHT_GREEN,
+    borderWidth: 1,
+    borderColor: "#D9EFD1",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 9,
+    overflow: "hidden",
+  },
+
+  cardCitizenAvatarImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 18,
+    resizeMode: "cover",
+  },
+
+  cardCitizenTextBox: {
+    flex: 1,
+  },
+
+  cardCitizenName: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 12.2,
+    color: TEXT,
+  },
+
+  cardCitizenContact: {
+    fontFamily: "Poppins_500Medium",
+    fontSize: 10.5,
+    color: MUTED,
+    marginTop: 1,
+  },
+
+  metaAndBadgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginTop: 9,
+  },
+
+  dateTimeColumn: {
+    flex: 1,
+    gap: 5,
+  },
+
+  metaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  metaText: {
+    fontFamily: "Poppins_400Regular",
+    fontSize: 10.5,
+    color: TEXT,
+    marginLeft: 6,
+  },
+
+  badgeRowBeside: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
   },
 
   statusBadge: {
-    minWidth: 92,
+    minWidth: 82,
     height: 24,
     borderRadius: 13,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     alignItems: "center",
     justifyContent: "center",
   },
 
   statusBadgeText: {
     fontFamily: "Poppins_700Bold",
-    fontSize: 10.2,
+    fontSize: 9.2,
   },
 
   priorityBadge: {
-    minWidth: 82,
+    minWidth: 58,
     height: 24,
     borderRadius: 13,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     alignItems: "center",
     justifyContent: "center",
   },
 
   priorityBadgeText: {
     fontFamily: "Poppins_700Bold",
-    fontSize: 10.2,
+    fontSize: 9.2,
+  },
+
+  cardActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 11,
+  },
+
+  manageButton: {
+    flex: 1,
+    height: 35,
+    borderRadius: 18,
+    backgroundColor: GREEN,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+
+  manageButtonText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 10.5,
+    color: WHITE,
+  },
+
+  reassignButton: {
+    height: 35,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: GREEN,
+    backgroundColor: WHITE,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingHorizontal: 12,
+  },
+
+  reassignButtonText: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 10.5,
+    color: GREEN,
   },
 
   emptyCard: {
