@@ -25,15 +25,17 @@ import { ComplaintListSkeleton, PageSkeleton } from "../../components/skeletons"
 import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
 import {
   calculatePriorityFromKeywords,
-  detectComplaintCategoryFromKeywords,
-  getAssignedOffice as getAssignedOfficeFromCategory,
-  normalizeComplaintCategory,
+  resolveComplaintRouting,
 } from "../../lib/complaintCategories";
 import {
   canCitizenSubmitValidation,
   getLatestFeedbackStatusByComplaintIds,
   isValidationResubmit,
 } from "../../lib/complaintFeedbackService";
+import {
+  countPendingValidationComplaints,
+  requestCitizenValidationReminders,
+} from "../../lib/citizenValidationReminderService";
 import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
 import {
   applyOffsetPagination,
@@ -514,20 +516,10 @@ async function mapDashboardComplaint(row) {
     row.submitted_date_time ||
     new Date().toISOString();
 
-  const detectedCategory = detectComplaintCategoryFromKeywords(
+  const { category, assignedOffice } = resolveComplaintRouting(
     row.title,
-    row.description
-  );
-
-  const category =
-    !row.category ||
-    row.category === "Unclassified" ||
-    row.category === "Unassigned"
-      ? detectedCategory
-      : normalizeComplaintCategory(row.category || row.concern_category);
-
-  const assignedOffice = getAssignedOfficeFromCategory(
-    category,
+    row.description,
+    row.category || row.concern_category,
     row.assigned_office || row.assignedOffice || row.department
   );
 
@@ -822,7 +814,6 @@ export default function CitizenDashboard() {
       }
 
       setCurrentUserId(currentUser.id);
-      await loadUnreadNotificationCount(currentUser.id);
 
       const { data, error } = await fetchAllRowsWithOffset(async (offset, pageSize) => {
         const query = applyOffsetPagination(
@@ -867,6 +858,9 @@ export default function CitizenDashboard() {
         complaints: mappedComplaints,
         currentUserId: currentUser.id,
       });
+
+      await requestCitizenValidationReminders(currentUser.id);
+      await loadUnreadNotificationCount(currentUser.id);
     } catch (error) {
       console.log("Dashboard complaints load error:", error);
       if (shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY)) {
@@ -882,6 +876,11 @@ export default function CitizenDashboard() {
       loadUserProfilePhoto();
       loadDashboardComplaints();
     }, [loadUserProfilePhoto, loadDashboardComplaints])
+  );
+
+  const pendingValidationCount = useMemo(
+    () => countPendingValidationComplaints(complaintsData),
+    [complaintsData]
   );
 
   useEffect(() => {
@@ -1064,6 +1063,40 @@ export default function CitizenDashboard() {
             <Text style={styles.greetingLarge}>Bogohanon!</Text>
             <Text style={styles.dateText}>{formattedDate}</Text>
           </View>
+
+          {pendingValidationCount > 0 ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.validationReminderBanner}
+              onPress={() =>
+                smoothNavigate({
+                  pathname: "/citizen/complaints",
+                  params: { filter: "For Validation" },
+                })
+              }
+            >
+              <View style={styles.validationReminderIconCircle}>
+                <MaterialCommunityIcons
+                  name="clipboard-check-outline"
+                  size={22}
+                  color="#7A3EA8"
+                />
+              </View>
+
+              <View style={styles.validationReminderTextBox}>
+                <Text style={styles.validationReminderTitle}>
+                  {pendingValidationCount === 1
+                    ? "1 complaint needs your validation"
+                    : `${pendingValidationCount} complaints need your validation`}
+                </Text>
+                <Text style={styles.validationReminderSubtitle}>
+                  Please confirm if the issue was resolved so departments can close the case.
+                </Text>
+              </View>
+
+              <Feather name="chevron-right" size={20} color="#7A3EA8" />
+            </TouchableOpacity>
+          ) : null}
 
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Dashboard</Text>
@@ -1687,6 +1720,47 @@ const styles = StyleSheet.create({
     color: MUTED,
     marginTop: 4,
     letterSpacing: 0.4,
+  },
+
+  validationReminderBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E6D4F5",
+    backgroundColor: "#F9F2FF",
+  },
+
+  validationReminderIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#F3EAFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  validationReminderTextBox: {
+    flex: 1,
+  },
+
+  validationReminderTitle: {
+    fontFamily: "Poppins_700Bold",
+    fontSize: 13,
+    color: "#7A3EA8",
+    lineHeight: 18,
+  },
+
+  validationReminderSubtitle: {
+    fontFamily: "Poppins_400Regular",
+    fontSize: 11.5,
+    color: MUTED,
+    lineHeight: 16,
+    marginTop: 2,
   },
 
   sectionRow: {
