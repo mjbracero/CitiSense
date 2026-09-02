@@ -16,15 +16,22 @@ function mapWebhookToPush(payload: WebhookPayload) {
   const record = payload.record || {};
 
   if (payload.table === "complaint_notifications") {
+    const notificationType = String(record.type || "").toLowerCase();
+    const openValidation =
+      notificationType === "validation_reminder" ||
+      notificationType === "validation";
+
     return {
       user_id: String(record.citizen_id || ""),
       title: String(record.title || "Complaint Update"),
       body: String(record.message || "Your complaint has a new update."),
       data: {
         role: "citizen",
-        route: "/citizen/notification",
+        route: openValidation ? "/citizen/complaints" : "/citizen/notification",
         complaint_id: String(record.complaint_id || ""),
         notification_id: String(record.id || ""),
+        filter: openValidation ? "For Validation" : "",
+        open_validation: openValidation ? "true" : "false",
       },
     };
   }
