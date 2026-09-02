@@ -171,6 +171,18 @@ function getNotificationStyle(type, status, metadata = {}) {
     };
   }
 
+  if (normalizedType === "validation_reminder") {
+    return {
+      statusBg: "#F3EAFF",
+      statusColor: "#7A3EA8",
+      icon: "bell-ring-outline",
+      iconBg: "#F3EAFF",
+      iconColor: "#7A3EA8",
+      actionLabel: "Validate Now",
+      actionType: "validation",
+    };
+  }
+
   if (normalizedType === "routed" || normalizedType === "reassigned") {
     return {
       statusBg: LIGHT_GREEN,
@@ -746,13 +758,23 @@ export default function CitizenNotification() {
     if (!item.complaintId) return;
 
     const status = String(item.status || "").trim();
+    const normalizedType = normalizeText(item.type);
+    const needsValidation =
+      normalizedType === "validation_reminder" ||
+      normalizedType === "validation" ||
+      status === "For Validation";
 
     router.push({
       pathname: "/citizen/complaints",
       params: {
         complaintId: item.complaintId,
-        openDetails: "true",
-        ...(status === "Returned" ? { filter: "Returned" } : {}),
+        openDetails: needsValidation ? undefined : "true",
+        openValidation: needsValidation ? "true" : undefined,
+        filter: needsValidation
+          ? "For Validation"
+          : status === "Returned"
+            ? "Returned"
+            : undefined,
       },
     });
   };
