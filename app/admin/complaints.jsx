@@ -104,6 +104,7 @@ const categoryFilters = [
   "Planning and Zoning Concerns",
   "Public Market Concerns",
   "Public Plaza Concerns",
+  "Public Library Concerns",
   "City Facility Concerns",
   "Tourism Site / Public Attraction Concerns",
   "Disaster and Emergency Concerns",
