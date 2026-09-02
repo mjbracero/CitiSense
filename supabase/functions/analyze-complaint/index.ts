@@ -72,6 +72,7 @@ const DEPARTMENT_BY_CATEGORY: Record<string, string> = {
     "City Planning and Development Office / Zoning Office",
   "Public Market Concerns": "Bogo Public Market Office",
   "Public Plaza Concerns": "Bogo Public Plaza Office",
+  "Public Library Concerns": "Bogo Public Library Office",
   "City Facility Concerns": "General Services Office",
   "Tourism Site / Public Attraction Concerns": "City Tourism Office",
   "Disaster and Emergency Concerns": "CDRRMO & BFP Bogo City Fire Station",
@@ -87,6 +88,165 @@ const DEPARTMENT_BY_CATEGORY: Record<string, string> = {
 };
 
 const COMPLAINT_CATEGORY_NAMES = Object.keys(DEPARTMENT_BY_CATEGORY);
+
+const AI_CATCHALL_CATEGORIES = new Set(["City Facility Concerns", "Unclassified"]);
+
+const KEYWORD_PRIORITY_CATEGORIES = new Set([
+  "Business Permit and Licensing Concerns",
+  "Civil Registry Concerns",
+  "Tax and Treasury Concerns",
+  "Property Assessment Concerns",
+  "Public Library Concerns",
+  "Traffic and Road Safety Concerns",
+  "Drainage and Flooding Concerns",
+  "Fire Safety Concerns",
+  "Peace and Order Concerns",
+  "Water Concerns",
+  "Electricity Concerns",
+  "Building and Construction Concerns",
+]);
+
+const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
+  {
+    category: "Fire Safety Concerns",
+    keywords: ["fire", "sunog", "smoke", "gas leak", "explosion", "bfp"],
+  },
+  {
+    category: "Peace and Order Concerns",
+    keywords: ["crime", "robbery", "shooting", "police", "violence", "murder"],
+  },
+  {
+    category: "Water Concerns",
+    keywords: ["water", "tubig", "no water", "dirty water", "broken pipe"],
+  },
+  {
+    category: "Electricity Concerns",
+    keywords: ["electricity", "brownout", "power outage", "kuryente", "live wire"],
+  },
+  {
+    category: "Traffic and Road Safety Concerns",
+    keywords: ["traffic", "road safety", "accident", "illegal parking", "crosswalk"],
+  },
+  {
+    category: "Business Permit and Licensing Concerns",
+    keywords: [
+      "business permit",
+      "mayor's permit",
+      "bplo",
+      "business license",
+      "permit application",
+    ],
+  },
+  {
+    category: "Civil Registry Concerns",
+    keywords: [
+      "birth certificate",
+      "marriage certificate",
+      "death certificate",
+      "civil registrar",
+    ],
+  },
+  {
+    category: "Property Assessment Concerns",
+    keywords: ["assessor", "property valuation", "tax declaration"],
+  },
+  {
+    category: "Tax and Treasury Concerns",
+    keywords: ["real property tax", "tax payment", "treasurer", "cedula"],
+  },
+  {
+    category: "Drainage and Flooding Concerns",
+    keywords: ["drainage", "flooding", "flooded", "baha", "canal"],
+  },
+  {
+    category: "Building and Construction Concerns",
+    keywords: ["building permit", "construction", "building official", "obo"],
+  },
+  {
+    category: "Public Library Concerns",
+    keywords: ["public library", "library book", "reading room"],
+  },
+  {
+    category: "City Facility Concerns",
+    keywords: ["city hall", "waiting area", "covered court", "public restroom"],
+  },
+];
+
+function detectComplaintCategoryFromKeywords(title = "", description = "") {
+  const combinedText = `${title || ""} ${description || ""}`.toLowerCase();
+
+  for (const item of CATEGORY_KEYWORDS) {
+    if (
+      item.keywords.some((keyword) => combinedText.includes(keyword.toLowerCase()))
+    ) {
+      return item.category;
+    }
+  }
+
+  return "Unclassified";
+}
+
+function normalizeComplaintCategory(category: string) {
+  const cleanCategory = String(category || "").trim();
+  if (DEPARTMENT_BY_CATEGORY[cleanCategory]) return cleanCategory;
+  return "Unclassified";
+}
+
+function reconcileComplaintCategory(
+  title = "",
+  description = "",
+  aiCategory = ""
+) {
+  const normalizedAi = normalizeComplaintCategory(aiCategory);
+  const keywordCategory = detectComplaintCategoryFromKeywords(title, description);
+
+  if (keywordCategory === "Unclassified") {
+    return normalizedAi;
+  }
+
+  if (AI_CATCHALL_CATEGORIES.has(normalizedAi)) {
+    return keywordCategory;
+  }
+
+  if (
+    KEYWORD_PRIORITY_CATEGORIES.has(keywordCategory) &&
+    keywordCategory !== normalizedAi
+  ) {
+    return keywordCategory;
+  }
+
+  return normalizedAi;
+}
+
+function resolveComplaintRouting(
+  title = "",
+  description = "",
+  aiCategory = ""
+) {
+  const category = reconcileComplaintCategory(title, description, aiCategory);
+  const assignedOffice = DEPARTMENT_BY_CATEGORY[category] || "Unassigned";
+
+  return { category, assignedOffice };
+}
+
+function applyRoutingToAnalysis(
+  analysis: Record<string, unknown>,
+  title = "",
+  description = ""
+) {
+  const aiCategory = String(analysis?.category || "Unclassified");
+  const { category, assignedOffice } = resolveComplaintRouting(
+    title,
+    description,
+    aiCategory
+  );
+
+  return {
+    ...analysis,
+    category,
+    assignedOffice,
+  };
+}
 
 type PhotoPayload = {
   mime_type?: string;
@@ -197,6 +357,19 @@ Return ONLY valid JSON with this exact shape:
 
 Allowed categories (use exact spelling):
 ${COMPLAINT_CATEGORY_NAMES.join("\n")}
+
+Department routing map (assign category to these offices only):
+${Object.entries(DEPARTMENT_BY_CATEGORY)
+  .map(([category, office]) => `- ${category} -> ${office}`)
+  .join("\n")}
+
+Classification rules:
+- Classify into the most specific LGU category from the complaint meaning in any Philippine language.
+- Follow the department routing map — do not route permits, certificates, taxes, or licensing to General Services Office unless the category is truly City Facility Concerns.
+- Business permit, mayor's permit, licensing, permit delays -> Business Permit and Licensing Concerns.
+- Birth/marriage/death certificates, civil registry -> Civil Registry Concerns.
+- City Facility Concerns is ONLY for physical city-owned buildings and facilities (city hall, gym, waiting areas, covered courts, public restrooms) — NOT permits, certificates, taxes, or library services.
+- Public Library Concerns -> Bogo Public Library Office.
 
 Urgency and priority rules:
 - Distinguish Emergency vs Non-Emergency complaints using urgency_analysis.complaint_type.
@@ -444,9 +617,14 @@ Deno.serve(async (req) => {
     const body = (await req.json()) as AnalyzeComplaintRequest;
     const prompt = buildAnalysisPrompt(body);
     const photoImages = Array.isArray(body.photoImages) ? body.photoImages : [];
-    const analysis = await callGemini(prompt, photoImages, {
+    const rawAnalysis = await callGemini(prompt, photoImages, {
       isEmergency: Boolean(body.isEmergency),
     });
+    const analysis = applyRoutingToAnalysis(
+      rawAnalysis as Record<string, unknown>,
+      body.title || "",
+      body.description || ""
+    );
 
     return new Response(JSON.stringify({ analysis }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
