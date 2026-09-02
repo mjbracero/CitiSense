@@ -9,7 +9,7 @@ import {
 } from "@expo-google-fonts/poppins";
 import * as Location from "expo-location";
 import * as FileSystem from "expo-file-system/legacy";
-import { useFocusEffect, usePathname, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -59,6 +59,7 @@ import {
   CONCERN_DEPARTMENT_OPTIONS,
   getAssignedOffice,
   getCategoriesForDepartment,
+  resolveDepartmentHeadOffice,
 } from "../../lib/complaintCategories";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
@@ -1011,6 +1012,8 @@ function createMapHtml({
 export default function DepartmentHeadAssignedComplaints() {
   const router = useRouter();
   const pathname = usePathname();
+  const { complaintId: routeComplaintId, openDetails: routeOpenDetails } =
+    useLocalSearchParams();
   const { unreadNotificationCount } = useDepartmentHeadUnreadNotifications();
 
   const lastAssignedFilter = getPageCache(DEPT_ASSIGNED_LAST_FILTER_KEY) || {};
@@ -1083,6 +1086,7 @@ export default function DepartmentHeadAssignedComplaints() {
   const hasMoreRef = useRef(cachedAssigned?.hasMore !== false);
   const listViewportHeightRef = useRef(0);
   const assignedMatchModeRef = useRef("exact");
+  const routedComplaintOpenedRef = useRef(false);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -1184,7 +1188,11 @@ export default function DepartmentHeadAssignedComplaints() {
         .replace(/\s+/g, " ")
         .trim();
 
-      const nextDepartment = databaseDepartment || metadataDepartment || "";
+      const nextDepartment =
+        resolveDepartmentHeadOffice(databaseDepartment || metadataDepartment) ||
+        databaseDepartment ||
+        metadataDepartment ||
+        "";
 
       setDepartmentHeadDepartment(nextDepartment);
 
@@ -1282,9 +1290,11 @@ export default function DepartmentHeadAssignedComplaints() {
         }
 
         const department = await loadDepartmentHeadDepartment();
-        const cleanDepartment = String(department || "")
-          .replace(/\s+/g, " ")
-          .trim();
+        const cleanDepartment =
+          resolveDepartmentHeadOffice(department) ||
+          String(department || "")
+            .replace(/\s+/g, " ")
+            .trim();
 
         if (!cleanDepartment) {
           console.log("No moderator department found. Check profiles.department.");
@@ -1699,9 +1709,11 @@ export default function DepartmentHeadAssignedComplaints() {
 
   const filteredComplaints = useMemo(() => {
     const filtered = complaints.filter((item) => {
-      const departmentMatch =
-        normalizeText(item.department) ===
-        normalizeText(departmentHeadDepartment);
+      const departmentMatch = complaintAppliesToDepartment(
+        item.department,
+        item.category,
+        departmentHeadDepartment
+      );
 
       const categoryMatch =
         selectedCategory === "All Category" || item.category === selectedCategory;
@@ -1878,6 +1890,91 @@ export default function DepartmentHeadAssignedComplaints() {
     setPhotoViewerVisible(false);
     setSelectedPhoto(null);
   };
+
+  useEffect(() => {
+    if (routeOpenDetails !== "true" || !routeComplaintId || routedComplaintOpenedRef.current) {
+      return;
+    }
+
+    if (loadingComplaints) return;
+
+    const openRoutedComplaint = async () => {
+      const rawRouteId = Array.isArray(routeComplaintId)
+        ? routeComplaintId[0]
+        : routeComplaintId;
+      const complaintKey = String(rawRouteId || "").trim();
+      const existing = complaintsRef.current.find(
+        (item) =>
+          String(item.rawId || item.id) === complaintKey ||
+          String(item.shortId || "") === complaintKey
+      );
+
+      if (existing) {
+        routedComplaintOpenedRef.current = true;
+        openDetails(existing);
+        return;
+      }
+
+      try {
+        const fetchComplaintByKey = async (column, value) => {
+          const { data, error } = await supabase
+            .from("complaints")
+            .select("*")
+            .eq(column, value)
+            .maybeSingle();
+
+          return { data, error };
+        };
+
+        let { data, error } = await fetchComplaintByKey("id", complaintKey);
+
+        if (!data && !error) {
+          ({ data, error } = await fetchComplaintByKey("short_id", complaintKey));
+        }
+
+        if (error || !data) {
+          notify("Complaint Not Found", "This assigned complaint could not be loaded.");
+          return;
+        }
+
+        const department = await loadDepartmentHeadDepartment();
+        const cleanDepartment =
+          resolveDepartmentHeadOffice(department) ||
+          String(department || "").trim();
+
+        if (
+          !complaintAppliesToDepartment(
+            data.assigned_office,
+            data.category || data.concern_category,
+            cleanDepartment
+          )
+        ) {
+          notify("Not Assigned", "This complaint is not routed to your department.");
+          return;
+        }
+
+        const profileMap = await loadCitizenProfiles([data.citizen_id]);
+        const mapped = await mapComplaintRow(data, profileMap);
+        const nextComplaints = mergeComplaintPages(complaintsRef.current, [mapped]);
+
+        complaintsRef.current = nextComplaints;
+        setComplaints(nextComplaints);
+        routedComplaintOpenedRef.current = true;
+        openDetails(mapped);
+      } catch (error) {
+        console.log("Open routed complaint error:", error);
+        notify("Load Failed", "Unable to open the assigned complaint.");
+      }
+    };
+
+    openRoutedComplaint();
+  }, [
+    routeComplaintId,
+    routeOpenDetails,
+    loadingComplaints,
+    loadDepartmentHeadDepartment,
+    loadCitizenProfiles,
+  ]);
 
   const closeDetails = () => {
     setDetailsVisible(false);
