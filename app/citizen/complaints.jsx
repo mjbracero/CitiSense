@@ -43,6 +43,7 @@ import {
   notifyAdminsCitizenValidated,
 } from "../../lib/adminNotificationService";
 import { notifyCitizenAiValidationResult } from "../../lib/citizenNotificationService";
+import { requestCitizenValidationReminders } from "../../lib/citizenValidationReminderService";
 import { writeAuditLog } from "../../lib/auditLogService";
 import {
   buildResolutionValidationDbPayload,
@@ -64,9 +65,7 @@ import {
 } from "../../lib/complaintFeedbackService";
 import {
   calculatePriorityFromKeywords,
-  detectComplaintCategoryFromKeywords,
-  getAssignedOffice as getAssignedOfficeFromCategory,
-  normalizeComplaintCategory,
+  resolveComplaintRouting,
 } from "../../lib/complaintCategories";
 import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
@@ -157,611 +156,6 @@ function getStatusSortRank(status) {
   if (status === "Returned") return 0;
   if (status === "For Validation") return 1;
   return 2;
-}
-
-const CATEGORY_DEPARTMENT_MAP = {
-  "Water Concerns": "Bogo Water District",
-  "Electricity Concerns": "CEBECO II",
-  "Streetlight Concerns": "City Engineering Office",
-  "Road and Infrastructure Concerns": "City Engineering Office",
-  "Drainage and Flooding Concerns": "City Engineering Office",
-  "Waste and Environmental Concerns": "CENRO",
-  "Traffic and Road Safety Concerns": "BTMO",
-  "Transport Terminal Concerns": "Bogo City Central Bus Terminal Office",
-  "Port Concerns": "Polambato Port Office",
-  "Health and Sanitation Concerns": "City Health Office",
-  "Animal Concerns": "City Veterinary Office",
-  "Building and Construction Concerns": "Office of the Building Official",
-  "Planning and Zoning Concerns":
-    "City Planning and Development Office / Zoning Office",
-  "Public Market Concerns": "Bogo Public Market Office",
-  "Public Plaza Concerns": "Bogo Public Plaza Office",
-  "City Facility Concerns": "General Services Office",
-  "Tourism Site / Public Attraction Concerns": "City Tourism Office",
-  "Disaster and Emergency Concerns": "CDRRMO",
-  "Fire Safety Concerns": "BFP Bogo City Fire Station",
-  "Peace and Order Concerns": "Bogo City Police Station / PNP",
-  "Coastal and Marine Protection Concerns": "Bantay Dagat",
-  "PWD Accessibility Concerns": "PDAO",
-  "Tax and Treasury Concerns": "City Treasurer's Office",
-  "Property Assessment Concerns": "City Assessor's Office",
-  "Civil Registry Concerns": "City Civil Registrar's Office",
-  "Business Permit and Licensing Concerns":
-    "City Business Permit and Licensing Office",
-};
-
-const CATEGORY_ALIASES = {
-  "road & infrastructure": "Road and Infrastructure Concerns",
-  "road and infrastructure": "Road and Infrastructure Concerns",
-  "drainage & flooding": "Drainage and Flooding Concerns",
-  "waste & environmental": "Waste and Environmental Concerns",
-  "traffic & road safety": "Traffic and Road Safety Concerns",
-  "fire safety": "Fire Safety Concerns",
-  "city facility": "City Facility Concerns",
-};
-
-const categoryKeywords = [
-  {
-    category: "Fire Safety Concerns",
-    keywords: [
-      "fire",
-      "sunog",
-      "smoke",
-      "aso",
-      "burning",
-      "nasunog",
-      "flame",
-      "apoy",
-      "gas leak",
-      "lpg",
-      "leaking gas",
-      "explosion",
-      "fire hazard",
-      "spark",
-      "electrical fire",
-      "bfp",
-    ],
-  },
-  {
-    category: "Disaster and Emergency Concerns",
-    keywords: [
-      "disaster",
-      "emergency",
-      "rescue",
-      "landslide",
-      "earthquake",
-      "linog",
-      "storm",
-      "bagyo",
-      "collapsed",
-      "evacuation",
-      "calamity",
-      "drowning",
-      "drown",
-      "nalumos",
-      "lunod",
-      "trapped",
-      "missing person",
-    ],
-  },
-  {
-    category: "Peace and Order Concerns",
-    keywords: [
-      "crime",
-      "fight",
-      "riot",
-      "police",
-      "thief",
-      "stealing",
-      "robbery",
-      "kawat",
-      "gubot",
-      "violence",
-      "threat",
-      "drunk",
-      "noise complaint",
-      "public disturbance",
-      "shooting",
-      "stab",
-      "stabbing",
-      "gun",
-      "murder",
-      "killing",
-      "attack",
-      "hostage",
-      "vandalism",
-    ],
-  },
-  {
-    category: "Water Concerns",
-    keywords: [
-      "water",
-      "tubig",
-      "leak",
-      "leaking",
-      "pipe",
-      "broken pipe",
-      "faucet",
-      "gripo",
-      "low pressure",
-      "no water",
-      "walay tubig",
-      "dirty water",
-      "contaminated water",
-      "water interruption",
-      "burst pipe",
-    ],
-  },
-  {
-    category: "Electricity Concerns",
-    keywords: [
-      "electricity",
-      "power",
-      "brownout",
-      "blackout",
-      "kuryente",
-      "wire",
-      "live wire",
-      "exposed wire",
-      "electrical",
-      "transformer",
-      "power outage",
-      "walay kuryente",
-      "electric post",
-      "fallen electric post",
-      "power line",
-      "sparking wire",
-    ],
-  },
-  {
-    category: "Streetlight Concerns",
-    keywords: [
-      "streetlight",
-      "street light",
-      "poste",
-      "lamp post",
-      "suga",
-      "light not working",
-      "dark road",
-      "broken light",
-      "no light",
-      "pundido",
-      "pundir",
-      "flickering light",
-      "damaged lamp",
-    ],
-  },
-  {
-    category: "Road and Infrastructure Concerns",
-    keywords: [
-      "road",
-      "dalan",
-      "pothole",
-      "potholes",
-      "damaged road",
-      "broken road",
-      "asphalt",
-      "bridge",
-      "sidewalk",
-      "crack",
-      "road repair",
-      "infrastructure",
-      "uneven road",
-      "manhole",
-      "road shoulder",
-      "culvert",
-      "barrier",
-      "guardrail",
-    ],
-  },
-  {
-    category: "Drainage and Flooding Concerns",
-    keywords: [
-      "drainage",
-      "canal",
-      "clogged",
-      "barado",
-      "flood",
-      "flooding",
-      "baha",
-      "overflow",
-      "sewer",
-      "water flow",
-      "blocked drainage",
-      "stagnant water",
-      "canal overflow",
-      "standing water",
-      "storm drain",
-    ],
-  },
-  {
-    category: "Waste and Environmental Concerns",
-    keywords: [
-      "garbage",
-      "trash",
-      "waste",
-      "basura",
-      "illegal dumping",
-      "dirty area",
-      "environment",
-      "pollution",
-      "bad smell",
-      "odor",
-      "litter",
-      "uncollected garbage",
-      "open dumping",
-      "burning garbage",
-      "hazardous waste",
-    ],
-  },
-  {
-    category: "Traffic and Road Safety Concerns",
-    keywords: [
-      "traffic",
-      "road safety",
-      "accident",
-      "crash",
-      "vehicle",
-      "parking",
-      "illegal parking",
-      "reckless driving",
-      "speeding",
-      "crosswalk",
-      "traffic sign",
-      "traffic light",
-      "road obstruction",
-      "blocked lane",
-      "pedestrian",
-      "motorcycle accident",
-      "tricycle accident",
-    ],
-  },
-  {
-    category: "Transport Terminal Concerns",
-    keywords: [
-      "terminal",
-      "bus terminal",
-      "van terminal",
-      "jeepney terminal",
-      "bus",
-      "jeepney",
-      "van",
-      "fare",
-      "driver",
-      "transport",
-      "commuter",
-      "overcharging fare",
-      "passenger queue",
-    ],
-  },
-  {
-    category: "Port Concerns",
-    keywords: [
-      "port",
-      "pier",
-      "polambato",
-      "boat",
-      "barko",
-      "ferry",
-      "ship",
-      "dock",
-      "passenger port",
-      "cargo",
-      "wharf",
-    ],
-  },
-  {
-    category: "Health and Sanitation Concerns",
-    keywords: [
-      "health",
-      "sanitation",
-      "clinic",
-      "medical",
-      "hospital",
-      "disease",
-      "illness",
-      "food poisoning",
-      "dirty food",
-      "public toilet",
-      "comfort room",
-      "unsanitary",
-      "septic",
-      "mosquito",
-      "dengue",
-      "contamination",
-    ],
-  },
-  {
-    category: "Animal Concerns",
-    keywords: [
-      "animal",
-      "dog",
-      "cat",
-      "stray",
-      "bite",
-      "dog bite",
-      "iro",
-      "iring",
-      "rabies",
-      "dead animal",
-      "loose dog",
-      "aggressive dog",
-      "livestock",
-      "cow",
-      "pig",
-      "goat",
-      "chicken",
-    ],
-  },
-  {
-    category: "Building and Construction Concerns",
-    keywords: [
-      "building",
-      "construction",
-      "unsafe structure",
-      "permit",
-      "renovation",
-      "demolition",
-      "construction site",
-      "falling debris",
-      "illegal construction",
-      "scaffold",
-      "excavation",
-    ],
-  },
-  {
-    category: "Planning and Zoning Concerns",
-    keywords: [
-      "zoning",
-      "planning",
-      "land use",
-      "property boundary",
-      "setback",
-      "illegal structure",
-      "wrong land use",
-      "zoning violation",
-      "lot boundary",
-    ],
-  },
-  {
-    category: "Public Market Concerns",
-    keywords: [
-      "market",
-      "public market",
-      "merkado",
-      "stall",
-      "vendor",
-      "wet market",
-      "market drainage",
-      "market garbage",
-      "overpricing",
-      "market sanitation",
-    ],
-  },
-  {
-    category: "Public Plaza Concerns",
-    keywords: [
-      "plaza",
-      "public plaza",
-      "park",
-      "playground",
-      "bench",
-      "public garden",
-      "damaged plaza",
-      "plaza light",
-      "fountain",
-    ],
-  },
-  {
-    category: "City Facility Concerns",
-    keywords: [
-      "city facility",
-      "city hall",
-      "gym",
-      "covered court",
-      "barangay hall",
-      "public building",
-      "facility",
-      "sports complex",
-      "multi-purpose hall",
-      "public restroom",
-    ],
-  },
-  {
-    category: "Tourism Site / Public Attraction Concerns",
-    keywords: [
-      "tourism",
-      "tourist",
-      "attraction",
-      "tourist spot",
-      "public attraction",
-      "heritage",
-      "beach attraction",
-      "site",
-      "tourism site",
-      "landmark",
-    ],
-  },
-  {
-    category: "Coastal and Marine Protection Concerns",
-    keywords: [
-      "coastal",
-      "marine",
-      "sea",
-      "dagat",
-      "illegal fishing",
-      "shore",
-      "shoreline",
-      "mangrove",
-      "fish kill",
-      "coral",
-      "bantay dagat",
-      "coastal waste",
-      "seawater",
-      "beach waste",
-    ],
-  },
-  {
-    category: "PWD Accessibility Concerns",
-    keywords: [
-      "pwd",
-      "accessibility",
-      "disabled",
-      "disability",
-      "ramp",
-      "wheelchair",
-      "handrail",
-      "accessible",
-      "blind",
-      "deaf",
-      "senior access",
-      "blocked ramp",
-    ],
-  },
-];
-
-const criticalKeywords = [
-  "fire",
-  "sunog",
-  "gas leak",
-  "lpg",
-  "explosion",
-  "shooting",
-  "gun",
-  "stab",
-  "stabbing",
-  "murder",
-  "killing",
-  "hostage",
-  "bleeding",
-  "unconscious",
-  "drowning",
-  "nalumos",
-  "lunod",
-  "landslide",
-  "earthquake",
-  "collapsed",
-  "live wire",
-  "exposed wire",
-  "fallen electric post",
-  "electric shock",
-  "rescue",
-  "emergency",
-  "life threatening",
-];
-
-const highKeywords = [
-  "accident",
-  "crash",
-  "flood",
-  "flooding",
-  "baha",
-  "blocked road",
-  "road obstruction",
-  "pothole",
-  "potholes",
-  "damaged road",
-  "bridge damage",
-  "no water",
-  "walay tubig",
-  "no electricity",
-  "walay kuryente",
-  "power outage",
-  "contaminated water",
-  "dirty water",
-  "dog bite",
-  "rabies",
-  "aggressive dog",
-  "unsafe structure",
-  "falling debris",
-  "clogged drainage",
-  "overflow",
-  "septic",
-  "dengue",
-  "public health",
-];
-
-const lowKeywords = [
-  "minor",
-  "small",
-  "paint",
-  "bench",
-  "faded",
-  "signage",
-  "request",
-  "cleaning",
-  "trim",
-  "grass",
-  "cosmetic",
-];
-
-function normalizeCategory(category) {
-  if (!category) return "Unclassified";
-
-  const cleanCategory = String(category).trim();
-
-  if (CATEGORY_DEPARTMENT_MAP[cleanCategory]) return cleanCategory;
-
-  const lowerCategory = cleanCategory.toLowerCase();
-
-  if (CATEGORY_ALIASES[lowerCategory]) return CATEGORY_ALIASES[lowerCategory];
-
-  const matchedCategory = Object.keys(CATEGORY_DEPARTMENT_MAP).find(
-    (item) =>
-      item.toLowerCase().includes(lowerCategory) ||
-      lowerCategory.includes(item.toLowerCase().replace(" concerns", ""))
-  );
-
-  return matchedCategory || cleanCategory || "Unclassified";
-}
-
-function detectComplaintCategory(title = "", description = "") {
-  const combinedText = `${title || ""} ${description || ""}`.toLowerCase();
-
-  for (const item of categoryKeywords) {
-    const matched = item.keywords.some((keyword) =>
-      combinedText.includes(keyword.toLowerCase())
-    );
-
-    if (matched) return item.category;
-  }
-
-  return "Unclassified";
-}
-
-function getAssignedOffice(category, existingOffice) {
-  if (
-    existingOffice &&
-    String(existingOffice).trim() &&
-    String(existingOffice).trim() !== "Unassigned"
-  ) {
-    return String(existingOffice).trim();
-  }
-
-  const normalizedCategory = normalizeCategory(category);
-
-  return CATEGORY_DEPARTMENT_MAP[normalizedCategory] || "Unassigned";
-}
-
-function calculatePriority(title = "", description = "", isEmergency = false) {
-  const combinedText = `${title || ""} ${description || ""}`.toLowerCase();
-
-  if (
-    isEmergency ||
-    criticalKeywords.some((keyword) => combinedText.includes(keyword))
-  ) {
-    return "Critical";
-  }
-
-  if (highKeywords.some((keyword) => combinedText.includes(keyword))) {
-    return "High";
-  }
-
-  if (lowKeywords.some((keyword) => combinedText.includes(keyword))) {
-    return "Low";
-  }
-
-  return "Normal";
 }
 
 function normalizeConcernType(value, isEmergency = false, priority = "Normal") {
@@ -1052,20 +446,10 @@ async function mapDatabaseComplaint(row) {
   const createdAt =
     row.created_at || row.submitted_at || row.submitted_date_time || new Date().toISOString();
 
-  const detectedCategory = detectComplaintCategoryFromKeywords(
+  const { category, assignedOffice } = resolveComplaintRouting(
     row.title,
-    row.description
-  );
-
-  const category =
-    !row.category ||
-    row.category === "Unclassified" ||
-    row.category === "Unassigned"
-      ? detectedCategory
-      : normalizeComplaintCategory(row.category || row.concern_category);
-
-  const assignedOffice = getAssignedOfficeFromCategory(
-    category,
+    row.description,
+    row.category || row.concern_category,
     row.assigned_office || row.assignedOffice || row.department
   );
 
@@ -1484,6 +868,7 @@ export default function CitizenComplaints() {
   const targetComplaintId = params?.complaintId
     ? String(params.complaintId)
     : null;
+  const shouldOpenValidation = params?.openValidation === "true";
 
   const lastComplaintsFilter =
     getPageCache(CITIZEN_COMPLAINTS_LAST_FILTER_KEY)?.filter || "All";
@@ -1719,22 +1104,13 @@ export default function CitizenComplaints() {
       }
 
       const routedRows = (data || []).map((row) => {
-        const detectedCategory = detectComplaintCategoryFromKeywords(
-          row.title,
-          row.description
-        );
-
-        const fixedCategory =
-          !row.category ||
-          row.category === "Unclassified" ||
-          row.category === "Unassigned"
-            ? detectedCategory
-            : normalizeComplaintCategory(row.category || row.concern_category);
-
-        const fixedOffice = getAssignedOfficeFromCategory(
-          fixedCategory,
-          row.assigned_office || row.assignedOffice || row.department
-        );
+        const { category: fixedCategory, assignedOffice: fixedOffice } =
+          resolveComplaintRouting(
+            row.title,
+            row.description,
+            row.category || row.concern_category,
+            row.assigned_office || row.assignedOffice || row.department
+          );
 
         const fixedPriority = calculatePriorityFromKeywords(
           row.title,
@@ -1810,6 +1186,10 @@ export default function CitizenComplaints() {
           : {}),
       });
       setPageCache(CITIZEN_COMPLAINTS_LAST_FILTER_KEY, { filter: activeFilter });
+
+      if (!append) {
+        await requestCitizenValidationReminders(user.id);
+      }
     } catch (error) {
       console.log("Load complaints error:", error);
 
@@ -1941,7 +1321,11 @@ export default function CitizenComplaints() {
 
     if (matchedComplaint) {
       setSelectedComplaint(matchedComplaint);
-      setDetailsVisible(true);
+      if (shouldOpenValidation && canCitizenSubmitValidation(matchedComplaint)) {
+        openValidation(matchedComplaint);
+      } else {
+        setDetailsVisible(true);
+      }
       setAutoOpenedComplaintId(targetComplaintId);
       return;
     }
@@ -1959,7 +1343,11 @@ export default function CitizenComplaints() {
 
       const mappedComplaint = await mapDatabaseComplaint(data);
       setSelectedComplaint(mappedComplaint);
-      setDetailsVisible(true);
+      if (shouldOpenValidation && canCitizenSubmitValidation(mappedComplaint)) {
+        openValidation(mappedComplaint);
+      } else {
+        setDetailsVisible(true);
+      }
       setAutoOpenedComplaintId(targetComplaintId);
     };
 
@@ -1971,6 +1359,7 @@ export default function CitizenComplaints() {
   }, [
     autoOpenedComplaintId,
     loadingComplaints,
+    shouldOpenValidation,
     sortedComplaintsData,
     targetComplaintId,
   ]);
