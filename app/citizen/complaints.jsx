@@ -55,6 +55,7 @@ import {
   COMPLAINTS_PAGE_SIZE,
   isNearContentBottom,
   mergeComplaintPages,
+  waitOffsetPageDelay,
 } from "../../lib/complaintPagination";
 import {
   canCitizenSubmitValidation,
@@ -1032,6 +1033,8 @@ export default function CitizenComplaints() {
         ? COMPLAINTS_PAGE_SIZE
         : Math.max(COMPLAINTS_PAGE_SIZE, cached?.complaints?.length || 0);
 
+      await waitOffsetPageDelay(offset);
+
       let listQuery = supabase
         .from("complaints")
         .select("*", { count: "exact" })
@@ -1128,11 +1131,23 @@ export default function CitizenComplaints() {
 
       await Promise.all(
         routedRows.map((row) => {
+          const original = data?.find((item) => item.id === row.id);
+          const originalOffice = String(original?.assigned_office || "").trim();
+          const nextOffice = String(row.assigned_office || "").trim();
+
+          // Never overwrite a known office with Unassigned.
+          if (
+            nextOffice === "Unassigned" &&
+            originalOffice &&
+            originalOffice !== "Unassigned"
+          ) {
+            row.assigned_office = originalOffice;
+          }
+
           const shouldUpdate =
-            row.category !== data?.find((item) => item.id === row.id)?.category ||
-            row.assigned_office !==
-              data?.find((item) => item.id === row.id)?.assigned_office ||
-            row.priority !== data?.find((item) => item.id === row.id)?.priority;
+            row.category !== original?.category ||
+            row.assigned_office !== original?.assigned_office ||
+            row.priority !== original?.priority;
 
           if (!shouldUpdate) return Promise.resolve();
 
