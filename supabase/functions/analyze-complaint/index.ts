@@ -15,6 +15,9 @@ const MODEL_FALLBACKS = [
   "gemini-flash-latest",
   "gemini-2.0-flash",
   "gemini-2.0-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite",
+  "gemini-3.6-flash",
 ].filter((model, index, list) => model && list.indexOf(model) === index);
 
 function getModelsToTry(preferred?: string) {
@@ -89,21 +92,18 @@ const DEPARTMENT_BY_CATEGORY: Record<string, string> = {
 
 const COMPLAINT_CATEGORY_NAMES = Object.keys(DEPARTMENT_BY_CATEGORY);
 
-const AI_CATCHALL_CATEGORIES = new Set(["City Facility Concerns", "Unclassified"]);
-
-const KEYWORD_PRIORITY_CATEGORIES = new Set([
+const KEYWORD_HARD_OVERRIDE_CATEGORIES = new Set([
   "Business Permit and Licensing Concerns",
   "Civil Registry Concerns",
   "Tax and Treasury Concerns",
   "Property Assessment Concerns",
-  "Public Library Concerns",
-  "Traffic and Road Safety Concerns",
-  "Drainage and Flooding Concerns",
   "Fire Safety Concerns",
   "Peace and Order Concerns",
-  "Water Concerns",
-  "Electricity Concerns",
-  "Building and Construction Concerns",
+]);
+
+const AI_CATCHALL_CATEGORIES = new Set([
+  "City Facility Concerns",
+  "Unclassified",
 ]);
 
 const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
@@ -124,8 +124,12 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
     keywords: ["electricity", "brownout", "power outage", "kuryente", "live wire"],
   },
   {
+    category: "Streetlight Concerns",
+    keywords: ["streetlight", "street light", "lamp post", "dark road"],
+  },
+  {
     category: "Traffic and Road Safety Concerns",
-    keywords: ["traffic", "road safety", "accident", "illegal parking", "crosswalk"],
+    keywords: ["traffic", "road safety", "accident", "illegal parking", "crosswalk", "btmo"],
   },
   {
     category: "Business Permit and Licensing Concerns",
@@ -152,15 +156,75 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
   },
   {
     category: "Tax and Treasury Concerns",
-    keywords: ["real property tax", "tax payment", "treasurer", "cedula"],
+    keywords: [
+      "real property tax",
+      "tax payment",
+      "treasurer",
+      "city treasurer",
+      "treasury",
+      "cedula",
+      "tax",
+    ],
+  },
+  {
+    category: "Transport Terminal Concerns",
+    keywords: [
+      "bus terminal",
+      "van terminal",
+      "transport terminal",
+      "terminal fare",
+      "central bus terminal",
+    ],
+  },
+  {
+    category: "Port Concerns",
+    keywords: ["polambato", "passenger port", "ferry", "barko", "wharf", "port office"],
+  },
+  {
+    category: "PWD Accessibility Concerns",
+    keywords: ["pwd", "wheelchair", "accessibility", "pdao", "blocked ramp"],
+  },
+  {
+    category: "Coastal and Marine Protection Concerns",
+    keywords: [
+      "coastal",
+      "marine",
+      "illegal fishing",
+      "bantay dagat",
+      "coastal waste",
+    ],
+  },
+  {
+    category: "Tourism Site / Public Attraction Concerns",
+    keywords: ["tourism", "tourist", "tourist spot", "tourism site"],
   },
   {
     category: "Drainage and Flooding Concerns",
     keywords: ["drainage", "flooding", "flooded", "baha", "canal"],
   },
   {
+    category: "Road and Infrastructure Concerns",
+    keywords: ["pothole", "damaged road", "sidewalk", "bridge", "infrastructure"],
+  },
+  {
+    category: "Waste and Environmental Concerns",
+    keywords: ["garbage", "trash", "basura", "pollution", "litter"],
+  },
+  {
     category: "Building and Construction Concerns",
     keywords: ["building permit", "construction", "building official", "obo"],
+  },
+  {
+    category: "Health and Sanitation Concerns",
+    keywords: ["dengue", "food poisoning", "unsanitary", "clinic", "hospital"],
+  },
+  {
+    category: "Animal Concerns",
+    keywords: ["stray dog", "dog bite", "rabies", "veterinary"],
+  },
+  {
+    category: "Public Market Concerns",
+    keywords: ["public market", "merkado", "market stall"],
   },
   {
     category: "Public Library Concerns",
@@ -168,22 +232,35 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
   },
   {
     category: "City Facility Concerns",
-    keywords: ["city hall", "waiting area", "covered court", "public restroom"],
+    keywords: ["city hall", "waiting area", "covered court", "public restroom", "gso"],
   },
 ];
 
-function detectComplaintCategoryFromKeywords(title = "", description = "") {
+function scoreComplaintCategoryKeywords(title = "", description = "") {
   const combinedText = `${title || ""} ${description || ""}`.toLowerCase();
+  let bestCategory = "Unclassified";
+  let bestScore = 0;
 
   for (const item of CATEGORY_KEYWORDS) {
-    if (
-      item.keywords.some((keyword) => combinedText.includes(keyword.toLowerCase()))
-    ) {
-      return item.category;
+    let score = 0;
+
+    for (const keyword of item.keywords) {
+      const needle = keyword.toLowerCase();
+      if (!needle || !combinedText.includes(needle)) continue;
+      score += Math.max(1, needle.split(/\s+/).length) * needle.length;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestCategory = item.category;
     }
   }
 
-  return "Unclassified";
+  return { category: bestCategory, score: bestScore };
+}
+
+function detectComplaintCategoryFromKeywords(title = "", description = "") {
+  return scoreComplaintCategoryKeywords(title, description).category;
 }
 
 function normalizeComplaintCategory(category: string) {
@@ -195,10 +272,15 @@ function normalizeComplaintCategory(category: string) {
 function reconcileComplaintCategory(
   title = "",
   description = "",
-  aiCategory = ""
+  aiCategory = "",
+  confidence?: number
 ) {
   const normalizedAi = normalizeComplaintCategory(aiCategory);
-  const keywordCategory = detectComplaintCategoryFromKeywords(title, description);
+  const { category: keywordCategory, score: keywordScore } =
+    scoreComplaintCategoryKeywords(title, description);
+  const hasStrongAiConfidence =
+    typeof confidence !== "number" || !Number.isFinite(confidence) || confidence >= 0.55;
+  const hasStrongKeywordEvidence = keywordScore >= 24;
 
   if (keywordCategory === "Unclassified") {
     return normalizedAi;
@@ -209,9 +291,24 @@ function reconcileComplaintCategory(
   }
 
   if (
-    KEYWORD_PRIORITY_CATEGORIES.has(keywordCategory) &&
-    keywordCategory !== normalizedAi
+    hasStrongAiConfidence &&
+    !(
+      KEYWORD_HARD_OVERRIDE_CATEGORIES.has(keywordCategory) &&
+      hasStrongKeywordEvidence &&
+      keywordCategory !== normalizedAi
+    )
   ) {
+    return normalizedAi;
+  }
+
+  if (
+    KEYWORD_HARD_OVERRIDE_CATEGORIES.has(keywordCategory) &&
+    hasStrongKeywordEvidence
+  ) {
+    return keywordCategory;
+  }
+
+  if (!hasStrongAiConfidence && hasStrongKeywordEvidence) {
     return keywordCategory;
   }
 
@@ -221,9 +318,15 @@ function reconcileComplaintCategory(
 function resolveComplaintRouting(
   title = "",
   description = "",
-  aiCategory = ""
+  aiCategory = "",
+  confidence?: number
 ) {
-  const category = reconcileComplaintCategory(title, description, aiCategory);
+  const category = reconcileComplaintCategory(
+    title,
+    description,
+    aiCategory,
+    confidence
+  );
   const assignedOffice = DEPARTMENT_BY_CATEGORY[category] || "Unassigned";
 
   return { category, assignedOffice };
@@ -235,10 +338,12 @@ function applyRoutingToAnalysis(
   description = ""
 ) {
   const aiCategory = String(analysis?.category || "Unclassified");
+  const confidence = Number(analysis?.confidence);
   const { category, assignedOffice } = resolveComplaintRouting(
     title,
     description,
-    aiCategory
+    aiCategory,
+    Number.isFinite(confidence) ? confidence : undefined
   );
 
   return {
@@ -363,13 +468,19 @@ ${Object.entries(DEPARTMENT_BY_CATEGORY)
   .map(([category, office]) => `- ${category} -> ${office}`)
   .join("\n")}
 
-Classification rules:
-- Classify into the most specific LGU category from the complaint meaning in any Philippine language.
-- Follow the department routing map — do not route permits, certificates, taxes, or licensing to General Services Office unless the category is truly City Facility Concerns.
-- Business permit, mayor's permit, licensing, permit delays -> Business Permit and Licensing Concerns.
-- Birth/marriage/death certificates, civil registry -> Civil Registry Concerns.
-- City Facility Concerns is ONLY for physical city-owned buildings and facilities (city hall, gym, waiting areas, covered courts, public restrooms) — NOT permits, certificates, taxes, or library services.
+Classification rules (AI is the primary classifier for office routing):
+- Read the full meaning in any Philippine language — do not rely on English keywords alone.
+- Classify into the most specific LGU category and follow the department routing map.
+- Prefer a specific service category over City Facility Concerns whenever the complaint is about permits, certificates, taxes, utilities, roads, traffic, health, waste, ports, terminals, or similar LGU services.
+- Business permit / mayor's permit / BPLO -> Business Permit and Licensing Concerns.
+- Birth/marriage/death certificates / civil registry -> Civil Registry Concerns.
+- Treasurer / tax payment / cedula -> Tax and Treasury Concerns.
+- Port / Polambato / ferry -> Port Concerns.
+- Bus/jeepney terminal -> Transport Terminal Concerns.
+- PWD / wheelchair / accessibility -> PWD Accessibility Concerns.
+- City Facility Concerns is ONLY for physical city-owned buildings and facilities (city hall, gym, waiting areas, covered courts, public restrooms).
 - Public Library Concerns -> Bogo Public Library Office.
+- Set confidence higher when the category is clear from meaning.
 
 Urgency and priority rules:
 - Distinguish Emergency vs Non-Emergency complaints using urgency_analysis.complaint_type.
@@ -477,7 +588,7 @@ async function callGeminiOnce(
     maxOutputTokens,
   };
 
-  if (model.includes("2.5")) {
+  if (/gemini-(2\.5|3)/.test(String(model))) {
     generationConfig.thinkingConfig = { thinkingBudget: 0 };
   }
 
