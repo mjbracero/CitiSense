@@ -31,7 +31,7 @@ import KeyboardAwareScrollView, {
 import { PageSkeleton, UserListSkeleton } from "../../components/skeletons";
 import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
 import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
-import { computeOffsetHasMore } from "../../lib/complaintPagination";
+import { computeOffsetHasMore, waitOffsetPageDelay } from "../../lib/complaintPagination";
 import {
   buildUserPageQuery,
   getUserPageSize,
@@ -208,6 +208,9 @@ export default function AdminManageUsers() {
 
       const offset = append ? usersRef.current.length : 0;
       const pageSize = getUserPageSize(append, cached?.users?.length || 0);
+
+      await waitOffsetPageDelay(offset);
+
       const { data, error, count } = await buildUserPageQuery(supabase, {
         offset,
         pageSize,
