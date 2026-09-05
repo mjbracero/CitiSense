@@ -47,6 +47,7 @@ import {
   COMPLAINTS_PAGE_SIZE,
   isNearContentBottom,
   mergeComplaintPages,
+  waitOffsetPageDelay,
 } from "../../lib/complaintPagination";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
@@ -800,7 +801,20 @@ function buildReturnReasonFromAi(complaint) {
     return `${summary}\n\n${reason}`.trim();
   }
 
-  return reason || summary || "";
+  return (
+    reason ||
+    summary ||
+    "Returned by admin after human review of citizen validation evidence."
+  );
+}
+
+function confirmAdminOverride(title, message) {
+  return new Promise((resolve) => {
+    notify(title, message, [
+      { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+      { text: "Continue", onPress: () => resolve(true) },
+    ]);
+  });
 }
 
 export default function AdminComplaints() {
@@ -939,6 +953,8 @@ export default function AdminComplaints() {
       const pageSize = append
         ? COMPLAINTS_PAGE_SIZE
         : Math.max(COMPLAINTS_PAGE_SIZE, cached?.complaints?.length || 0);
+
+      await waitOffsetPageDelay(offset);
 
       let listQuery = supabase
         .from("complaints")
@@ -1407,55 +1423,31 @@ export default function AdminComplaints() {
     }
 
     if (selectedComplaint.validationResolved === false) {
-      notify(
-        "Cannot mark complete",
-        "The citizen reported the issue as not resolved. Return the complaint for review instead."
+      const overrideCitizenNo = await confirmAdminOverride(
+        "Citizen reported not resolved",
+        "The citizen said the issue is not resolved. AI is guidance only — continue and mark complete after your human review?"
       );
-      return;
+      if (!overrideCitizenNo) return;
     }
 
-    let aiApproved = selectedComplaint.aiValidationApproved === true;
+    const aiApproved = selectedComplaint.aiValidationApproved === true;
+    const aiStatus = String(
+      selectedComplaint.aiValidationStatus || ""
+    ).toLowerCase();
 
-    if (!aiApproved) {
-      const aiStatus = String(
-        selectedComplaint.aiValidationStatus || ""
-      ).toLowerCase();
-
-      if (aiStatus === "rejected") {
-        notify(
-          "AI validation rejected",
-          selectedComplaint.aiValidationReason ||
-            "AI did not approve the citizen validation evidence. Return the complaint for review or re-run AI validation."
-        );
-        return;
-      }
-
-      notify(
-        "AI validation required",
-        "AI must approve the citizen validation evidence before this complaint can be marked complete. Run AI validation now?",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Run AI Validation",
-            onPress: async () => {
-              const result = await runAiValidationForComplaint(selectedComplaint);
-              if (result?.approved) {
-                notify(
-                  "AI Approved",
-                  "AI approved the validation evidence. Tap Mark Complete again to finish."
-                );
-              } else if (result) {
-                notify(
-                  "AI Rejected",
-                  result.reason ||
-                    "AI did not approve the evidence. Return the complaint for review."
-                );
-              }
-            },
-          },
-        ]
+    if (!aiApproved && aiStatus === "rejected") {
+      const overrideAiReject = await confirmAdminOverride(
+        "AI recommends return",
+        selectedComplaint.aiValidationReason ||
+          "AI did not approve the validation evidence. You can still mark complete after human review. Continue?"
       );
-      return;
+      if (!overrideAiReject) return;
+    } else if (!aiApproved && aiStatus !== "approved") {
+      const continueWithoutAi = await confirmAdminOverride(
+        "Proceed without AI approval",
+        "AI validation is advisory only. You can mark this complete based on your human review, or cancel and run AI validation first. Mark complete now?"
+      );
+      if (!continueWithoutAi) return;
     }
 
     const complaintId = selectedComplaint.rawId || selectedComplaint.id;
@@ -1546,25 +1538,15 @@ export default function AdminComplaints() {
       return;
     }
 
-    const reason = buildReturnReasonFromAi(selectedComplaint);
-
-    if (!reason) {
-      notify(
-        "AI validation needed",
-        "Run AI validation first so the department head receives the AI reason for the return.",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Run AI Validation",
-            onPress: async () => {
-              await runAiValidationForComplaint(selectedComplaint);
-            },
-          },
-        ]
+    if (selectedComplaint.aiValidationApproved === true) {
+      const overrideAiApprove = await confirmAdminOverride(
+        "AI recommends complete",
+        "AI approved the validation evidence. You can still return this to the department after human review. Continue?"
       );
-      return;
+      if (!overrideAiApprove) return;
     }
 
+    const reason = buildReturnReasonFromAi(selectedComplaint);
     const complaintId = selectedComplaint.rawId || selectedComplaint.id;
     const oldStatus = selectedComplaint.status;
 
@@ -1624,7 +1606,7 @@ export default function AdminComplaints() {
       notify(
         "Returned to Department",
         deptHeadNotify?.notifiedCount
-          ? "The department head was notified with the AI validation reason. The complaint is In Progress again."
+          ? "The department head was notified. The complaint is In Progress again."
           : "The complaint is In Progress again so the department can continue work."
       );
       writeAuditLog({
@@ -2131,19 +2113,19 @@ export default function AdminComplaints() {
                         >
                           <Text style={styles.aiValidationStatusText}>
                             {selectedComplaint.aiValidationApproved === true
-                              ? "Approved"
+                              ? "AI recommends: Complete"
                               : selectedComplaint.aiValidationStatus ===
                                   "rejected"
-                                ? "Rejected"
+                                ? "AI recommends: Return"
                                 : selectedComplaint.aiValidationStatus ===
                                     "error"
                                   ? "Needs human review"
-                                  : "Pending"}
+                                  : "Pending AI guidance"}
                           </Text>
                           <Text style={styles.aiValidationSummaryText}>
                             {selectedComplaint.aiValidationSummary ||
                               selectedComplaint.aiValidationReason ||
-                              "AI has not finished validating this evidence yet."}
+                              "Run AI validation for guidance. Final decision stays with the admin."}
                           </Text>
                           {selectedComplaint.aiValidationReason &&
                           selectedComplaint.aiValidationSummary &&
