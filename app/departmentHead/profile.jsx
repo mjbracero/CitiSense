@@ -820,7 +820,7 @@ export default function DepartmentHeadProfile() {
             return;
           }
 
-          clearPageCache();
+          void clearPageCache();
 
           cachedDepartmentHeadProfile = DEFAULT_PROFILE_INFO;
           cachedLocationEnabled = false;
