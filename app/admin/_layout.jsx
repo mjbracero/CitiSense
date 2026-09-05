@@ -3,9 +3,15 @@ import { View, StyleSheet } from "react-native";
 import { APP_BACKGROUND } from "../../lib/platformUi";
 import PersistentBottomNav from "../../components/PersistentBottomNav";
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
+import useRoleLayoutBootstrap from "../../hooks/useRoleLayoutBootstrap";
 
 export default function AdminLayout() {
   const { unreadNotificationCount } = useAdminUnreadNotifications();
+  const ready = useRoleLayoutBootstrap("admin");
+
+  if (!ready) {
+    return <View style={styles.container} />;
+  }
 
   return (
     <View style={styles.container}>
