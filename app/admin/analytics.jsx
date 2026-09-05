@@ -27,7 +27,7 @@ import {
 import { supabase } from "../../lib/supabase";
 import {
   applyOffsetPagination,
-  COMPLAINTS_PAGE_SIZE,
+  DASHBOARD_STATS_PAGE_SIZE,
   fetchAllRowsWithOffset,
 } from "../../lib/complaintPagination";
 import {
@@ -424,7 +424,7 @@ export default function AdminAnalytics() {
         );
 
         return await query;
-      }, COMPLAINTS_PAGE_SIZE);
+      }, DASHBOARD_STATS_PAGE_SIZE);
 
       if (error) {
         console.log("Admin analytics load error:", error);
