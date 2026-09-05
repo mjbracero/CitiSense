@@ -25,14 +25,13 @@ import {
   PageSkeleton,
 } from "../../components/skeletons";
 import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { countComplaints, countComplaintsMany } from "../../lib/complaintCountService";
 import {
-  applyOffsetPagination,
-  COMPLAINTS_PAGE_SIZE,
-  fetchAllRowsWithOffset,
-} from "../../lib/complaintPagination";
+  COMPLAINT_CATEGORY_NAMES,
+  DEPARTMENT_OFFICES,
+} from "../../lib/complaintCategories";
 import {
   getProfileAvatarUrl,
-  setProfileAvatarUrl,
   subscribeProfileAvatar,
 } from "../../lib/profileAvatarStore";
 import { supabase } from "../../lib/supabase";
@@ -135,49 +134,7 @@ function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function normalizeStatus(status) {
-  const clean = normalizeText(status);
-
-  if (!clean) return "Pending";
-  if (clean === "pending" || clean === "submitted") return "Pending";
-  if (clean === "assigned") return "Assigned";
-  if (clean === "in_progress" || clean === "in progress") return "In Progress";
-
-  if (
-    clean === "for_validation" ||
-    clean === "for validation" ||
-    clean === "validation"
-  ) {
-    return "For Validation";
-  }
-
-  if (clean === "validated") return "Validated";
-  if (clean === "completed" || clean === "resolved") return "Completed";
-
-  if (
-    clean === "returned" ||
-    clean === "returned to department" ||
-    clean === "returned to department head" ||
-    clean === "for rework" ||
-    clean === "needs revision"
-  ) {
-    return "Returned";
-  }
-
-  if (
-    clean === "unsolved" ||
-    clean === "unresolved" ||
-    clean === "not solved" ||
-    clean === "citizen returned" ||
-    clean === "returned by citizen"
-  ) {
-    return "Unsolved";
-  }
-
-  return String(status || "Pending").trim();
-}
-
-function normalizePriority(priority, isEmergency = false) {
+function normalizePriority(priority) {
   const clean = normalizeText(priority);
 
   if (clean === "critical") return "Critical";
@@ -186,7 +143,7 @@ function normalizePriority(priority, isEmergency = false) {
   if (clean === "low") return "Low";
   if (clean === "normal" || clean === "medium") return "Normal";
 
-  return isEmergency ? "Critical" : "Normal";
+  return "Normal";
 }
 
 function getGreetingByTime(date) {
@@ -209,48 +166,6 @@ function getPriorityStyle(priority) {
   if (normalizedPriority === "Low") return { bg: "#F1F4F1", color: BLUE };
 
   return { bg: LIGHT_GREEN, color: GREEN };
-}
-
-function formatDbDate(value) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return "N/A";
-
-  return date.toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function formatDbTime(value) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return "N/A";
-
-  return date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-function getCountMap(items, keyGetter) {
-  return items.reduce((acc, item) => {
-    const key = keyGetter(item) || "Unspecified";
-    acc[key] = (acc[key] || 0) + 1;
-    return acc;
-  }, {});
-}
-
-function getRankedStatsFromMap(countMap, total) {
-  return Object.entries(countMap)
-    .map(([label, count]) => ({
-      label,
-      count,
-      percent: total > 0 ? Math.round((count / total) * 100) : 0,
-    }))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
 function getLeadingAndLeast(stats) {
@@ -314,71 +229,102 @@ function getCategoryChartData(categoryStats) {
   return merged.slice(0, 6);
 }
 
-async function loadCitizenProfiles(citizenIds = []) {
-  if (!citizenIds.length) return {};
-
-  try {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id, email, full_name, contact_number, avatar_url")
-      .in("id", citizenIds);
-
-    if (error) {
-      console.log("Admin dashboard citizen profiles load error:", error);
-      return {};
-    }
-
-    return (data || []).reduce((acc, profile) => {
-      acc[profile.id] = profile;
-      return acc;
-    }, {});
-  } catch (error) {
-    console.log("Admin dashboard citizen profiles catch error:", error);
-    return {};
-  }
+async function loadDashboardCardCounts() {
+  return countComplaintsMany([
+    { key: "total" },
+    {
+      key: "pending",
+      buildQuery: (query) => query.eq("status", "Pending"),
+    },
+    {
+      key: "assigned",
+      buildQuery: (query) => query.eq("status", "Assigned"),
+    },
+    {
+      key: "forValidation",
+      buildQuery: (query) => query.eq("status", "For Validation"),
+    },
+    {
+      key: "validated",
+      buildQuery: (query) => query.eq("status", "Validated"),
+    },
+    {
+      key: "completed",
+      buildQuery: (query) => query.eq("status", "Completed"),
+    },
+  ]).then((counts) => ({
+    total: counts.total || 0,
+    pending: (counts.pending || 0) + (counts.assigned || 0),
+    forValidation: (counts.forValidation || 0) + (counts.validated || 0),
+    completed: counts.completed || 0,
+  }));
 }
 
-function mapComplaintRow(row, profileMap = {}) {
-  const createdAt =
-    row.created_at || row.submitted_at || row.submitted_date_time || new Date().toISOString();
+async function loadDashboardCategoryStats(total) {
+  const results = await Promise.all(
+    COMPLAINT_CATEGORY_NAMES.map(async (category) => {
+      const count = await countComplaints((query) =>
+        query.eq("category", category)
+      );
+      return {
+        label: category,
+        count,
+        percent: total > 0 ? Math.round((count / total) * 100) : 0,
+      };
+    })
+  );
 
-  const profile = profileMap[row.citizen_id] || {};
-  const status = normalizeStatus(row.status);
-  const priority = normalizePriority(row.priority, row.is_emergency);
+  return results
+    .filter((item) => item.count > 0)
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
 
-  return {
-    id: row.short_id || row.id,
-    rawId: row.id,
-    title: row.title || "Untitled Complaint",
-    category: row.category || row.concern_category || "Unclassified",
-    department: row.assigned_office || row.assignedOffice || row.department || "Unassigned",
-    location: row.location || row.barangay || row.location_text || "Location not available",
-    geotaggedLocation:
-      row.location_text ||
-      row.geotagged_location ||
-      row.location ||
-      "Pinned location not available",
-    date: formatDbDate(createdAt),
-    time: formatDbTime(createdAt),
-    createdAt,
-    status,
-    priority,
-    citizen:
-      row.citizen_name ||
-      row.full_name ||
-      profile.full_name ||
-      profile.email ||
-      "Citizen",
-    contact:
-      row.contact_number ||
-      profile.contact_number ||
-      profile.phone_number ||
-      profile.phone ||
-      "No contact number",
-    description: row.description || "No description provided.",
-    validationStatus: row.validation_status || null,
-    isEmergency: Boolean(row.is_emergency),
-  };
+async function loadDashboardPriorityStats(total) {
+  const results = await Promise.all(
+    priorityOrder.map(async (priority) => {
+      const count = await countComplaints((query) =>
+        query.eq("priority", priority)
+      );
+      return {
+        label: priority,
+        count,
+        percent: total > 0 ? Math.round((count / total) * 100) : 0,
+      };
+    })
+  );
+
+  return results.filter((item) => item.count > 0);
+}
+
+async function loadDashboardDepartmentStats() {
+  const results = await Promise.all(
+    DEPARTMENT_OFFICES.map(async (office) => {
+      const [count, completed] = await Promise.all([
+        countComplaints((query) =>
+          query.ilike("assigned_office", `%${office}%`)
+        ),
+        countComplaints((query) =>
+          query
+            .ilike("assigned_office", `%${office}%`)
+            .eq("status", "Completed")
+        ),
+      ]);
+
+      return {
+        label: office,
+        count,
+        completed,
+        percent: count > 0 ? Math.round((completed / count) * 100) : 0,
+      };
+    })
+  );
+
+  return results
+    .filter((item) => item.count > 0)
+    .sort(
+      (a, b) =>
+        b.percent - a.percent || b.completed - a.completed || b.count - a.count
+    );
 }
 
 function SummaryMiniCard({ label, item }) {
@@ -474,8 +420,22 @@ export default function AdminDashboard() {
 
   const cachedDashboard = getPageCache(ADMIN_DASHBOARD_CACHE_KEY);
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [complaintsData, setComplaintsData] = useState(
-    cachedDashboard?.complaints ?? []
+  const [dashboardCounts, setDashboardCounts] = useState(
+    cachedDashboard?.counts ?? {
+      total: 0,
+      pending: 0,
+      forValidation: 0,
+      completed: 0,
+    }
+  );
+  const [categoryStats, setCategoryStats] = useState(
+    cachedDashboard?.categoryStats ?? []
+  );
+  const [priorityStats, setPriorityStats] = useState(
+    cachedDashboard?.priorityStats ?? []
+  );
+  const [departmentStats, setDepartmentStats] = useState(
+    cachedDashboard?.departmentStats ?? []
   );
   const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState(
@@ -501,57 +461,6 @@ export default function AdminDashboard() {
         profilePhotoUrl: url,
       });
     });
-  }, []);
-
-  const loadUserProfilePhoto = useCallback(async () => {
-    try {
-      const {
-        data: { user },
-        error,
-      } = await supabase.auth.getUser();
-
-      if (error || !user) {
-        setProfilePhotoUrl(null);
-        return;
-      }
-
-      const raw =
-        user.user_metadata?.avatar_url ||
-        user.user_metadata?.avatar ||
-        null;
-
-      if (!raw) {
-        setProfilePhotoUrl(null);
-        setProfileAvatarUrl(null);
-        return;
-      }
-
-      let nextUrl = null;
-
-      if (/^https?:\/\//i.test(String(raw))) {
-        nextUrl = String(raw);
-      } else {
-        const path = String(raw).replace(/^avatars\//, "").replace(/^\/+/, "");
-        const { data: signedData } = await supabase.storage
-          .from("avatars")
-          .createSignedUrl(path, 60 * 60);
-
-        nextUrl =
-          signedData?.signedUrl ||
-          supabase.storage.from("avatars").getPublicUrl(path)?.data?.publicUrl ||
-          null;
-      }
-
-      setProfilePhotoUrl(nextUrl);
-      if (nextUrl) setProfileAvatarUrl(nextUrl);
-      const prev = getPageCache(ADMIN_DASHBOARD_CACHE_KEY) || {};
-      setPageCache(ADMIN_DASHBOARD_CACHE_KEY, {
-        ...prev,
-        profilePhotoUrl: nextUrl,
-      });
-    } catch {
-      // Keep current avatar if refresh fails.
-    }
   }, []);
 
   const smoothNavigate = useCallback(
@@ -591,61 +500,90 @@ export default function AdminDashboard() {
     return () => clearInterval(timer);
   }, []);
 
-  const loadAllComplaints = useCallback(async (showLoader = true) => {
+  const loadDashboardData = useCallback(async (showLoader = true) => {
+    const cached = getPageCache(ADMIN_DASHBOARD_CACHE_KEY);
+    const hasCachedCounts = Boolean(cached?.counts);
+
+    if (showLoader && shouldShowPageLoader(ADMIN_DASHBOARD_CACHE_KEY)) {
+      setLoadingComplaints(true);
+    }
+
     try {
-      if (showLoader && shouldShowPageLoader(ADMIN_DASHBOARD_CACHE_KEY)) {
-        setLoadingComplaints(true);
-      }
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-      const { data, error } = await fetchAllRowsWithOffset(async (offset, pageSize) => {
-        const query = applyOffsetPagination(
-          supabase
-            .from("complaints")
-            .select("*", { count: offset === 0 ? "exact" : undefined })
-            .order("created_at", { ascending: false }),
-          offset,
-          pageSize
-        );
-
-        return await query;
-      }, COMPLAINTS_PAGE_SIZE);
-
-      if (error) {
-        console.log("Admin dashboard complaints load error:", error);
-        if (shouldShowPageLoader(ADMIN_DASHBOARD_CACHE_KEY)) {
-          setComplaintsData([]);
-        }
+      if (!session?.user?.id) {
         return;
       }
 
-      const citizenIds = Array.from(
-        new Set((data || []).map((row) => row.citizen_id).filter(Boolean))
-      );
+      const counts = await loadDashboardCardCounts();
+      setDashboardCounts(counts);
 
-      const profileMap = await loadCitizenProfiles(citizenIds);
-
-      const mappedComplaints = (data || []).map((row) =>
-        mapComplaintRow(row, profileMap)
-      );
-
-      setComplaintsData(mappedComplaints);
-      setPageCache(ADMIN_DASHBOARD_CACHE_KEY, { complaints: mappedComplaints });
+      const prev = getPageCache(ADMIN_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(ADMIN_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        counts,
+      });
     } catch (error) {
-      console.log("Admin dashboard complaints catch error:", error);
-      if (shouldShowPageLoader(ADMIN_DASHBOARD_CACHE_KEY)) {
-        setComplaintsData([]);
-      }
+      console.log("Admin dashboard card count error:", error);
     } finally {
       setLoadingComplaints(false);
+    }
+
+    try {
+      const currentCounts =
+        getPageCache(ADMIN_DASHBOARD_CACHE_KEY)?.counts || cached?.counts;
+
+      const total = currentCounts?.total || 0;
+      const [nextCategoryStats, nextPriorityStats, nextDepartmentStats] =
+        await Promise.all([
+          loadDashboardCategoryStats(total),
+          loadDashboardPriorityStats(total),
+          loadDashboardDepartmentStats(),
+        ]);
+
+      setCategoryStats(nextCategoryStats);
+      setPriorityStats(nextPriorityStats);
+      setDepartmentStats(nextDepartmentStats);
+
+      const prev = getPageCache(ADMIN_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(ADMIN_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        counts: prev.counts || currentCounts,
+        categoryStats: nextCategoryStats,
+        priorityStats: nextPriorityStats,
+        departmentStats: nextDepartmentStats,
+      });
+    } catch (error) {
+      console.log("Admin dashboard chart stats error:", error);
+      if (!hasCachedCounts && !getPageCache(ADMIN_DASHBOARD_CACHE_KEY)?.counts) {
+        setCategoryStats([]);
+        setPriorityStats([]);
+        setDepartmentStats([]);
+      }
     }
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      loadUserProfilePhoto();
-      loadAllComplaints(true);
+      const cached = getPageCache(ADMIN_DASHBOARD_CACHE_KEY);
+      if (cached?.counts) {
+        setDashboardCounts(cached.counts);
+      }
+      if (cached?.categoryStats) {
+        setCategoryStats(cached.categoryStats);
+      }
+      if (cached?.priorityStats) {
+        setPriorityStats(cached.priorityStats);
+      }
+      if (cached?.departmentStats) {
+        setDepartmentStats(cached.departmentStats);
+      }
+
+      loadDashboardData(true);
       registerPushTokenForCurrentUser();
-    }, [loadAllComplaints, loadUserProfilePhoto])
+    }, [loadDashboardData])
   );
 
   useEffect(() => {
@@ -659,7 +597,7 @@ export default function AdminDashboard() {
           table: "complaints",
         },
         () => {
-          loadAllComplaints(false);
+          loadDashboardData(false);
         }
       )
       .subscribe((status) => {
@@ -669,32 +607,9 @@ export default function AdminDashboard() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadAllComplaints]);
+  }, [loadDashboardData]);
 
   const greeting = useMemo(() => getGreetingByTime(currentDate), [currentDate]);
-
-  const dashboardCounts = useMemo(() => {
-    const total = complaintsData.length;
-
-    const pending = complaintsData.filter((item) =>
-      ["Pending", "Assigned"].includes(item.status)
-    ).length;
-
-    const forValidation = complaintsData.filter(
-      (item) => item.status === "For Validation" || item.status === "Validated"
-    ).length;
-
-    const completed = complaintsData.filter(
-      (item) => item.status === "Completed"
-    ).length;
-
-    return {
-      total,
-      pending,
-      forValidation,
-      completed,
-    };
-  }, [complaintsData]);
 
   const dashboardCards = useMemo(() => {
     return dashboardCardConfig.map((card) => ({
@@ -702,11 +617,6 @@ export default function AdminDashboard() {
       value: dashboardCounts[card.key] || 0,
     }));
   }, [dashboardCounts]);
-
-  const categoryStats = useMemo(() => {
-    const countMap = getCountMap(complaintsData, (item) => item.category);
-    return getRankedStatsFromMap(countMap, complaintsData.length);
-  }, [complaintsData]);
 
   const categoryLeadingLeast = useMemo(
     () => getLeadingAndLeast(categoryStats),
@@ -718,66 +628,10 @@ export default function AdminDashboard() {
     [categoryStats]
   );
 
-  const priorityStats = useMemo(() => {
-    const countMap = getCountMap(complaintsData, (item) => item.priority);
-    const total = complaintsData.length;
-
-    const orderedStats = priorityOrder
-      .map((priority) => ({
-        label: priority,
-        count: countMap[priority] || 0,
-        percent: total > 0 ? Math.round(((countMap[priority] || 0) / total) * 100) : 0,
-      }))
-      .filter((item) => item.count > 0);
-
-    const otherStats = Object.keys(countMap)
-      .filter((priority) => !priorityOrder.includes(priority))
-      .map((priority) => ({
-        label: priority,
-        count: countMap[priority] || 0,
-        percent: total > 0 ? Math.round(((countMap[priority] || 0) / total) * 100) : 0,
-      }));
-
-    return [...orderedStats, ...otherStats];
-  }, [complaintsData]);
-
   const priorityLeadingLeast = useMemo(
     () => getLeadingAndLeast(priorityStats),
     [priorityStats]
   );
-
-  const departmentStats = useMemo(() => {
-    const map = complaintsData.reduce((acc, item) => {
-      const department = item.department || "Unassigned";
-
-      if (!acc[department]) {
-        acc[department] = {
-          label: department,
-          count: 0,
-          completed: 0,
-          percent: 0,
-        };
-      }
-
-      acc[department].count += 1;
-
-      if (item.status === "Completed") {
-        acc[department].completed += 1;
-      }
-
-      return acc;
-    }, {});
-
-    return Object.values(map)
-      .map((item) => ({
-        ...item,
-        percent: item.count > 0 ? Math.round((item.completed / item.count) * 100) : 0,
-      }))
-      .sort(
-        (a, b) =>
-          b.percent - a.percent || b.completed - a.completed || b.count - a.count
-      );
-  }, [complaintsData]);
 
   const topDepartment = departmentStats[0] || {
     label: "No department yet",
@@ -813,7 +667,6 @@ export default function AdminDashboard() {
               <Image
                 source={{ uri: profilePhotoUrl }}
                 style={styles.avatar}
-                onError={() => setProfilePhotoUrl(null)}
               />
             ) : (
               <Ionicons name="person" size={25} color={GREEN} />
