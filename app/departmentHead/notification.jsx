@@ -32,6 +32,7 @@ import {
   isNearContentBottom,
   mergeNotificationPages,
 } from "../../lib/notificationPagination";
+import { waitOffsetPageDelay } from "../../lib/complaintPagination";
 import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
 import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
@@ -425,6 +426,8 @@ export default function DepartmentHeadNotification() {
         append,
         cached?.notifications?.length || 0
       );
+
+      await waitOffsetPageDelay(offset);
 
       const { data, error, count } = await buildNotificationPageQuery(supabase, {
         role: "departmentHead",
