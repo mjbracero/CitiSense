@@ -36,15 +36,14 @@ import {
   countPendingValidationComplaints,
   requestCitizenValidationReminders,
 } from "../../lib/citizenValidationReminderService";
+import { countComplaintsMany } from "../../lib/complaintCountService";
 import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
 import {
   applyOffsetPagination,
   COMPLAINTS_PAGE_SIZE,
-  fetchAllRowsWithOffset,
 } from "../../lib/complaintPagination";
 import {
   getProfileAvatarUrl,
-  setProfileAvatarUrl,
   subscribeProfileAvatar,
 } from "../../lib/profileAvatarStore";
 import { supabase } from "../../lib/supabase";
@@ -651,6 +650,14 @@ export default function CitizenDashboard() {
   const [complaintsData, setComplaintsData] = useState(
     cachedDashboard?.complaints ?? []
   );
+  const [dashboardCounts, setDashboardCounts] = useState(
+    cachedDashboard?.counts ?? {
+      pending: 0,
+      inProgress: 0,
+      forValidation: 0,
+      completed: 0,
+    }
+  );
   const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
   const [currentUserId, setCurrentUserId] = useState(
     cachedDashboard?.currentUserId ?? null
@@ -697,56 +704,6 @@ export default function CitizenDashboard() {
         clearTimeout(navigationUnlockTimerRef.current);
       }
     };
-  }, []);
-
-  const loadUserProfilePhoto = useCallback(async () => {
-    try {
-      const {
-        data: { user: currentUser },
-        error,
-      } = await supabase.auth.getUser();
-
-      if (error || !currentUser) {
-        setCurrentUserId(null);
-        setProfilePhotoUrl(null);
-        setProfileAvatarUrl(null);
-        return;
-      }
-
-      setCurrentUserId(currentUser.id);
-
-      const metadataAvatar = currentUser.user_metadata?.avatar_url || null;
-
-      if (metadataAvatar) {
-        setProfilePhotoUrl(metadataAvatar);
-        setProfileAvatarUrl(metadataAvatar);
-        const prev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
-        setPageCache(CITIZEN_DASHBOARD_CACHE_KEY, {
-          ...prev,
-          currentUserId: currentUser.id,
-          profilePhotoUrl: metadataAvatar,
-        });
-        return;
-      }
-
-      const { data: profileData } = await supabase
-        .from("citizen_profiles")
-        .select("avatar_url")
-        .eq("id", currentUser.id)
-        .maybeSingle();
-
-      const nextPhoto = profileData?.avatar_url || null;
-      setProfilePhotoUrl(nextPhoto);
-      setProfileAvatarUrl(nextPhoto);
-      const prev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
-      setPageCache(CITIZEN_DASHBOARD_CACHE_KEY, {
-        ...prev,
-        currentUserId: currentUser.id,
-        profilePhotoUrl: nextPhoto,
-      });
-    } catch {
-      setProfilePhotoUrl(null);
-    }
   }, []);
 
   useEffect(() => {
@@ -808,6 +765,12 @@ export default function CitizenDashboard() {
         if (shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY)) {
           setCurrentUserId(null);
           setComplaintsData([]);
+          setDashboardCounts({
+            pending: 0,
+            inProgress: 0,
+            forValidation: 0,
+            completed: 0,
+          });
           setUnreadNotificationCount(0);
         }
         return;
@@ -815,25 +778,53 @@ export default function CitizenDashboard() {
 
       setCurrentUserId(currentUser.id);
 
-      const { data, error } = await fetchAllRowsWithOffset(async (offset, pageSize) => {
-        const query = applyOffsetPagination(
-          supabase
-            .from("complaints")
-            .select("*", { count: offset === 0 ? "exact" : undefined })
-            .eq("citizen_id", currentUser.id)
-            .order("created_at", { ascending: false }),
-          offset,
-          pageSize
-        );
+      const counts = await countComplaintsMany([
+        {
+          key: "pending",
+          buildQuery: (query) =>
+            query.eq("citizen_id", currentUser.id).eq("status", "Pending"),
+        },
+        {
+          key: "inProgress",
+          buildQuery: (query) =>
+            query.eq("citizen_id", currentUser.id).eq("status", "In Progress"),
+        },
+        {
+          key: "forValidation",
+          buildQuery: (query) =>
+            query
+              .eq("citizen_id", currentUser.id)
+              .eq("status", "For Validation"),
+        },
+        {
+          key: "completed",
+          buildQuery: (query) =>
+            query.eq("citizen_id", currentUser.id).eq("status", "Completed"),
+        },
+      ]);
 
-        return await query;
-      }, COMPLAINTS_PAGE_SIZE);
+      setDashboardCounts(counts);
+      setLoadingComplaints(false);
+
+      const prev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
+      setPageCache(CITIZEN_DASHBOARD_CACHE_KEY, {
+        ...prev,
+        counts,
+        currentUserId: currentUser.id,
+      });
+
+      const { data, error } = await applyOffsetPagination(
+        supabase
+          .from("complaints")
+          .select("*")
+          .eq("citizen_id", currentUser.id)
+          .order("created_at", { ascending: false }),
+        0,
+        COMPLAINTS_PAGE_SIZE
+      );
 
       if (error) {
-        console.log("Dashboard complaints load error:", error);
-        if (shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY)) {
-          setComplaintsData([]);
-        }
+        console.log("Dashboard latest complaints load error:", error);
         return;
       }
 
@@ -852,9 +843,10 @@ export default function CitizenDashboard() {
       );
 
       setComplaintsData(mappedComplaints);
-      const prev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
+      const cachePrev = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY) || {};
       setPageCache(CITIZEN_DASHBOARD_CACHE_KEY, {
-        ...prev,
+        ...cachePrev,
+        counts,
         complaints: mappedComplaints,
         currentUserId: currentUser.id,
       });
@@ -873,14 +865,19 @@ export default function CitizenDashboard() {
 
   useFocusEffect(
     useCallback(() => {
-      loadUserProfilePhoto();
+      const cached = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY);
+      if (cached?.counts) {
+        setDashboardCounts(cached.counts);
+      }
       loadDashboardComplaints();
-    }, [loadUserProfilePhoto, loadDashboardComplaints])
+    }, [loadDashboardComplaints])
   );
 
   const pendingValidationCount = useMemo(
-    () => countPendingValidationComplaints(complaintsData),
-    [complaintsData]
+    () =>
+      dashboardCounts.forValidation ||
+      countPendingValidationComplaints(complaintsData),
+    [dashboardCounts.forValidation, complaintsData]
   );
 
   useEffect(() => {
@@ -934,24 +931,27 @@ export default function CitizenDashboard() {
 
   const greeting = useMemo(() => getGreetingByTime(currentDate), [currentDate]);
 
-  const complaints = complaintsData;
-
   const formattedDate = useMemo(
     () => getFormattedDate(currentDate),
     [currentDate]
   );
 
   const dashboardCards = useMemo(() => {
+    const countByFilter = {
+      Pending: dashboardCounts.pending,
+      "In Progress": dashboardCounts.inProgress,
+      "For Validation": dashboardCounts.forValidation,
+      Completed: dashboardCounts.completed,
+    };
+
     return dashboardCardConfig.map((card) => ({
       ...card,
-      value: complaints
-        .filter((complaint) => card.statusNames.includes(complaint.status))
-        .length.toString(),
+      value: String(countByFilter[card.filter] || 0),
     }));
-  }, [complaints]);
+  }, [dashboardCounts]);
 
   const latestComplaints = useMemo(() => {
-    return [...complaints]
+    return [...complaintsData]
       .sort((a, b) => {
         const rank =
           getDashboardStatusRank(a.status) - getDashboardStatusRank(b.status);
@@ -964,7 +964,7 @@ export default function CitizenDashboard() {
         );
       })
       .slice(0, 4);
-  }, [complaints]);
+  }, [complaintsData]);
 
   const openComplaintDetails = (complaint) => {
     setSelectedComplaint(complaint);
@@ -1043,9 +1043,8 @@ export default function CitizenDashboard() {
             >
               {profilePhotoUrl ? (
                 <Image
-                  source={{ uri: profilePhotoUrl }}
-                  style={styles.avatar}
-                  onError={() => setProfilePhotoUrl(null)}
+                source={{ uri: profilePhotoUrl }}
+                style={styles.avatar}
                 />
               ) : (
                 <Ionicons name="person" size={25} color={GREEN} />
