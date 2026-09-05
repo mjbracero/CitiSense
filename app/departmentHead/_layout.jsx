@@ -3,9 +3,15 @@ import { View, StyleSheet } from "react-native";
 import { APP_BACKGROUND } from "../../lib/platformUi";
 import PersistentBottomNav from "../../components/PersistentBottomNav";
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
+import useRoleLayoutBootstrap from "../../hooks/useRoleLayoutBootstrap";
 
 export default function DepartmentHeadLayout() {
   const { unreadNotificationCount } = useDepartmentHeadUnreadNotifications();
+  const ready = useRoleLayoutBootstrap("departmentHead");
+
+  if (!ready) {
+    return <View style={styles.container} />;
+  }
 
   return (
     <View style={styles.container}>
