@@ -24,6 +24,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getAndroidBlurFallbackColor } from "../lib/platformUi";
+import { isRouteInRole, saveLastRoute } from "../lib/navigationPersistence";
+import { supabase } from "../lib/supabase";
 
 const GREEN = "#087A0D";
 const WHITE = "#FFFFFF";
@@ -232,6 +234,23 @@ export default function PersistentBottomNav({
   );
 
   useEffect(() => {
+    if (!pathname || !role || !isRouteInRole(pathname, role)) {
+      return;
+    }
+
+    let cancelled = false;
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (cancelled || !session?.user?.id) return;
+      saveLastRoute(session.user.id, role, pathname);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, role]);
+
+  useEffect(() => {
     const showEvent =
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvent =
@@ -264,6 +283,11 @@ export default function PersistentBottomNav({
 
       requestAnimationFrame(() => {
         router.replace(route);
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          if (session?.user?.id) {
+            saveLastRoute(session.user.id, role, route);
+          }
+        });
       });
 
       if (unlockTimerRef.current) {
@@ -274,7 +298,7 @@ export default function PersistentBottomNav({
         navigationLockRef.current = false;
       }, 400);
     },
-    [router]
+    [router, role]
   );
 
   const shouldHide =
