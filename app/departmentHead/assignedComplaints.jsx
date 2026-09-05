@@ -53,6 +53,7 @@ import {
   getOffsetPageRange,
   isNearContentBottom,
   mergeComplaintPages,
+  waitOffsetPageDelay,
 } from "../../lib/complaintPagination";
 import {
   complaintAppliesToDepartment,
@@ -751,10 +752,26 @@ function createMapHtml({
             style: hybridStyle,
             center: [complaintLng, complaintLat],
             zoom: 16,
+            minZoom: 5,
             pitch: 0,
             bearing: 0,
             maxPitch: 85,
             attributionControl: true,
+            renderWorldCopies: false,
+            fadeDuration: 0,
+          });
+
+          function lockCameraToComplaint(zoom) {
+            map.jumpTo({
+              center: [complaintLng, complaintLat],
+              zoom: Math.max(Number(zoom) || 16, 5),
+              bearing: map.getBearing(),
+              pitch: map.getPitch(),
+            });
+          }
+
+          map.on("style.load", function() {
+            lockCameraToComplaint(16);
           });
 
           function openStreetView() {
@@ -860,6 +877,7 @@ function createMapHtml({
 
           map.on("load", function() {
             mapLoaded = true;
+            lockCameraToComplaint(16);
             placeComplaintMarker();
             if (pendingModeratorPosition) {
               window.updateModeratorPosition(
@@ -868,7 +886,10 @@ function createMapHtml({
                 pendingModeratorPosition.heading
               );
             }
-            setTimeout(function() { map.resize(); }, 300);
+            setTimeout(function() {
+              map.resize();
+              lockCameraToComplaint(Math.max(map.getZoom(), 16));
+            }, 300);
           });
 
           window.updateModeratorPosition = function(lat, lng, heading) {
@@ -919,20 +940,23 @@ function createMapHtml({
                   2 * 6371000 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
                 if (distanceMeters < 25) {
-                  map.easeTo({
+                  map.jumpTo({
                     center: [
                       (complaintLng + parsedLng) / 2,
                       (complaintLat + parsedLat) / 2,
                     ],
                     zoom: Math.max(map.getZoom(), 18),
-                    duration: 450,
                   });
                 } else if (distanceMeters < 8000) {
                   map.fitBounds(bounds, {
                     padding: 70,
                     maxZoom: 19,
-                    duration: 550,
+                    minZoom: 5,
+                    duration: 0,
                   });
+                } else {
+                  // Far GPS — stay locked on the complaint pin, don't zoom out to continent.
+                  lockCameraToComplaint(16);
                 }
               } catch (fitError) {
                 console.log("Fit both markers error", fitError);
@@ -998,7 +1022,10 @@ function createMapHtml({
               const bounds = coordinates.reduce(function(b, coord) {
                 return b.extend(coord);
               }, new maplibregl.LngLatBounds(coordinates[0], coordinates[0]));
-              map.fitBounds(bounds, { padding: 60, duration: 900 });
+              map.fitBounds(bounds, { padding: 60, maxZoom: 18, minZoom: 5, duration: 0 });
+              if (map.getZoom() < 5) {
+                lockCameraToComplaint(16);
+              }
             } catch (error) {
               console.log("Route error", error);
             }
@@ -1311,6 +1338,8 @@ export default function DepartmentHeadAssignedComplaints() {
         const pageSize = append
           ? COMPLAINTS_PAGE_SIZE
           : Math.max(COMPLAINTS_PAGE_SIZE, cached?.complaints?.length || 0);
+
+        await waitOffsetPageDelay(offset);
 
         const listFilters = {
           ...(selectedStatus === "In Progress"
