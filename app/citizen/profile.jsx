@@ -762,7 +762,7 @@ export default function CitizenProfile() {
             return;
           }
 
-          clearPageCache();
+          void clearPageCache();
           cachedLocationEnabled = false;
 
           setUser(null);
