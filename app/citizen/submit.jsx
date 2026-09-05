@@ -44,8 +44,6 @@ import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import { useKeyboardInset } from "../../hooks/useKeyboardInset";
 import {
   BOTTOM_NAV_CONTENT_INSET,
-  BOTTOM_NAV_DOCK_PAD,
-  BOTTOM_NAV_PILL_HEIGHT,
 } from "../../components/PersistentBottomNav";
 import { getKeyboardLift } from "../../lib/platformUi";
 import { notifyDepartmentHeadsNewAssignment } from "../../lib/departmentHeadNotificationService";
@@ -95,11 +93,11 @@ const MAX_PHOTOS = 3;
 const MAX_PHOTO_SIZE = 10 * 1024 * 1024;
 const CITIZEN_SUBMIT_CACHE_KEY = "citizen.submit";
 const CITIZEN_PROFILE_CACHE_KEY = "citizen.profile";
-/** Floating chat composer height used for keyboard scroll offsets. */
+/** Bottom composer height used for scroll content clearance. */
 const MESSAGE_INPUT_HEIGHT = 64;
 const INPUT_KEYBOARD_GAP = Platform.OS === "android" ? 18 : 10;
 const SUBMIT_ANDROID_NAV_FLOOR = 48;
-const SUBMIT_COMPOSER_GAP = 4;
+const SUBMIT_COMPOSER_GAP = 8;
 const PH_MOBILE_REGEX = /^09\d{9}$/;
 
 const SPOKEN_DIGIT_WORDS = {
@@ -645,14 +643,10 @@ export default function CitizenSubmit() {
       insets.bottom,
       Platform.OS === "android" ? SUBMIT_ANDROID_NAV_FLOOR : 0
     );
-    const composerPadding =
-      BOTTOM_NAV_DOCK_PAD +
-      BOTTOM_NAV_PILL_HEIGHT +
-      SUBMIT_COMPOSER_GAP;
 
     return {
       systemNavInset,
-      composerPadding,
+      composerPadding: SUBMIT_COMPOSER_GAP,
       scrollPadding: BOTTOM_NAV_CONTENT_INSET,
     };
   }, [insets.bottom]);
@@ -664,7 +658,7 @@ export default function CitizenSubmit() {
     : submitBottomLimit.composerPadding;
 
   const scrollBottomPadding = shouldShowInput
-    ? 16
+    ? MESSAGE_INPUT_HEIGHT + 24
     : reviewEditField
       ? getKeyboardLift(keyboardHeight, 24, insets.bottom, {
           androidNeedsManualPadding,
@@ -1725,6 +1719,14 @@ export default function CitizenSubmit() {
       return;
     }
 
+    if (isOutsideBogoCity) {
+      notify(
+        "Outside Bogo City",
+        "Complaints can only be filed within Bogo City, Cebu. Move inside the city boundary to submit."
+      );
+      return;
+    }
+
     if (selectedPhotos.length === 0) {
       notify(
         "Photo Required",
@@ -1842,7 +1844,8 @@ export default function CitizenSubmit() {
         complaintTitle.trim(),
         complaintDescription.trim(),
         analysis.category,
-        analysis.assignedOffice
+        analysis.assignedOffice,
+        { confidence: analysis.confidence }
       );
       const defaultStatus = "Pending";
       const resolvedEmergency = Boolean(analysis.is_emergency);
@@ -1949,7 +1952,11 @@ export default function CitizenSubmit() {
 
       navigateToAnalysisResult({
         complaintId: insertedComplaint.id,
-        analysis,
+        analysis: {
+          ...analysis,
+          category: detectedCategory,
+          assignedOffice,
+        },
         photoUploadFailed,
       });
     } catch (error) {
@@ -2493,10 +2500,19 @@ export default function CitizenSubmit() {
               activeOpacity={0.75}
               style={[
                 styles.inlineSubmitButton,
-                (isSubmitting || isAnalyzing) && styles.inlineSubmitButtonDisabled,
+                (isSubmitting ||
+                  isAnalyzing ||
+                  isOutsideBogoCity ||
+                  isLocating) &&
+                  styles.inlineSubmitButtonDisabled,
               ]}
               onPress={handleSubmitComplaint}
-              disabled={isSubmitting || isAnalyzing}
+              disabled={
+                isSubmitting ||
+                isAnalyzing ||
+                isOutsideBogoCity ||
+                isLocating
+              }
             >
               {isSubmitting || isAnalyzing ? (
                 <ActivityIndicator size="small" color={WHITE} />
@@ -2509,7 +2525,11 @@ export default function CitizenSubmit() {
                   ? "ANALYZING..."
                   : isSubmitting
                     ? "SUBMITTING..."
-                    : "SUBMIT COMPLAINT"}
+                    : isLocating
+                      ? "LOCATING..."
+                      : isOutsideBogoCity
+                        ? "OUTSIDE BOGO CITY"
+                        : "SUBMIT COMPLAINT"}
               </Text>
             </TouchableOpacity>
           )}
@@ -2563,10 +2583,8 @@ export default function CitizenSubmit() {
           suppressContentPadding
           smoothKeyboard
           enableOnAndroid
-          enableAutomaticScroll={
-            Boolean(reviewEditField) || (shouldShowInput && isKeyboardOpen)
-          }
-          extraScrollHeight={shouldShowInput ? MESSAGE_INPUT_HEIGHT + 24 : 120}
+          enableAutomaticScroll={Boolean(reviewEditField)}
+          extraScrollHeight={120}
           keyboardVerticalOffset={keyboardVerticalOffset}
           showsVerticalScrollIndicator={false}
           scrollEventThrottle={16}
@@ -2585,20 +2603,16 @@ export default function CitizenSubmit() {
           {renderChatScrollContent()}
         </KeyboardAwareScrollView>
 
-        {shouldShowInput && (
+        {shouldShowInput ? (
           <View
             style={[
               styles.messageInputDock,
-              {
-                paddingBottom: isKeyboardOpen
-                  ? composerDockPadding
-                  : submitBottomLimit.composerPadding,
-              },
+              { paddingBottom: composerDockPadding },
             ]}
           >
             {renderMessageComposer()}
           </View>
-        )}
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -2721,6 +2735,12 @@ const styles = StyleSheet.create({
 
   composerSection: {
     width: "100%",
+  },
+
+  messageInputDock: {
+    paddingTop: 2,
+    paddingHorizontal: 13,
+    backgroundColor: BG,
   },
 
   chatDatePill: {
@@ -3416,12 +3436,6 @@ const styles = StyleSheet.create({
     color: WHITE,
     marginLeft: 10,
     letterSpacing: 0.3,
-  },
-
-  messageInputDock: {
-    paddingTop: 2,
-    paddingHorizontal: 13,
-    backgroundColor: BG,
   },
 
   messageRow: {
