@@ -24,7 +24,8 @@ import {
 } from "../../components/AuthScreenChrome";
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import { writeAuditLog } from "../../lib/auditLogService";
-import { setPageCacheUser } from "../../lib/pageDataCache";
+import { setPageCacheUser, hydratePageCache } from "../../lib/pageDataCache";
+import { saveLastRoute } from "../../lib/navigationPersistence";
 
 import {
   useFonts,
@@ -127,6 +128,16 @@ export default function LoginScreen() {
       await markPasswordRecoveryActive(false);
 
       setPageCacheUser(profile.id);
+      await hydratePageCache(profile.id);
+
+      const roleKey =
+        profile.role === "citizen"
+          ? "citizen"
+          : profile.role === "moderator" || profile.role === "departmentHead"
+            ? "departmentHead"
+            : profile.role === "admin"
+              ? "admin"
+              : null;
 
       const homeRoute =
         profile.role === "citizen"
@@ -140,6 +151,10 @@ export default function LoginScreen() {
       if (!homeRoute) {
         notify("Login failed", "Unknown user role.");
         return;
+      }
+
+      if (roleKey) {
+        await saveLastRoute(profile.id, roleKey, homeRoute);
       }
 
       router.replace(homeRoute);
