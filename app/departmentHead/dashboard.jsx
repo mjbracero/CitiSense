@@ -31,15 +31,14 @@ import {
   getCategoriesForDepartment,
   normalizeOfficeKey,
 } from "../../lib/complaintCategories";
+import { countComplaintsMany } from "../../lib/complaintCountService";
 import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
 import {
   applyOffsetPagination,
   COMPLAINTS_PAGE_SIZE,
-  fetchAllRowsWithOffset,
 } from "../../lib/complaintPagination";
 import {
   getProfileAvatarUrl,
-  setProfileAvatarUrl,
   subscribeProfileAvatar,
 } from "../../lib/profileAvatarStore";
 import { supabase } from "../../lib/supabase";
@@ -723,10 +722,28 @@ function createMapHtml({ latitude, longitude, address = "", title = "" }) {
                 "https://api.maptiler.com/maps/hybrid/style.json?key=${MAPTILER_API_KEY}",
               center: [complaintLng, complaintLat],
               zoom: 16,
+              minZoom: 5,
               attributionControl: true,
+              renderWorldCopies: false,
+              fadeDuration: 0,
+            });
+
+            function lockCameraToComplaint() {
+              map.jumpTo({
+                center: [complaintLng, complaintLat],
+                zoom: 16,
+                bearing: 0,
+                pitch: 0,
+              });
+            }
+
+            map.on("style.load", () => {
+              lockCameraToComplaint();
             });
 
             map.on("load", () => {
+              lockCameraToComplaint();
+
               const complaintMarkerElement = document.createElement("div");
               complaintMarkerElement.className = "complaint-marker";
               complaintMarkerElement.innerHTML =
@@ -754,6 +771,7 @@ function createMapHtml({ latitude, longitude, address = "", title = "" }) {
 
               setTimeout(() => {
                 map.resize();
+                lockCameraToComplaint();
               }, 300);
             });
           } catch (error) {
@@ -780,6 +798,14 @@ export default function DepartmentHeadDashboard() {
   );
   const [assignedComplaintsData, setAssignedComplaintsData] = useState(
     cachedDashboard?.complaints ?? []
+  );
+  const [dashboardCounts, setDashboardCounts] = useState(
+    cachedDashboard?.counts ?? {
+      total: 0,
+      inProgress: 0,
+      forValidation: 0,
+      completed: 0,
+    }
   );
   const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
 
@@ -816,42 +842,6 @@ export default function DepartmentHeadDashboard() {
         profilePhotoUrl: url,
       });
     });
-  }, []);
-
-  const loadUserProfilePhoto = useCallback(async () => {
-    try {
-      const {
-        data: { user },
-        error,
-      } = await supabase.auth.getUser();
-
-      if (error || !user) {
-        setProfilePhotoUrl(null);
-        return;
-      }
-
-      const metadataAvatar = user.user_metadata?.avatar_url || null;
-      let nextPhoto = metadataAvatar;
-
-      if (!nextPhoto) {
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("avatar_url")
-          .eq("id", user.id)
-          .maybeSingle();
-        nextPhoto = profileData?.avatar_url || null;
-      }
-
-      setProfilePhotoUrl(nextPhoto);
-      setProfileAvatarUrl(nextPhoto);
-      const prev = getPageCache(DEPT_DASHBOARD_CACHE_KEY) || {};
-      setPageCache(DEPT_DASHBOARD_CACHE_KEY, {
-        ...prev,
-        profilePhotoUrl: nextPhoto,
-      });
-    } catch {
-      // Keep current avatar if refresh fails.
-    }
   }, []);
 
   const categoryFilters = useMemo(() => {
@@ -1053,24 +1043,56 @@ export default function DepartmentHeadDashboard() {
           console.log("Moderator dashboard has no department in profiles table.");
           if (shouldShowPageLoader(DEPT_DASHBOARD_CACHE_KEY)) {
             setAssignedComplaintsData([]);
+            setDashboardCounts({
+              total: 0,
+              inProgress: 0,
+              forValidation: 0,
+              completed: 0,
+            });
           }
           return;
         }
 
-        const { data, error } = await fetchAllRowsWithOffset(
-          async (offset, pageSize) => {
-            const query = applyOffsetPagination(
-              supabase
-                .from("complaints")
-                .select("*", { count: offset === 0 ? "exact" : undefined })
-                .ilike("assigned_office", `%${department}%`)
-                .order("created_at", { ascending: false }),
-              offset,
-              pageSize
-            );
+        const officeFilter = (query) =>
+          query.ilike("assigned_office", `%${department}%`);
 
-            return await query;
+        const counts = await countComplaintsMany([
+          { key: "total", buildQuery: officeFilter },
+          {
+            key: "inProgress",
+            buildQuery: (query) =>
+              officeFilter(query).in("status", ["In Progress", "Returned"]),
           },
+          {
+            key: "forValidation",
+            buildQuery: (query) =>
+              officeFilter(query).eq("status", "For Validation"),
+          },
+          {
+            key: "completed",
+            buildQuery: (query) =>
+              officeFilter(query).eq("status", "Completed"),
+          },
+        ]);
+
+        setDashboardCounts(counts);
+        setLoadingComplaints(false);
+
+        const prevCounts = getPageCache(DEPT_DASHBOARD_CACHE_KEY) || {};
+        setPageCache(DEPT_DASHBOARD_CACHE_KEY, {
+          ...prevCounts,
+          counts,
+          department,
+          currentUserId,
+        });
+
+        const { data, error } = await applyOffsetPagination(
+          supabase
+            .from("complaints")
+            .select("*")
+            .ilike("assigned_office", `%${department}%`)
+            .order("created_at", { ascending: false }),
+          0,
           COMPLAINTS_PAGE_SIZE
         );
 
@@ -1090,12 +1112,6 @@ export default function DepartmentHeadDashboard() {
           )
         );
 
-        console.log("Moderator dashboard assigned complaints loaded:", {
-          department,
-          rawCount: data?.length || 0,
-          matchedCount: matchedRows.length,
-        });
-
         const citizenIds = Array.from(
           new Set(matchedRows.map((row) => row.citizen_id).filter(Boolean))
         );
@@ -1107,7 +1123,10 @@ export default function DepartmentHeadDashboard() {
         );
 
         setAssignedComplaintsData(mappedComplaints);
+        const prev = getPageCache(DEPT_DASHBOARD_CACHE_KEY) || {};
         setPageCache(DEPT_DASHBOARD_CACHE_KEY, {
+          ...prev,
+          counts,
           complaints: mappedComplaints,
           department,
           currentUserId,
@@ -1121,15 +1140,18 @@ export default function DepartmentHeadDashboard() {
         setLoadingComplaints(false);
       }
     },
-    [loadCitizenProfiles, loadDepartmentHeadDepartment]
+    [currentUserId, loadCitizenProfiles, loadDepartmentHeadDepartment]
   );
 
   useFocusEffect(
     useCallback(() => {
-      loadUserProfilePhoto();
+      const cached = getPageCache(DEPT_DASHBOARD_CACHE_KEY);
+      if (cached?.counts) {
+        setDashboardCounts(cached.counts);
+      }
       loadAssignedComplaints(true);
       registerPushTokenForCurrentUser();
-    }, [loadAssignedComplaints, loadUserProfilePhoto])
+    }, [loadAssignedComplaints])
   );
 
   useEffect(() => {
@@ -1182,17 +1204,21 @@ export default function DepartmentHeadDashboard() {
   const dashboardCards = useMemo(() => {
     return dashboardCardConfig.map((card) => {
       const value = card.countAll
-        ? departmentComplaints.length
-        : departmentComplaints.filter((complaint) =>
-            card.statusNames.includes(complaint.status)
-          ).length;
+        ? dashboardCounts.total
+        : card.title === "In Progress"
+          ? dashboardCounts.inProgress
+          : card.title === "For Validation"
+            ? dashboardCounts.forValidation
+            : card.title === "Completed"
+              ? dashboardCounts.completed
+              : 0;
 
       return {
         ...card,
         value,
       };
     });
-  }, [departmentComplaints]);
+  }, [dashboardCounts]);
 
   const filteredComplaints = useMemo(() => {
     const filtered = departmentComplaints.filter((item) => {
@@ -1292,7 +1318,6 @@ export default function DepartmentHeadDashboard() {
               <Image
                 source={{ uri: profilePhotoUrl }}
                 style={styles.avatar}
-                onError={() => setProfilePhotoUrl(null)}
               />
             ) : (
               <Ionicons name="person" size={25} color={GREEN} />
