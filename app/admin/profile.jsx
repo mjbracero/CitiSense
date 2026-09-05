@@ -748,7 +748,7 @@ export default function AdminProfile() {
             return;
           }
 
-          clearPageCache();
+          void clearPageCache();
 
           setUser(null);
           router.replace("/auth/login");
