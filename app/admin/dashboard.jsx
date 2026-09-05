@@ -20,24 +20,31 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { BOTTOM_NAV_CONTENT_INSET } from "../../components/PersistentBottomNav";
 import {
   DashboardStatsSkeleton,
   PageSkeleton,
 } from "../../components/skeletons";
-import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
-import { countComplaints, countComplaintsMany } from "../../lib/complaintCountService";
+import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
 import {
   COMPLAINT_CATEGORY_NAMES,
   DEPARTMENT_OFFICES,
 } from "../../lib/complaintCategories";
 import {
+  countComplaints,
+  countComplaintsMany,
+} from "../../lib/complaintCountService";
+import {
+  getPageCache,
+  setPageCache,
+  shouldShowPageLoader,
+} from "../../lib/pageDataCache";
+import {
   getProfileAvatarUrl,
   subscribeProfileAvatar,
 } from "../../lib/profileAvatarStore";
-import { supabase } from "../../lib/supabase";
-import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
-import { BOTTOM_NAV_CONTENT_INSET } from "../../components/PersistentBottomNav";
+import { supabase } from "../../lib/supabase";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -131,7 +138,9 @@ const bottomTabs = [
 ];
 
 function normalizeText(value) {
-  return String(value || "").trim().toLowerCase();
+  return String(value || "")
+    .trim()
+    .toLowerCase();
 }
 
 function normalizePriority(priority) {
@@ -177,11 +186,11 @@ function getLeadingAndLeast(stats) {
   }
 
   const sortedDesc = [...stats].sort(
-    (a, b) => b.count - a.count || a.label.localeCompare(b.label)
+    (a, b) => b.count - a.count || a.label.localeCompare(b.label),
   );
 
   const sortedAsc = [...stats].sort(
-    (a, b) => a.count - b.count || a.label.localeCompare(b.label)
+    (a, b) => a.count - b.count || a.label.localeCompare(b.label),
   );
 
   return {
@@ -217,7 +226,7 @@ function getCategoryChartData(categoryStats) {
 
   const topFive = categoryStats.slice(0, 5);
   const least = [...categoryStats].sort(
-    (a, b) => a.count - b.count || a.label.localeCompare(b.label)
+    (a, b) => a.count - b.count || a.label.localeCompare(b.label),
   )[0];
 
   const merged = [...topFive];
@@ -264,14 +273,14 @@ async function loadDashboardCategoryStats(total) {
   const results = await Promise.all(
     COMPLAINT_CATEGORY_NAMES.map(async (category) => {
       const count = await countComplaints((query) =>
-        query.eq("category", category)
+        query.eq("category", category),
       );
       return {
         label: category,
         count,
         percent: total > 0 ? Math.round((count / total) * 100) : 0,
       };
-    })
+    }),
   );
 
   return results
@@ -283,14 +292,14 @@ async function loadDashboardPriorityStats(total) {
   const results = await Promise.all(
     priorityOrder.map(async (priority) => {
       const count = await countComplaints((query) =>
-        query.eq("priority", priority)
+        query.eq("priority", priority),
       );
       return {
         label: priority,
         count,
         percent: total > 0 ? Math.round((count / total) * 100) : 0,
       };
-    })
+    }),
   );
 
   return results.filter((item) => item.count > 0);
@@ -301,12 +310,12 @@ async function loadDashboardDepartmentStats() {
     DEPARTMENT_OFFICES.map(async (office) => {
       const [count, completed] = await Promise.all([
         countComplaints((query) =>
-          query.ilike("assigned_office", `%${office}%`)
+          query.ilike("assigned_office", `%${office}%`),
         ),
         countComplaints((query) =>
           query
             .ilike("assigned_office", `%${office}%`)
-            .eq("status", "Completed")
+            .eq("status", "Completed"),
         ),
       ]);
 
@@ -316,14 +325,14 @@ async function loadDashboardDepartmentStats() {
         completed,
         percent: count > 0 ? Math.round((completed / count) * 100) : 0,
       };
-    })
+    }),
   );
 
   return results
     .filter((item) => item.count > 0)
     .sort(
       (a, b) =>
-        b.percent - a.percent || b.completed - a.completed || b.count - a.count
+        b.percent - a.percent || b.completed - a.completed || b.count - a.count,
     );
 }
 
@@ -351,7 +360,10 @@ function CategoryVerticalGraph({ data }) {
   return (
     <View style={styles.categoryGraphRow}>
       {data.map((item) => {
-        const fillHeight = Math.max(18, Math.round((item.count / maxCount) * 82));
+        const fillHeight = Math.max(
+          18,
+          Math.round((item.count / maxCount) * 82),
+        );
 
         return (
           <View key={item.label} style={styles.categoryGraphItem}>
@@ -426,20 +438,20 @@ export default function AdminDashboard() {
       pending: 0,
       forValidation: 0,
       completed: 0,
-    }
+    },
   );
   const [categoryStats, setCategoryStats] = useState(
-    cachedDashboard?.categoryStats ?? []
+    cachedDashboard?.categoryStats ?? [],
   );
   const [priorityStats, setPriorityStats] = useState(
-    cachedDashboard?.priorityStats ?? []
+    cachedDashboard?.priorityStats ?? [],
   );
   const [departmentStats, setDepartmentStats] = useState(
-    cachedDashboard?.departmentStats ?? []
+    cachedDashboard?.departmentStats ?? [],
   );
   const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState(
-    getProfileAvatarUrl() || cachedDashboard?.profilePhotoUrl || null
+    getProfileAvatarUrl() || cachedDashboard?.profilePhotoUrl || null,
   );
 
   const navigationLockRef = useRef(false);
@@ -481,7 +493,7 @@ export default function AdminDashboard() {
         navigationLockRef.current = false;
       }, 450);
     },
-    [router]
+    [router],
   );
 
   useEffect(() => {
@@ -557,7 +569,10 @@ export default function AdminDashboard() {
       });
     } catch (error) {
       console.log("Admin dashboard chart stats error:", error);
-      if (!hasCachedCounts && !getPageCache(ADMIN_DASHBOARD_CACHE_KEY)?.counts) {
+      if (
+        !hasCachedCounts &&
+        !getPageCache(ADMIN_DASHBOARD_CACHE_KEY)?.counts
+      ) {
         setCategoryStats([]);
         setPriorityStats([]);
         setDepartmentStats([]);
@@ -583,7 +598,7 @@ export default function AdminDashboard() {
 
       loadDashboardData(true);
       registerPushTokenForCurrentUser();
-    }, [loadDashboardData])
+    }, [loadDashboardData]),
   );
 
   useEffect(() => {
@@ -598,7 +613,7 @@ export default function AdminDashboard() {
         },
         () => {
           loadDashboardData(false);
-        }
+        },
       )
       .subscribe((status) => {
         console.log("Admin dashboard complaints realtime status:", status);
@@ -620,17 +635,17 @@ export default function AdminDashboard() {
 
   const categoryLeadingLeast = useMemo(
     () => getLeadingAndLeast(categoryStats),
-    [categoryStats]
+    [categoryStats],
   );
 
   const categoryGraphData = useMemo(
     () => getCategoryChartData(categoryStats),
-    [categoryStats]
+    [categoryStats],
   );
 
   const priorityLeadingLeast = useMemo(
     () => getLeadingAndLeast(priorityStats),
-    [priorityStats]
+    [priorityStats],
   );
 
   const topDepartment = departmentStats[0] || {
@@ -664,10 +679,7 @@ export default function AdminDashboard() {
             onPress={() => smoothNavigate("/admin/profile")}
           >
             {profilePhotoUrl ? (
-              <Image
-                source={{ uri: profilePhotoUrl }}
-                style={styles.avatar}
-              />
+              <Image source={{ uri: profilePhotoUrl }} style={styles.avatar} />
             ) : (
               <Ionicons name="person" size={25} color={GREEN} />
             )}
@@ -691,27 +703,32 @@ export default function AdminDashboard() {
           {loadingComplaints ? (
             <DashboardStatsSkeleton />
           ) : (
-          <View style={styles.dashboardCardsRow}>
-            {dashboardCards.map((item, index) => (
-              <View
-                key={item.title}
-                style={[
-                  styles.dashboardCard,
-                  {
-                    width: CARD_WIDTH,
-                    marginRight: index === dashboardCards.length - 1 ? 0 : CARD_GAP,
-                  },
-                ]}
-              >
-                <View style={styles.cardIconCircle}>
-                  <MaterialCommunityIcons name={item.icon} size={23} color={WHITE} />
-                </View>
+            <View style={styles.dashboardCardsRow}>
+              {dashboardCards.map((item, index) => (
+                <View
+                  key={item.title}
+                  style={[
+                    styles.dashboardCard,
+                    {
+                      width: CARD_WIDTH,
+                      marginRight:
+                        index === dashboardCards.length - 1 ? 0 : CARD_GAP,
+                    },
+                  ]}
+                >
+                  <View style={styles.cardIconCircle}>
+                    <MaterialCommunityIcons
+                      name={item.icon}
+                      size={23}
+                      color={WHITE}
+                    />
+                  </View>
 
-                <Text style={styles.cardTitle}>{item.title}</Text>
-                <Text style={styles.cardValue}>{item.value}</Text>
-              </View>
-            ))}
-          </View>
+                  <Text style={styles.cardTitle}>{item.title}</Text>
+                  <Text style={styles.cardValue}>{item.value}</Text>
+                </View>
+              ))}
+            </View>
           )}
 
           <TouchableOpacity
@@ -741,46 +758,70 @@ export default function AdminDashboard() {
             <View style={styles.summaryCardHeader}>
               <Text style={styles.summaryTitle}>Categories</Text>
               <View style={styles.summaryIconCircle}>
-                <MaterialCommunityIcons name="chart-bar" size={27} color={GREEN} />
+                <MaterialCommunityIcons
+                  name="chart-bar"
+                  size={27}
+                  color={GREEN}
+                />
               </View>
             </View>
 
             <View style={styles.summaryMiniRow}>
-              <SummaryMiniCard label="Leading" item={categoryLeadingLeast.leading} />
-              <SummaryMiniCard label="Least" item={categoryLeadingLeast.least} />
+              <SummaryMiniCard
+                label="Leading"
+                item={categoryLeadingLeast.leading}
+              />
+              <SummaryMiniCard
+                label="Least"
+                item={categoryLeadingLeast.least}
+              />
             </View>
 
             <CategoryVerticalGraph data={categoryGraphData} />
 
-            <ViewFullReportButton onPress={() => smoothNavigate("/admin/analytics")} />
+            <ViewFullReportButton
+              onPress={() => smoothNavigate("/admin/analytics")}
+            />
           </View>
 
           <View style={styles.bottomAnalyticsRow}>
             <View style={styles.smallAnalyticsCard}>
-              <Text style={styles.smallCardTitle}>Top-Performing Departments</Text>
+              <Text style={styles.smallCardTitle}>
+                Top-Performing Departments
+              </Text>
 
               <View style={styles.trophyCircle}>
-                <MaterialCommunityIcons name="trophy-outline" size={30} color={GREEN} />
+                <MaterialCommunityIcons
+                  name="trophy-outline"
+                  size={30}
+                  color={GREEN}
+                />
               </View>
 
               <Text style={styles.departmentName} numberOfLines={2}>
                 {topDepartment.label}
               </Text>
 
-              <Text style={styles.departmentRate}>{topDepartment.percent}% rate</Text>
+              <Text style={styles.departmentRate}>
+                {topDepartment.percent}% rate
+              </Text>
 
               <View style={styles.departmentProgressTrack}>
                 <View
                   style={[
                     styles.departmentProgressFill,
-                    { width: `${Math.max(0, Math.min(topDepartment.percent, 100))}%` },
+                    {
+                      width: `${Math.max(0, Math.min(topDepartment.percent, 100))}%`,
+                    },
                   ]}
                 />
               </View>
 
               <View style={styles.smallCardSpacer} />
 
-              <ViewFullReportButton onPress={() => smoothNavigate("/admin/analytics")} />
+              <ViewFullReportButton
+                onPress={() => smoothNavigate("/admin/analytics")}
+              />
             </View>
 
             <View style={styles.smallAnalyticsCard}>
@@ -797,25 +838,31 @@ export default function AdminDashboard() {
 
               <View style={styles.priorityListBox}>
                 {priorityStats.length === 0 ? (
-                  <Text style={styles.analyticsEmpty}>No priority data yet.</Text>
+                  <Text style={styles.analyticsEmpty}>
+                    No priority data yet.
+                  </Text>
                 ) : (
-                  priorityStats.slice(0, 4).map((item) => (
-                    <PriorityLevelRow key={item.label} item={item} />
-                  ))
+                  priorityStats
+                    .slice(0, 4)
+                    .map((item) => (
+                      <PriorityLevelRow key={item.label} item={item} />
+                    ))
                 )}
               </View>
 
               {priorityStats.length > 0 && (
                 <Text style={styles.priorityLeastText} numberOfLines={1}>
-                  Least: {priorityLeadingLeast.least.label} • {priorityLeadingLeast.least.count}
+                  Least: {priorityLeadingLeast.least.label} •{" "}
+                  {priorityLeadingLeast.least.count}
                 </Text>
               )}
 
-              <ViewFullReportButton onPress={() => smoothNavigate("/admin/analytics")} />
+              <ViewFullReportButton
+                onPress={() => smoothNavigate("/admin/analytics")}
+              />
             </View>
           </View>
         </ScrollView>
-
       </View>
     </SafeAreaView>
   );
