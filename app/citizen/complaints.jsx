@@ -20,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Keyboard,
   Modal,
@@ -68,9 +69,18 @@ import {
   calculatePriorityFromKeywords,
   resolveComplaintRouting,
 } from "../../lib/complaintCategories";
+import {
+  markMediaPickerSession,
+  scheduleClearMediaPickerSession,
+} from "../../lib/navigationPersistence";
 import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
 import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import {
+  resolveComplaintEvidencePhotoUrls,
+  resolveComplaintValidationPhotoUrls,
+  resolveReadableComplaintPhotoUrl,
+} from "../../lib/complaintPhotoCache";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
 const GREEN = "#087A0D";
@@ -174,196 +184,16 @@ function normalizeConcernType(value, isEmergency = false, priority = "Normal") {
   return "Non-Emergency";
 }
 
-function normalizePhotoUrls(value) {
-  if (!value) return [];
-
-  if (Array.isArray(value)) return value.filter(Boolean);
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-
-      if (Array.isArray(parsed)) return parsed.filter(Boolean);
-    } catch {
-      return value ? [value] : [];
-    }
-  }
-
-  return [];
-}
-
-function extractComplaintPhotoPath(value) {
-  if (!value) return null;
-
-  const text = decodeURIComponent(String(value));
-  const publicMarker = "/storage/v1/object/public/complaint-photos/";
-  const signMarker = "/storage/v1/object/sign/complaint-photos/";
-
-  if (text.includes(publicMarker)) {
-    return text.split(publicMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (text.includes(signMarker)) {
-    return text.split(signMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (!/^https?:\/\//i.test(text)) {
-    return text.replace(/^complaint-photos\//, "").replace(/^\/+/, "");
-  }
-
-  return null;
-}
-
 async function createReadableComplaintPhotoUrl(value) {
-  if (!value) return null;
-
-  try {
-    const path = extractComplaintPhotoPath(value);
-
-    if (path) {
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from("complaint-photos")
-        .createSignedUrl(path, 60 * 60);
-
-      if (!signedError && signedData?.signedUrl) {
-        return signedData.signedUrl;
-      }
-
-      const { data: publicData } = supabase.storage
-        .from("complaint-photos")
-        .getPublicUrl(path);
-
-      if (publicData?.publicUrl) {
-        return publicData.publicUrl;
-      }
-    }
-
-    if (/^https?:\/\//i.test(String(value))) {
-      return String(value);
-    }
-  } catch (error) {
-    console.log("Resolve complaint photo error:", error);
-  }
-
-  return null;
+  return resolveReadableComplaintPhotoUrl(value);
 }
 
 async function resolveComplaintPhotoUrls(row) {
-  const rawUrls = normalizePhotoUrls(row?.photo_urls);
-  const resolvedUrls = [];
-
-  for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
-
-    if (resolvedUrl) {
-      resolvedUrls.push(resolvedUrl);
-    }
-  }
-
-  if (resolvedUrls.length > 0) {
-    return resolvedUrls;
-  }
-
-  if (!row?.id) return [];
-
-  try {
-    const { data: files, error } = await supabase.storage
-      .from("complaint-photos")
-      .list(String(row.id), {
-        limit: 20,
-        sortBy: { column: "name", order: "asc" },
-      });
-
-    if (error || !files?.length) return [];
-
-    const imageFiles = files.filter((file) => {
-      const name = String(file.name || "").toLowerCase();
-
-      // Skip citizen validation uploads stored in the same folder.
-      if (name.startsWith("validation-")) return false;
-
-      return (
-        name.endsWith(".jpg") ||
-        name.endsWith(".jpeg") ||
-        name.endsWith(".png") ||
-        name.endsWith(".heic") ||
-        name.endsWith(".heif")
-      );
-    });
-
-    const listedUrls = [];
-
-    for (const file of imageFiles) {
-      const storagePath = `${row.id}/${file.name}`;
-      const resolvedUrl = await createReadableComplaintPhotoUrl(storagePath);
-
-      if (resolvedUrl) {
-        listedUrls.push(resolvedUrl);
-      }
-    }
-
-    return listedUrls;
-  } catch (error) {
-    console.log("List complaint photos error:", error);
-    return [];
-  }
+  return resolveComplaintEvidencePhotoUrls(row);
 }
 
 async function resolveValidationPhotoUrls(row) {
-  const rawUrls = normalizeValidationPhotoUrls(
-    row?.citizen_validation_photo_urls ||
-      row?.validation_photo_urls ||
-      row?.citizen_feedback_photo_urls
-  );
-
-  const resolvedUrls = [];
-
-  for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
-
-    if (resolvedUrl) {
-      resolvedUrls.push(resolvedUrl);
-    }
-  }
-
-  if (resolvedUrls.length > 0) {
-    return resolvedUrls;
-  }
-
-  // Fallback: list validation-* files from the complaint storage folder.
-  if (!row?.id) return [];
-
-  try {
-    const { data: files, error } = await supabase.storage
-      .from("complaint-photos")
-      .list(String(row.id), {
-        limit: 20,
-        sortBy: { column: "name", order: "asc" },
-      });
-
-    if (error || !files?.length) return [];
-
-    const validationFiles = files.filter((file) => {
-      const name = String(file.name || "").toLowerCase();
-      return name.startsWith("validation-");
-    });
-
-    const listedUrls = [];
-
-    for (const file of validationFiles) {
-      const storagePath = `${row.id}/${file.name}`;
-      const resolvedUrl = await createReadableComplaintPhotoUrl(storagePath);
-
-      if (resolvedUrl) {
-        listedUrls.push(resolvedUrl);
-      }
-    }
-
-    return listedUrls;
-  } catch (error) {
-    console.log("List validation photos error:", error);
-    return [];
-  }
+  return resolveComplaintValidationPhotoUrls(row);
 }
 
 function formatDbDate(value) {
@@ -598,7 +428,8 @@ function isValidImageFormat(asset) {
     mimeType === "image/png" ||
     mimeType === "image/jpg" ||
     mimeType === "image/heic" ||
-    mimeType === "image/heif";
+    mimeType === "image/heif" ||
+    mimeType.startsWith("image/");
 
   const validUri =
     uri.endsWith(".jpg") ||
@@ -613,6 +444,16 @@ function isValidImageFormat(asset) {
     fileName.endsWith(".png") ||
     fileName.endsWith(".heic") ||
     fileName.endsWith(".heif");
+
+  // Android content:// URIs often omit mime/extension.
+  if (
+    !mimeType &&
+    (uri.startsWith("content://") ||
+      uri.startsWith("file://") ||
+      uri.startsWith("ph://"))
+  ) {
+    return true;
+  }
 
   return validMime || validUri || validFileName;
 }
@@ -705,24 +546,6 @@ function getValidationFeedback(row) {
     row.citizen_feedback ||
     ""
   );
-}
-
-function normalizeValidationPhotoUrls(value) {
-  if (!value) return [];
-
-  if (Array.isArray(value)) return value.filter(Boolean);
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-
-      if (Array.isArray(parsed)) return parsed.filter(Boolean);
-    } catch {
-      return value ? [value] : [];
-    }
-  }
-
-  return [];
 }
 
 function getValidationFileExtension(photo) {
@@ -1454,7 +1277,7 @@ export default function CitizenComplaints() {
     const remainingSlots = MAX_VALIDATION_PHOTOS - validationPhotos.length;
 
     if (remainingSlots <= 0) {
-      notify(
+      Alert.alert(
         "Photo Limit Reached",
         "You can only upload up to 3 validation photos."
       );
@@ -1469,7 +1292,8 @@ export default function CitizenComplaints() {
 
     for (const asset of assets.slice(0, remainingSlots)) {
       const validFormat = isValidImageFormat(asset);
-      const validSize = !asset.fileSize || Number(asset.fileSize) <= MAX_PHOTO_SIZE;
+      const validSize =
+        !asset.fileSize || Number(asset.fileSize) <= MAX_PHOTO_SIZE;
 
       if (!validFormat) {
         invalidFormatCount += 1;
@@ -1491,8 +1315,12 @@ export default function CitizenComplaints() {
       validAssets.push(preparedPhoto);
     }
 
-    if (invalidFormatCount > 0 || invalidSizeCount > 0 || failedPrepareCount > 0) {
-      notify(
+    if (
+      invalidFormatCount > 0 ||
+      invalidSizeCount > 0 ||
+      failedPrepareCount > 0
+    ) {
+      Alert.alert(
         "Some Photos Were Not Added",
         "Only PNG, JPG, JPEG, HEIC, and HEIF files are allowed, with a maximum size of 10MB per photo."
       );
@@ -1507,10 +1335,13 @@ export default function CitizenComplaints() {
 
   const openCameraForValidationPhoto = async () => {
     try {
+      await markMediaPickerSession("/citizen/complaints");
+
       const permission = await ImagePicker.requestCameraPermissionsAsync();
 
       if (permission.status !== "granted") {
-        notify(
+        scheduleClearMediaPickerSession();
+        Alert.alert(
           "Permission Needed",
           "Please allow camera access so you can take validation evidence photos."
         );
@@ -1518,16 +1349,19 @@ export default function CitizenComplaints() {
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         quality: 0.9,
       });
+
+      scheduleClearMediaPickerSession();
 
       if (result.canceled || !result.assets?.length) return;
 
       await addValidationPhotoAssets(result.assets);
     } catch (error) {
+      scheduleClearMediaPickerSession();
       console.log("Validation camera error:", error);
-      notify(
+      Alert.alert(
         "Camera Error",
         "The app could not open the camera. Please try again or choose a photo from your gallery."
       );
@@ -1539,17 +1373,20 @@ export default function CitizenComplaints() {
       const remainingSlots = MAX_VALIDATION_PHOTOS - validationPhotos.length;
 
       if (remainingSlots <= 0) {
-        notify(
+        Alert.alert(
           "Photo Limit Reached",
           "You can only upload up to 3 validation photos."
         );
         return;
       }
 
+      await markMediaPickerSession("/citizen/complaints");
+
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (permission.status !== "granted") {
-        notify(
+        scheduleClearMediaPickerSession();
+        Alert.alert(
           "Permission Needed",
           "Please allow photo access so you can upload validation evidence."
         );
@@ -1557,18 +1394,21 @@ export default function CitizenComplaints() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsMultipleSelection: true,
+        mediaTypes: ["images"],
+        allowsMultipleSelection: remainingSlots > 1,
         selectionLimit: remainingSlots,
         quality: 0.9,
       });
+
+      scheduleClearMediaPickerSession();
 
       if (result.canceled || !result.assets?.length) return;
 
       await addValidationPhotoAssets(result.assets);
     } catch (error) {
+      scheduleClearMediaPickerSession();
       console.log("Validation gallery error:", error);
-      notify(
+      Alert.alert(
         "Photo Error",
         "The app could not open or load the selected photo. Please try again."
       );
@@ -1579,14 +1419,15 @@ export default function CitizenComplaints() {
     Keyboard.dismiss();
 
     if (validationPhotos.length >= MAX_VALIDATION_PHOTOS) {
-      notify(
+      Alert.alert(
         "Photo Limit Reached",
         "You can only upload up to 3 validation photos."
       );
       return;
     }
 
-    notify(
+    // Native Alert sits above the validation Modal (in-app confirm dialog does not).
+    Alert.alert(
       "Add Validation Photo",
       "Take a photo with your camera or choose from your gallery.",
       [
