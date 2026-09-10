@@ -50,6 +50,12 @@ import {
   waitOffsetPageDelay,
 } from "../../lib/complaintPagination";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
+import { loadCitizenProfiles, loadCitizenProfile } from "../../lib/citizenProfileCache";
+import {
+  resolveComplaintEvidencePhotoUrls,
+  resolveComplaintValidationPhotoUrls,
+  resolveReadableComplaintPhotoUrl,
+} from "../../lib/complaintPhotoCache";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -75,14 +81,6 @@ function adminComplaintsCacheKey({
 }) {
   return `admin.complaints:${concernType}:${category}:${status}:${priority}`;
 }
-
-const COMPLAINT_PHOTOS_BUCKET = "complaint-photos";
-
-const STORAGE_BUCKET_PREFIXES = [
-  "validation-photos",
-  "complaint-validation-photos",
-  COMPLAINT_PHOTOS_BUCKET,
-];
 
 const emergencyPriorityLevels = ["Critical", "Urgent", "High"];
 
@@ -457,166 +455,20 @@ function formatDbTime(value) {
   });
 }
 
-function normalizePhotoUrls(value) {
-  if (!value) return [];
-
-  if (Array.isArray(value)) return value.filter(Boolean);
-
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-
-    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-      const inner = trimmed.slice(1, -1).trim();
-
-      if (!inner) return [];
-
-      return inner
-        .split(",")
-        .map((part) => part.trim().replace(/^"(.*)"$/, "$1"))
-        .filter(Boolean);
-    }
-
-    try {
-      const parsed = JSON.parse(trimmed);
-
-      if (Array.isArray(parsed)) return parsed.filter(Boolean);
-    } catch {
-      return trimmed ? [trimmed] : [];
-    }
-  }
-
-  return [];
-}
-
-function extractComplaintPhotoPath(value) {
-  if (!value) return null;
-
-  const text = decodeURIComponent(String(value));
-  const publicMarker = `/storage/v1/object/public/${COMPLAINT_PHOTOS_BUCKET}/`;
-  const signMarker = `/storage/v1/object/sign/${COMPLAINT_PHOTOS_BUCKET}/`;
-
-  if (text.includes(publicMarker)) {
-    return text.split(publicMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (text.includes(signMarker)) {
-    return text.split(signMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (!/^https?:\/\//i.test(text)) {
-    let cleaned = text.replace(/^\/+/, "");
-
-    for (const bucketName of STORAGE_BUCKET_PREFIXES) {
-      if (cleaned.startsWith(`${bucketName}/`)) {
-        cleaned = cleaned.slice(bucketName.length + 1);
-      }
-    }
-
-    return cleaned;
-  }
-
-  return null;
-}
-
 async function createReadableComplaintPhotoUrl(value) {
-  if (!value) return null;
-
-  try {
-    const path = extractComplaintPhotoPath(value);
-
-    if (path) {
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from(COMPLAINT_PHOTOS_BUCKET)
-        .createSignedUrl(path, 60 * 60);
-
-      if (!signedError && signedData?.signedUrl) {
-        return signedData.signedUrl;
-      }
-
-      const { data: publicData } = supabase.storage
-        .from(COMPLAINT_PHOTOS_BUCKET)
-        .getPublicUrl(path);
-
-      if (publicData?.publicUrl) {
-        return publicData.publicUrl;
-      }
-    }
-
-    if (/^https?:\/\//i.test(String(value))) {
-      return String(value);
-    }
-  } catch (error) {
-    console.log("Resolve complaint photo error:", error);
-  }
-
-  return null;
+  return resolveReadableComplaintPhotoUrl(value);
 }
 
 async function fetchCitizenProfileMap(citizenId) {
-  if (!citizenId) {
-    return {};
-  }
-
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id, email, full_name, contact_number, avatar_url")
-    .eq("id", citizenId)
-    .maybeSingle();
-
-  if (error || !data) {
-    if (error) {
-      console.log("Load citizen profile error:", error);
-    }
-    return {};
-  }
-
-  return { [data.id]: data };
+  return loadCitizenProfile(citizenId);
 }
 
 async function resolveComplaintPhotoUrls(row) {
-  const rawUrls = normalizePhotoUrls(
-    row?.photo_urls ||
-      row?.photos ||
-      row?.uploaded_photos ||
-      row?.uploadedPhotos ||
-      row?.image_urls
-  );
-
-  const resolvedUrls = [];
-
-  for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
-
-    if (resolvedUrl) {
-      resolvedUrls.push(resolvedUrl);
-    }
-  }
-
-  return resolvedUrls;
+  return resolveComplaintEvidencePhotoUrls(row);
 }
 
 async function resolveValidationPhotoUrls(row) {
-  const rawUrls = normalizePhotoUrls(
-    row?.citizen_validation_photo_urls ||
-      row?.citizen_feedback_photo_urls ||
-      row?.validation_photo_urls ||
-      row?.validation_photos ||
-      row?.validationPhotos ||
-      row?.validation_photo ||
-      row?.validationPhoto
-  );
-
-  const resolvedUrls = [];
-
-  for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
-
-    if (resolvedUrl) {
-      resolvedUrls.push(resolvedUrl);
-    }
-  }
-
-  return resolvedUrls;
+  return resolveComplaintValidationPhotoUrls(row);
 }
 
 function getCitizenValidationAnswer(row) {
@@ -693,13 +545,6 @@ function getComplaintSortTime(complaint) {
     : 0;
 
   return Math.max(validatedAt, createdAt);
-}
-
-function buildProfileMap(profiles = []) {
-  return (profiles || []).reduce((acc, profile) => {
-    acc[profile.id] = profile;
-    return acc;
-  }, {});
 }
 
 async function mapComplaintRow(row, profileMap = {}) {
@@ -817,6 +662,21 @@ function confirmAdminOverride(title, message) {
   });
 }
 
+function getAiValidationDecision(complaint) {
+  const approved = complaint?.aiValidationApproved === true;
+  const status = String(complaint?.aiValidationStatus || "").toLowerCase();
+
+  if (approved || status === "approved") {
+    return "approve";
+  }
+
+  if (status === "rejected" || status === "return") {
+    return "reject";
+  }
+
+  return "pending";
+}
+
 export default function AdminComplaints() {
   const router = useRouter();
   const pathname = usePathname();
@@ -825,11 +685,17 @@ export default function AdminComplaints() {
 
   const targetComplaintId = getRouteParam(params?.complaintId) || null;
   const shouldAutoOpenDetails = getRouteParam(params?.openDetails) === "true";
+  const routeStatusFilter = getRouteParam(params?.filter) || null;
 
   const lastAdminFilter = getPageCache(ADMIN_COMPLAINTS_LAST_FILTER_KEY) || {};
   const selectedConcernTypeInit = lastAdminFilter.concernType || "All Concerns";
   const selectedCategoryInit = lastAdminFilter.category || "All Category";
-  const selectedStatusInit = lastAdminFilter.status || "All Status";
+  const selectedStatusInit =
+    (routeStatusFilter && statusFilters.includes(routeStatusFilter)
+      ? routeStatusFilter
+      : null) ||
+    lastAdminFilter.status ||
+    "All Status";
   const selectedPriorityInit = lastAdminFilter.priority || "All Priority";
   const cachedAdminComplaints = getPageCache(
     adminComplaintsCacheKey({
@@ -873,6 +739,7 @@ export default function AdminComplaints() {
   const [autoOpenedComplaintId, setAutoOpenedComplaintId] = useState(null);
   const [runningAiValidation, setRunningAiValidation] = useState(false);
   const [returningComplaint, setReturningComplaint] = useState(false);
+  const [completingComplaint, setCompletingComplaint] = useState(false);
 
   useHideBottomNav(detailsVisible);
 
@@ -882,6 +749,11 @@ export default function AdminComplaints() {
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(cachedAdminComplaints?.hasMore !== false);
   const listViewportHeightRef = useRef(0);
+  const appliedQueryFilterRef = useRef(
+    routeStatusFilter && statusFilters.includes(routeStatusFilter)
+      ? routeStatusFilter
+      : null
+  );
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -962,7 +834,14 @@ export default function AdminComplaints() {
         .order("created_at", { ascending: false });
 
       listQuery = applyComplaintOffsetFilters(listQuery, {
-        status: selectedStatus === "All Status" ? undefined : selectedStatus,
+        ...(selectedStatus === "Pending"
+          ? { statusIn: ["Pending", "Assigned"] }
+          : selectedStatus === "For Validation"
+            ? { statusIn: ["For Validation", "Validated"] }
+            : {
+                status:
+                  selectedStatus === "All Status" ? undefined : selectedStatus,
+              }),
         category:
           selectedCategory === "All Category" ? undefined : selectedCategory,
         priority:
@@ -1001,14 +880,9 @@ export default function AdminComplaints() {
       let profileMap = {};
 
       if (citizenIds.length > 0) {
-        const { data: profilesData, error: profilesError } = await supabase
-          .from("profiles")
-          .select("id, email, full_name, contact_number, avatar_url")
-          .in("id", citizenIds);
-
-        if (!profilesError) {
-          profileMap = buildProfileMap(profilesData || []);
-        } else {
+        try {
+          profileMap = await loadCitizenProfiles(citizenIds);
+        } catch (profilesError) {
           console.log("Admin complaints citizen profiles load error:", profilesError);
         }
       }
@@ -1094,6 +968,22 @@ export default function AdminComplaints() {
   }, [complaints]);
 
   useEffect(() => {
+    const next = routeStatusFilter;
+
+    if (!next || !statusFilters.includes(next)) return;
+    if (appliedQueryFilterRef.current === next) return;
+
+    appliedQueryFilterRef.current = next;
+    setSelectedStatus(next);
+    setPageCache(ADMIN_COMPLAINTS_LAST_FILTER_KEY, {
+      concernType: selectedConcernType,
+      category: selectedCategory,
+      status: next,
+      priority: selectedPriority,
+    });
+  }, [routeStatusFilter, selectedConcernType, selectedCategory, selectedPriority]);
+
+  useEffect(() => {
     loadAllComplaints(true);
   }, [loadAllComplaints]);
 
@@ -1138,7 +1028,10 @@ export default function AdminComplaints() {
         selectedCategory === "All Category" || item.category === selectedCategory;
 
       const statusMatch =
-        selectedStatus === "All Status" || item.status === selectedStatus;
+        selectedStatus === "All Status" ||
+        item.status === selectedStatus ||
+        (selectedStatus === "Pending" && item.status === "Assigned") ||
+        (selectedStatus === "For Validation" && item.status === "Validated");
 
       const priorityMatch =
         selectedPriority === "All Priority" || item.priority === selectedPriority;
@@ -1403,8 +1296,49 @@ export default function AdminComplaints() {
     }
   };
 
+  const applyComplaintStatusLocally = useCallback((complaintId, nextStatus) => {
+    const matchId = String(complaintId || "");
+
+    setComplaints((prev) => {
+      const next = prev.map((item) =>
+        String(item.rawId || item.id) === matchId
+          ? { ...item, status: nextStatus }
+          : item
+      );
+      complaintsRef.current = next;
+      return next;
+    });
+
+    setSelectedComplaint((prev) =>
+      prev && String(prev.rawId || prev.id) === matchId
+        ? { ...prev, status: nextStatus }
+        : prev
+    );
+
+    const dashboard = getPageCache("admin.dashboard");
+    if (dashboard?.counts) {
+      const counts = { ...dashboard.counts };
+      const bump = (key, delta) => {
+        if (typeof counts[key] !== "number") return;
+        counts[key] = Math.max(0, counts[key] + delta);
+      };
+
+      bump("forValidation", -1);
+      if (nextStatus === "Completed") {
+        bump("completed", 1);
+      } else if (nextStatus === "In Progress") {
+        bump("inProgress", 1);
+      }
+
+      setPageCache("admin.dashboard", {
+        ...dashboard,
+        counts,
+      });
+    }
+  }, []);
+
   const markAsComplete = async () => {
-    if (!selectedComplaint) return;
+    if (!selectedComplaint || completingComplaint || returningComplaint) return;
 
     if (selectedComplaint.status !== "For Validation") {
       notify(
@@ -1430,19 +1364,16 @@ export default function AdminComplaints() {
       if (!overrideCitizenNo) return;
     }
 
-    const aiApproved = selectedComplaint.aiValidationApproved === true;
-    const aiStatus = String(
-      selectedComplaint.aiValidationStatus || ""
-    ).toLowerCase();
+    const aiDecision = getAiValidationDecision(selectedComplaint);
 
-    if (!aiApproved && aiStatus === "rejected") {
+    if (aiDecision === "reject") {
       const overrideAiReject = await confirmAdminOverride(
         "AI recommends return",
         selectedComplaint.aiValidationReason ||
           "AI did not approve the validation evidence. You can still mark complete after human review. Continue?"
       );
       if (!overrideAiReject) return;
-    } else if (!aiApproved && aiStatus !== "approved") {
+    } else if (aiDecision === "pending") {
       const continueWithoutAi = await confirmAdminOverride(
         "Proceed without AI approval",
         "AI validation is advisory only. You can mark this complete based on your human review, or cancel and run AI validation first. Mark complete now?"
@@ -1452,83 +1383,86 @@ export default function AdminComplaints() {
 
     const complaintId = selectedComplaint.rawId || selectedComplaint.id;
     const oldStatus = selectedComplaint.status;
+    const complaintSnapshot = selectedComplaint;
 
-    const { error } = await supabase
-      .from("complaints")
-      .update({ status: "Completed" })
-      .eq("id", complaintId);
+    setCompletingComplaint(true);
 
-    if (error) {
-      notify("Update Failed", error.message);
-      return;
-    }
+    try {
+      const { error } = await supabase
+        .from("complaints")
+        .update({ status: "Completed" })
+        .eq("id", complaintId);
 
-    if (selectedComplaint.citizenId) {
-      await createCitizenNotificationAndPush({
-        citizenId: selectedComplaint.citizenId,
-        complaintId,
-        shortId: selectedComplaint.id,
-        type: "status",
-        title: "Complaint Completed",
-        message: `Your complaint #${selectedComplaint.id} has been marked as completed by the admin.`,
-        status: "Completed",
-        metadata: {
-          old_status: oldStatus,
-          new_status: "Completed",
-          assigned_office: selectedComplaint.department,
-          title: selectedComplaint.title,
-          category: selectedComplaint.category,
-        },
-      });
-    }
+      if (error) {
+        notify("Update Failed", error.message);
+        return;
+      }
 
-    const deptHeadNotify = await notifyDepartmentHeadsComplaintCompleted({
-      complaint: selectedComplaint,
-      department: selectedComplaint.department,
-    });
-
-    if (!deptHeadNotify?.notifiedCount) {
-      console.log(
-        "Department head completion thank-you not sent:",
-        deptHeadNotify
+      // Update status + confirmation toast immediately; notify others in background.
+      applyComplaintStatusLocally(complaintId, "Completed");
+      notify(
+        "Complaint Completed",
+        "The complaint has been marked as completed."
       );
+
+      void (async () => {
+        try {
+          if (complaintSnapshot.citizenId) {
+            await createCitizenNotificationAndPush({
+              citizenId: complaintSnapshot.citizenId,
+              complaintId,
+              shortId: complaintSnapshot.id,
+              type: "status",
+              title: "Complaint Completed",
+              message: `Your complaint #${complaintSnapshot.id} has been marked as completed by the admin.`,
+              status: "Completed",
+              metadata: {
+                old_status: oldStatus,
+                new_status: "Completed",
+                assigned_office: complaintSnapshot.department,
+                title: complaintSnapshot.title,
+                category: complaintSnapshot.category,
+              },
+            });
+          }
+
+          const deptHeadNotify = await notifyDepartmentHeadsComplaintCompleted({
+            complaint: complaintSnapshot,
+            department: complaintSnapshot.department,
+          });
+
+          if (!deptHeadNotify?.notifiedCount) {
+            console.log(
+              "Department head completion thank-you not sent:",
+              deptHeadNotify
+            );
+          }
+
+          writeAuditLog({
+            action: "complaint_complete",
+            title: "Complaint Completed",
+            description: `Complaint #${complaintSnapshot.id} was marked as completed.`,
+            entityType: "complaint",
+            entityId: complaintId,
+            actorRole: "admin",
+            metadata: {
+              assigned_office: complaintSnapshot.department,
+              category: complaintSnapshot.category,
+            },
+          });
+
+          loadAllComplaints(false);
+        } catch (sideEffectError) {
+          console.log("Complete complaint side effects error:", sideEffectError);
+        }
+      })();
+    } finally {
+      setCompletingComplaint(false);
     }
-
-    setComplaints((prev) =>
-      prev.map((item) =>
-        (item.rawId || item.id) === complaintId
-          ? { ...item, status: "Completed" }
-          : item
-      )
-    );
-
-    setSelectedComplaint((prev) =>
-      prev ? { ...prev, status: "Completed" } : prev
-    );
-
-    notify(
-      "Complaint Completed",
-      deptHeadNotify?.notifiedCount
-        ? "The complaint has been marked as completed. A completion acknowledgment has been sent to the assigned department head."
-        : "The complaint has been marked as completed."
-    );
-    writeAuditLog({
-      action: "complaint_complete",
-      title: "Complaint Completed",
-      description: `Complaint #${selectedComplaint.id} was marked as completed.`,
-      entityType: "complaint",
-      entityId: complaintId,
-      actorRole: "admin",
-      metadata: {
-        assigned_office: selectedComplaint.department,
-        category: selectedComplaint.category,
-      },
-    });
-    loadAllComplaints(false);
   };
 
   const returnForReview = async () => {
-    if (!selectedComplaint || returningComplaint) return;
+    if (!selectedComplaint || returningComplaint || completingComplaint) return;
 
     if (selectedComplaint.status !== "For Validation") {
       notify(
@@ -1538,7 +1472,9 @@ export default function AdminComplaints() {
       return;
     }
 
-    if (selectedComplaint.aiValidationApproved === true) {
+    const aiDecision = getAiValidationDecision(selectedComplaint);
+
+    if (aiDecision === "approve") {
       const overrideAiApprove = await confirmAdminOverride(
         "AI recommends complete",
         "AI approved the validation evidence. You can still return this to the department after human review. Continue?"
@@ -1549,6 +1485,7 @@ export default function AdminComplaints() {
     const reason = buildReturnReasonFromAi(selectedComplaint);
     const complaintId = selectedComplaint.rawId || selectedComplaint.id;
     const oldStatus = selectedComplaint.status;
+    const complaintSnapshot = selectedComplaint;
 
     setReturningComplaint(true);
 
@@ -1565,64 +1502,67 @@ export default function AdminComplaints() {
 
       await markComplaintFeedbackReturned(complaintId);
 
-      const deptHeadNotify = await notifyDepartmentHeadsReturnedForWork({
-        complaint: selectedComplaint,
-        department: selectedComplaint.department,
-        reason,
-      });
-
-      if (selectedComplaint.citizenId) {
-        await createCitizenNotificationAndPush({
-          citizenId: selectedComplaint.citizenId,
-          complaintId,
-          shortId: selectedComplaint.id,
-          type: "status",
-          title: "Complaint Returned to Department",
-          message: `Your complaint #${selectedComplaint.id} was returned to the assigned office for further action.`,
-          status: "In Progress",
-          metadata: {
-            old_status: oldStatus,
-            new_status: "In Progress",
-            assigned_office: selectedComplaint.department,
-            title: selectedComplaint.title,
-            category: selectedComplaint.category,
-            return_reason: reason,
-          },
-        });
-      }
-
-      setComplaints((prev) =>
-        prev.map((item) =>
-          (item.rawId || item.id) === complaintId
-            ? { ...item, status: "In Progress" }
-            : item
-        )
-      );
-
-      setSelectedComplaint((prev) =>
-        prev ? { ...prev, status: "In Progress" } : prev
-      );
-
+      // Update status + confirmation toast immediately; notify others in background.
+      applyComplaintStatusLocally(complaintId, "In Progress");
       notify(
         "Returned to Department",
-        deptHeadNotify?.notifiedCount
-          ? "The department head was notified. The complaint is In Progress again."
-          : "The complaint is In Progress again so the department can continue work."
+        "The complaint is In Progress again so the department can continue work."
       );
-      writeAuditLog({
-        action: "complaint_return",
-        title: "Complaint Returned",
-        description: `Complaint #${selectedComplaint.id} was returned to the department: ${reason}`,
-        entityType: "complaint",
-        entityId: complaintId,
-        actorRole: "admin",
-        metadata: {
-          return_reason: reason,
-          assigned_office: selectedComplaint.department,
-          ai_validation_status: selectedComplaint.aiValidationStatus,
-        },
-      });
-      loadAllComplaints(false);
+
+      void (async () => {
+        try {
+          const deptHeadNotify = await notifyDepartmentHeadsReturnedForWork({
+            complaint: complaintSnapshot,
+            department: complaintSnapshot.department,
+            reason,
+          });
+
+          if (complaintSnapshot.citizenId) {
+            await createCitizenNotificationAndPush({
+              citizenId: complaintSnapshot.citizenId,
+              complaintId,
+              shortId: complaintSnapshot.id,
+              type: "status",
+              title: "Complaint Returned to Department",
+              message: `Your complaint #${complaintSnapshot.id} was returned to the assigned office for further action.`,
+              status: "In Progress",
+              metadata: {
+                old_status: oldStatus,
+                new_status: "In Progress",
+                assigned_office: complaintSnapshot.department,
+                title: complaintSnapshot.title,
+                category: complaintSnapshot.category,
+                return_reason: reason,
+              },
+            });
+          }
+
+          if (!deptHeadNotify?.notifiedCount) {
+            console.log(
+              "Department head return notification not sent:",
+              deptHeadNotify
+            );
+          }
+
+          writeAuditLog({
+            action: "complaint_return",
+            title: "Complaint Returned",
+            description: `Complaint #${complaintSnapshot.id} was returned to the department: ${reason}`,
+            entityType: "complaint",
+            entityId: complaintId,
+            actorRole: "admin",
+            metadata: {
+              return_reason: reason,
+              assigned_office: complaintSnapshot.department,
+              ai_validation_status: complaintSnapshot.aiValidationStatus,
+            },
+          });
+
+          loadAllComplaints(false);
+        } catch (sideEffectError) {
+          console.log("Return complaint side effects error:", sideEffectError);
+        }
+      })();
     } catch (returnError) {
       console.log("Return complaint error:", returnError);
       notify(
@@ -2190,16 +2130,24 @@ export default function AdminComplaints() {
                     <View style={styles.actionRow}>
                       <TouchableOpacity
                         activeOpacity={0.8}
-                        style={styles.completeButton}
+                        style={[
+                          styles.completeButton,
+                          completingComplaint && styles.completeButtonDisabled,
+                        ]}
                         onPress={markAsComplete}
+                        disabled={completingComplaint || returningComplaint}
                       >
-                        <MaterialCommunityIcons
-                          name="check-circle-outline"
-                          size={16}
-                          color={WHITE}
-                        />
+                        {completingComplaint ? (
+                          <ActivityIndicator size="small" color={WHITE} />
+                        ) : (
+                          <MaterialCommunityIcons
+                            name="check-circle-outline"
+                            size={16}
+                            color={WHITE}
+                          />
+                        )}
                         <Text style={styles.completeButtonText}>
-                          Mark Complete
+                          {completingComplaint ? "Updating..." : "Mark Complete"}
                         </Text>
                       </TouchableOpacity>
 
@@ -2210,15 +2158,21 @@ export default function AdminComplaints() {
                           returningComplaint && styles.returnButtonDisabled,
                         ]}
                         onPress={returnForReview}
-                        disabled={returningComplaint}
+                        disabled={returningComplaint || completingComplaint}
                       >
-                        <MaterialCommunityIcons
-                          name="reply-outline"
-                          size={16}
-                          color={GREEN}
-                        />
+                        {returningComplaint ? (
+                          <ActivityIndicator size="small" color={GREEN} />
+                        ) : (
+                          <MaterialCommunityIcons
+                            name="reply-outline"
+                            size={16}
+                            color={GREEN}
+                          />
+                        )}
                         <Text style={styles.returnButtonText}>
-                          Return to Department
+                          {returningComplaint
+                            ? "Returning..."
+                            : "Return to Department"}
                         </Text>
                       </TouchableOpacity>
                     </View>
@@ -3071,6 +3025,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     flexDirection: "row",
     gap: 6,
+  },
+
+  completeButtonDisabled: {
+    opacity: 0.7,
   },
 
   completeButtonText: {
