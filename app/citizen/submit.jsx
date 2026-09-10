@@ -13,7 +13,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import { Image as ExpoImage } from "expo-image";
 import * as Location from "expo-location";
 import { useFocusEffect, usePathname, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
@@ -32,20 +32,23 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { PageSkeleton } from "../../components/skeletons";
+import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import QuickCaptureCamera from "../../components/QuickCaptureCamera";
+import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
 import { resolveCommonAddress } from "../../lib/addressUtils";
 import {
   getProfileDisplayName,
   notifyAdminsNewComplaint,
 } from "../../lib/adminNotificationService";
+import {
+  markMediaPickerSession,
+  scheduleClearMediaPickerSession,
+} from "../../lib/navigationPersistence";
 import { isInsideBogoCity } from "../../lib/bogoCityBounds";
 import { HEADER_TOP_SPACING } from "../../constants/screenLayout";
 import ComplaintMapView from "../../components/ComplaintMapView";
-import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import { useKeyboardInset } from "../../hooks/useKeyboardInset";
-import {
-  BOTTOM_NAV_CONTENT_INSET,
-} from "../../components/PersistentBottomNav";
-import { getKeyboardLift } from "../../lib/platformUi";
+import { isKeyboardControllerLinked } from "../../lib/keyboardController";
 import { notifyDepartmentHeadsNewAssignment } from "../../lib/departmentHeadNotificationService";
 import { writeAuditLog } from "../../lib/auditLogService";
 import { notifyCitizenDuplicateSubmission } from "../../lib/citizenNotificationService";
@@ -75,7 +78,6 @@ import { notify } from "../../lib/toast";
 import { getPageCache, setPageCache } from "../../lib/pageDataCache";
 import { createVoiceTranscriber } from "../../lib/voiceRecording";
 
-const SUBMIT_KEYBOARD_OFFSET = 124;
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 const GREEN = "#087A0D";
@@ -93,11 +95,45 @@ const MAX_PHOTOS = 3;
 const MAX_PHOTO_SIZE = 10 * 1024 * 1024;
 const CITIZEN_SUBMIT_CACHE_KEY = "citizen.submit";
 const CITIZEN_PROFILE_CACHE_KEY = "citizen.profile";
-/** Bottom composer height used for scroll content clearance. */
-const MESSAGE_INPUT_HEIGHT = 64;
-const INPUT_KEYBOARD_GAP = Platform.OS === "android" ? 18 : 10;
-const SUBMIT_ANDROID_NAV_FLOOR = 48;
+/** Small breath between composer and keyboard top. */
+const INPUT_KEYBOARD_GAP = 8;
 const SUBMIT_COMPOSER_GAP = 8;
+
+/** Lazy require — import-time TurboModule checks can miss the native module. */
+function getKeyboardControllerModule() {
+  try {
+    if (!isKeyboardControllerLinked()) return null;
+    return require("react-native-keyboard-controller");
+  } catch {
+    return null;
+  }
+}
+
+/** Prefer resize so KeyboardAwareScrollView can dock the field above the keys. */
+function lockSubmitKeyboardToOverlay() {
+  if (Platform.OS !== "android") return;
+  const mod = getKeyboardControllerModule();
+  if (!mod?.KeyboardController) return;
+  try {
+    const mode =
+      mod.AndroidSoftInputModes?.SOFT_INPUT_ADJUST_RESIZE ?? 16;
+    mod.KeyboardController.setInputMode(mode);
+  } catch {
+    // ignore
+  }
+}
+
+function unlockSubmitKeyboardMode() {
+  if (Platform.OS !== "android") return;
+  const mod = getKeyboardControllerModule();
+  if (!mod?.KeyboardController) return;
+  try {
+    mod.KeyboardController.setDefaultMode();
+  } catch {
+    // ignore
+  }
+}
+
 const PH_MOBILE_REGEX = /^09\d{9}$/;
 
 const SPOKEN_DIGIT_WORDS = {
@@ -572,6 +608,8 @@ export default function CitizenSubmit() {
   const scrollViewRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const textInputRef = useRef(null);
+  const lastChatContentHeightRef = useRef(0);
+  const scrollOffsetYRef = useRef(0);
   const isMountedRef = useRef(true);
   const isSubmittingRef = useRef(false);
   const bogoWarningShownRef = useRef(false);
@@ -585,8 +623,7 @@ export default function CitizenSubmit() {
   const messageFromVoiceRef = useRef(false);
 
   const [message, setMessage] = useState("");
-  const { keyboardHeight, androidNeedsManualPadding } =
-    useKeyboardInset();
+  const { keyboardHeight } = useKeyboardInset();
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -613,6 +650,9 @@ export default function CitizenSubmit() {
   const [isLocating, setIsLocating] = useState(false);
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [isPreparingPhotos, setIsPreparingPhotos] = useState(false);
+  const [quickCameraVisible, setQuickCameraVisible] = useState(false);
+  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
+  const [reviewPhotoUri, setReviewPhotoUri] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [screenStartTime] = useState(new Date());
@@ -626,7 +666,8 @@ export default function CitizenSubmit() {
   });
 
   const hasSelectedPhotos = selectedPhotos.length > 0;
-  const shouldShowInput = chatStep < 3;
+  // Title (0) + description (1) only — contact comes from the citizen profile.
+  const shouldShowInput = chatStep < 2;
   const isKeyboardOpen = keyboardHeight > 0;
 
   useEffect(() => {
@@ -637,33 +678,18 @@ export default function CitizenSubmit() {
     chatStepRef.current = chatStep;
   }, [chatStep]);
 
-  const keyboardVerticalOffset = insets.top + SUBMIT_KEYBOARD_OFFSET;
-  const submitBottomLimit = useMemo(() => {
-    const systemNavInset = Math.max(
-      insets.bottom,
-      Platform.OS === "android" ? SUBMIT_ANDROID_NAV_FLOOR : 0
-    );
-
-    return {
-      systemNavInset,
-      composerPadding: SUBMIT_COMPOSER_GAP,
-      scrollPadding: BOTTOM_NAV_CONTENT_INSET,
-    };
-  }, [insets.bottom]);
-
+  // Drop dock padding while the keyboard is open so the field sits lower,
+  // almost on the keys. Keep safe-area padding only when the keyboard is closed.
   const composerDockPadding = isKeyboardOpen
-    ? getKeyboardLift(keyboardHeight, INPUT_KEYBOARD_GAP, insets.bottom, {
-        androidNeedsManualPadding,
-      })
-    : submitBottomLimit.composerPadding;
+    ? 2
+    : Math.max(insets.bottom, INPUT_KEYBOARD_GAP) + SUBMIT_COMPOSER_GAP;
 
   const scrollBottomPadding = shouldShowInput
-    ? MESSAGE_INPUT_HEIGHT + 24
-    : reviewEditField
-      ? getKeyboardLift(keyboardHeight, 24, insets.bottom, {
-          androidNeedsManualPadding,
-        }) + 160
-      : submitBottomLimit.scrollPadding;
+    ? 12
+    : Math.max(insets.bottom, 8) + 12;
+
+  // Bottom nav is hidden on Submit — don't reserve nav height under the photo card.
+  const mainBottomInset = 0;
 
   const profileContactForUpdates = useMemo(
     () => getValidStoredContact(contactNumber, profileContactRef.current) || "",
@@ -728,7 +754,14 @@ export default function CitizenSubmit() {
 
   const scrollToBottom = (animated = true) => {
     requestAnimationFrame(() => {
-      scrollViewRef.current?.scrollToEnd({ animated });
+      scrollViewRef.current?.scrollToEnd?.({ animated });
+    });
+  };
+
+  const restoreScrollOffset = () => {
+    const y = scrollOffsetYRef.current;
+    requestAnimationFrame(() => {
+      scrollViewRef.current?.scrollTo({ x: 0, y, animated: false });
     });
   };
 
@@ -739,10 +772,7 @@ export default function CitizenSubmit() {
     profileContactRef.current = normalized;
     setContactNumber(normalized);
     setUsedProfileContact(true);
-    setContactMessage({
-      text: normalized,
-      time: formatTime(new Date()),
-    });
+    setContactMessage(null);
 
     if (advanceToPhotoStep && chatStepRef.current < 3) {
       setChatStep(3);
@@ -771,11 +801,11 @@ export default function CitizenSubmit() {
       profileContactRef.current = resolved;
       setContactNumber((prev) => prev || resolved);
 
-      if (chatStepRef.current === 2) {
+      if (chatStepRef.current >= 1 && chatStepRef.current < 3) {
         applyProfileContact(resolved, { advanceToPhotoStep: true });
       }
     } catch {
-      // Chat will still ask for a number if the profile value is missing.
+      // Chat will still require a profile number before submit.
     }
   };
 
@@ -791,9 +821,18 @@ export default function CitizenSubmit() {
     syncProfileContact();
   }, []);
 
+  useLayoutEffect(() => {
+    // CRITICAL: do not let Android pan/resize the whole page — that scrolls
+    // the header off-screen. Overlay the keyboard and lift only the input.
+    lockSubmitKeyboardToOverlay();
+    return () => unlockSubmitKeyboardMode();
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       syncProfileContact();
+      lockSubmitKeyboardToOverlay();
+      return () => unlockSubmitKeyboardMode();
     }, [])
   );
 
@@ -808,19 +847,6 @@ export default function CitizenSubmit() {
   }, [hasSelectedPhotos]);
 
   useEffect(() => {
-    if (chatStep === 2 && shouldShowInput) {
-      textInputRef.current?.blur();
-      Keyboard.dismiss();
-
-      const timer = setTimeout(() => {
-        textInputRef.current?.focus();
-      }, 450);
-
-      return () => clearTimeout(timer);
-    }
-  }, [chatStep, shouldShowInput]);
-
-  useEffect(() => {
     const timer = setInterval(() => {
       setCurrentDate(new Date());
     }, 1000);
@@ -832,7 +858,7 @@ export default function CitizenSubmit() {
     if (reviewEditField) {
       scrollToBottom(false);
     }
-  }, [scrollBottomPadding, reviewEditField]);
+  }, [reviewEditField]);
 
   useEffect(() => {
     if (shouldShowInput) {
@@ -976,18 +1002,9 @@ export default function CitizenSubmit() {
   };
 
   const sendChatMessage = (rawText) => {
-    let cleanMessage = String(rawText || "").trim();
-
-    if (chatStep === 2) {
-      cleanMessage = sanitizePhilippineMobileInput(cleanMessage);
-    }
+    const cleanMessage = String(rawText || "").trim();
 
     if (!cleanMessage) return false;
-
-    if (chatStep === 2 && !isValidPhilippineMobile(cleanMessage)) {
-      notify("Invalid Contact Number", getContactNumberErrorMessage());
-      return false;
-    }
 
     const newMessage = {
       text: cleanMessage,
@@ -1015,13 +1032,17 @@ export default function CitizenSubmit() {
       if (savedContact) {
         applyProfileContact(savedContact, { advanceToPhotoStep: true });
       } else {
+        // Never ask the citizen to type a number — pull from profile (or block).
         setUsedProfileContact(false);
-        setChatStep(2);
+        setContactMessage(null);
+        setChatStep(3);
+        notify(
+          "Contact Number Required",
+          "Add a valid contact number in your profile before submitting a complaint."
+        );
+        // Fetch in background; if found, attach it for submit.
+        syncProfileContact();
       }
-    } else if (chatStep === 2) {
-      setContactNumber(cleanMessage);
-      setContactMessage(newMessage);
-      setChatStep(3);
     }
 
     messageFromVoiceRef.current = false;
@@ -1061,32 +1082,6 @@ export default function CitizenSubmit() {
           "No Speech Detected",
           "We couldn't catch that. Please try speaking again, or type your message."
         );
-        return;
-      }
-
-      if (chatStep === 2) {
-        const phone = sanitizeSpokenContactNumber(transcript);
-
-        if (!phone) {
-          notify(
-            "Couldn't Catch Number",
-            "Please say your 11-digit contact number starting with 09, or type it."
-          );
-          return;
-        }
-
-        messageFromVoiceRef.current = true;
-        setMessage(phone);
-
-        if (!isValidPhilippineMobile(phone)) {
-          notify(
-            "Check Contact Number",
-            "We heard part of your number. Clear or edit it, then tap send when the 11-digit number starting with 09 looks correct."
-          );
-          return;
-        }
-
-        sendChatMessage(phone);
         return;
       }
 
@@ -1146,23 +1141,19 @@ export default function CitizenSubmit() {
       // Extra pause so Expo Go releases the player before recording prepares.
       await new Promise((resolve) => setTimeout(resolve, 320));
 
-      const field =
-        chatStep === 2 ? "contact" : chatStep === 0 ? "title" : "description";
+      const field = chatStep === 0 ? "title" : "description";
 
       const transcriber = createVoiceTranscriber({
         field,
-        deepgramMode: chatStep === 2 ? "en" : "ph",
+        deepgramMode: "ph",
         onTranscript: (text) => {
           if (!isMountedRef.current) return;
           if (!isRecordingRef.current && !messageFromVoiceRef.current) {
             return;
           }
 
-          const nextText =
-            chatStep === 2 ? sanitizeSpokenContactNumber(text) : text;
-
           messageFromVoiceRef.current = true;
-          setMessage(nextText);
+          setMessage(text);
           scrollToBottom(false);
         },
         onStatus: (status) => {
@@ -1403,30 +1394,12 @@ export default function CitizenSubmit() {
 
   const openCameraForPhotos = async () => {
     try {
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-
-      if (!permission.granted) {
-        notify(
-          "Permission Needed",
-          "Please allow camera access so you can take evidence photos."
-        );
-        return;
-      }
-
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ["images"],
-        quality: 0.8,
-        base64: false,
-        exif: false,
-      });
-
-      if (result.canceled || !result.assets || result.assets.length === 0) {
-        return;
-      }
-
-      await addPickedPhotoAssets(result.assets);
+      // Mark before camera/permission UI so reopen→home cannot yank Submit.
+      await markMediaPickerSession("/citizen/submit");
+      setQuickCameraVisible(true);
     } catch (error) {
       console.log("Camera picker error:", error);
+      scheduleClearMediaPickerSession(0);
       notify(
         "Camera Error",
         "The app could not open the camera. Please try again or choose a photo from your gallery."
@@ -1434,11 +1407,28 @@ export default function CitizenSubmit() {
     }
   };
 
+  const handleQuickCameraCaptured = async (asset) => {
+    setQuickCameraVisible(false);
+    // Delay clear until AppState settles after permission/camera UI.
+    scheduleClearMediaPickerSession();
+    if (!asset?.uri) return;
+    await addPickedPhotoAssets([asset]);
+  };
+
+  const closeQuickCamera = async () => {
+    setQuickCameraVisible(false);
+    scheduleClearMediaPickerSession();
+  };
+
   const openGalleryForPhotos = async () => {
     try {
+      // Protect Submit before permission sheet or gallery can background the app.
+      await markMediaPickerSession("/citizen/submit");
+
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (!permission.granted) {
+        scheduleClearMediaPickerSession();
         notify(
           "Permission Needed",
           "Please allow photo access so you can upload evidence."
@@ -1457,12 +1447,17 @@ export default function CitizenSubmit() {
         exif: false,
       });
 
+      // Keep protection briefly — clearing immediately races AppState "active"
+      // and incorrectly sends citizens back to Home after attaching a photo.
+      scheduleClearMediaPickerSession();
+
       if (result.canceled || !result.assets || result.assets.length === 0) {
         return;
       }
 
       await addPickedPhotoAssets(result.assets);
     } catch (error) {
+      scheduleClearMediaPickerSession();
       console.log("Image picker error:", error);
       notify(
         "Photo Error",
@@ -1541,6 +1536,17 @@ export default function CitizenSubmit() {
     setSelectedPhotos((prevPhotos) =>
       prevPhotos.filter((photo) => photo.id !== photoId)
     );
+  };
+
+  const openPhotoReview = (uri) => {
+    if (!uri) return;
+    setReviewPhotoUri(uri);
+    setPhotoViewerVisible(true);
+  };
+
+  const closePhotoReview = () => {
+    setPhotoViewerVisible(false);
+    setReviewPhotoUri(null);
   };
 
   const uploadComplaintPhotos = async (complaintId) => {
@@ -1687,8 +1693,8 @@ export default function CitizenSubmit() {
 
     if (!resolvedContact) {
       notify(
-        "Incomplete Complaint",
-        "Please complete the complaint title, description, and contact number."
+        "Contact Number Required",
+        "Add a valid contact number in your profile before submitting a complaint."
       );
       return;
     }
@@ -2134,9 +2140,7 @@ export default function CitizenSubmit() {
           <Text style={styles.recordingText}>
             {isTranscribing
               ? "Transcribing..."
-              : chatStep === 2
-                ? `Listening for number • ${formatRecordingTime(recordingSeconds)}`
-                : `Listening • ${formatRecordingTime(recordingSeconds)}`}
+              : `Listening • ${formatRecordingTime(recordingSeconds)}`}
           </Text>
 
           <Text style={styles.recordingHint}>
@@ -2153,11 +2157,7 @@ export default function CitizenSubmit() {
           ]}
         >
           <TextInput
-            key={
-              chatStep === 2
-                ? "contact-number-input"
-                : `message-input-${chatStep}`
-            }
+            key={`message-input-${chatStep}`}
             ref={textInputRef}
             style={[
               styles.textInput,
@@ -2165,35 +2165,26 @@ export default function CitizenSubmit() {
             ]}
             value={message}
             onChangeText={(text) => {
-              const nextText =
-                chatStep === 2 ? sanitizePhilippineMobileInput(text) : text;
-
               messageFromVoiceRef.current = false;
-              setMessage(nextText);
-              scrollToBottom(false);
+              setMessage(text);
             }}
             placeholder={
               isRecording
-                ? chatStep === 2
-                  ? "Say your 11-digit number..."
-                  : "Speak now..."
+                ? "Speak now..."
                 : isTranscribing
                 ? "Transcribing accurately..."
                 : chatStep === 0
                 ? "Type your complaint title..."
-                : chatStep === 1
-                ? "Describe what happened..."
-                : "09XXXXXXXXX"
+                : "Describe what happened..."
             }
             placeholderTextColor="#9A9A9A"
             returnKeyType="send"
             onSubmitEditing={handleSendMessage}
             blurOnSubmit={false}
             editable={!isRecording && !isTranscribing}
-            keyboardType={chatStep === 2 ? "phone-pad" : "default"}
-            inputMode={chatStep === 2 ? "tel" : "text"}
-            textContentType={chatStep === 2 ? "telephoneNumber" : "none"}
-            maxLength={chatStep === 2 ? 11 : undefined}
+            keyboardType="default"
+            inputMode="text"
+            textContentType="none"
           />
 
           <TouchableOpacity
@@ -2278,21 +2269,11 @@ export default function CitizenSubmit() {
 
           {renderUserMessage(descriptionMessage)}
 
-          {chatStep >= 2 &&
-            !usedProfileContact &&
-            renderBotMessage(
-              "May I have your contact number so we can reach you for updates?",
-              formatTime(new Date())
-            )}
-
-          {renderUserMessage(contactMessage)}
-
           {chatStep >= 3 &&
-            usedProfileContact &&
             renderBotMessage(
               profileContactForUpdates
                 ? `We'll use your contact number from your profile for updates: ${profileContactForUpdates}.`
-                : "We'll use the contact number from your profile for updates.",
+                : "Add a contact number in your profile so we can reach you for updates.",
               formatTime(new Date())
             )}
 
@@ -2325,13 +2306,18 @@ export default function CitizenSubmit() {
                     <View style={styles.photoPreviewRow}>
                       {selectedPhotos.map((photo) => (
                         <View key={photo.id} style={styles.photoPreviewBox}>
-                          <ExpoImage
-                            source={{ uri: photo.uri }}
-                            style={styles.photoPreview}
-                            contentFit="cover"
-                            cachePolicy="memory-disk"
-                            recyclingKey={photo.id}
-                          />
+                          <TouchableOpacity
+                            activeOpacity={0.85}
+                            onPress={() => openPhotoReview(photo.uri)}
+                          >
+                            <ExpoImage
+                              source={{ uri: photo.uri }}
+                              style={styles.photoPreview}
+                              contentFit="cover"
+                              cachePolicy="memory-disk"
+                              recyclingKey={photo.id}
+                            />
+                          </TouchableOpacity>
 
                           <TouchableOpacity
                             style={styles.removePhotoButton}
@@ -2413,12 +2399,14 @@ export default function CitizenSubmit() {
                 { multiline: true }
               )}
 
-              {renderReviewEditableField(
-                "contact",
-                "Contact Number",
-                contactNumber,
-                { keyboardType: "phone-pad", maxLength: 11 }
-              )}
+              <View style={styles.reviewItem}>
+                <View style={styles.reviewTextBox}>
+                  <Text style={styles.reviewLabel}>Contact Number</Text>
+                  <Text style={styles.reviewValue}>
+                    {contactNumber || "From your profile"}
+                  </Text>
+                </View>
+              </View>
 
               <View style={styles.reviewItem}>
                 <View style={styles.reviewTextBox}>
@@ -2427,13 +2415,18 @@ export default function CitizenSubmit() {
                   <View style={styles.reviewPhotoRow}>
                     {selectedPhotos.map((photo) => (
                       <View key={photo.id} style={styles.reviewPhotoWrapper}>
-                        <ExpoImage
-                          source={{ uri: photo.uri }}
-                          style={styles.reviewPhoto}
-                          contentFit="cover"
-                          cachePolicy="memory-disk"
-                          recyclingKey={photo.id}
-                        />
+                        <TouchableOpacity
+                          activeOpacity={0.85}
+                          onPress={() => openPhotoReview(photo.uri)}
+                        >
+                          <ExpoImage
+                            source={{ uri: photo.uri }}
+                            style={styles.reviewPhoto}
+                            contentFit="cover"
+                            cachePolicy="memory-disk"
+                            recyclingKey={photo.id}
+                          />
+                        </TouchableOpacity>
 
                         <TouchableOpacity
                           activeOpacity={0.8}
@@ -2538,15 +2531,10 @@ export default function CitizenSubmit() {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={["top"]}>
+    <SafeAreaView style={styles.root} edges={["top"]}>
       <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
 
-      <View
-        style={[
-          styles.mainContainer,
-          { paddingBottom: submitBottomLimit.systemNavInset },
-        ]}
-      >
+      <View style={styles.pinnedHeader}>
         <View style={styles.header}>
           <TouchableOpacity
             activeOpacity={0.7}
@@ -2571,62 +2559,96 @@ export default function CitizenSubmit() {
 
           <View style={styles.assistantTextBox}>
             <Text style={styles.assistantTitle}>CitiSense Assistant</Text>
-            <Text style={styles.assistantSubtitle}>AI-guided complaint form</Text>
+            <Text style={styles.assistantSubtitle}>
+              AI-guided complaint form
+            </Text>
           </View>
         </View>
+      </View>
 
+      <View style={[styles.chatPane, { paddingBottom: mainBottomInset }]}>
         <KeyboardAwareScrollView
+          ref={scrollViewRef}
           style={styles.chatScroll}
-          innerRef={(node) => {
-            scrollViewRef.current = node;
-          }}
-          suppressContentPadding
-          smoothKeyboard
-          enableOnAndroid
-          enableAutomaticScroll={Boolean(reviewEditField)}
-          extraScrollHeight={120}
-          keyboardVerticalOffset={keyboardVerticalOffset}
           showsVerticalScrollIndicator={false}
           scrollEventThrottle={16}
           overScrollMode="never"
-          contentInsetAdjustmentBehavior="never"
+          enableOnAndroid
+          enableAutomaticScroll
+          enableResetScrollToCoords={false}
+          bottomOffset={0}
+          extraScrollHeight={0}
+          extraHeight={0}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={
+            Platform.OS === "ios" ? "interactive" : "on-drag"
+          }
           contentContainerStyle={[
             styles.scrollContent,
             { paddingBottom: scrollBottomPadding },
           ]}
-          onContentSizeChange={() => {
-            if (shouldShowInput || reviewEditField) {
-              scrollToBottom(false);
-            }
+          onScroll={(event) => {
+            scrollOffsetYRef.current =
+              event?.nativeEvent?.contentOffset?.y ?? 0;
+          }}
+          onContentSizeChange={(_w, h) => {
+            const prev = lastChatContentHeightRef.current;
+            lastChatContentHeightRef.current = h;
+            if (!shouldShowInput && !reviewEditField) return;
+            if (h <= prev + 8) return;
+            scrollToBottom(false);
           }}
         >
           {renderChatScrollContent()}
-        </KeyboardAwareScrollView>
 
-        {shouldShowInput ? (
-          <View
-            style={[
-              styles.messageInputDock,
-              { paddingBottom: composerDockPadding },
-            ]}
-          >
-            {renderMessageComposer()}
-          </View>
-        ) : null}
+          {shouldShowInput ? (
+            <>
+              <View style={styles.composerSpacer} />
+              <View
+                style={[
+                  styles.messageInputDock,
+                  styles.messageInputDockInScroll,
+                  { paddingBottom: composerDockPadding },
+                ]}
+              >
+                {renderMessageComposer()}
+              </View>
+            </>
+          ) : null}
+        </KeyboardAwareScrollView>
       </View>
+
+      <QuickCaptureCamera
+        visible={quickCameraVisible}
+        onClose={closeQuickCamera}
+        onCaptured={handleQuickCameraCaptured}
+      />
+
+      <FullscreenPhotoViewer
+        visible={photoViewerVisible}
+        uri={reviewPhotoUri}
+        onClose={closePhotoReview}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  root: {
     flex: 1,
     backgroundColor: WHITE,
   },
 
-  mainContainer: {
+  pinnedHeader: {
+    backgroundColor: WHITE,
+    zIndex: 5,
+    elevation: 4,
+  },
+
+  chatPane: {
     flex: 1,
     backgroundColor: BG,
+    minHeight: 0,
   },
 
   loader: {
@@ -2731,6 +2753,8 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: H_PADDING,
     paddingTop: 16,
+    flexGrow: 1,
+    justifyContent: "flex-start",
   },
 
   composerSection: {
@@ -2738,9 +2762,22 @@ const styles = StyleSheet.create({
   },
 
   messageInputDock: {
-    paddingTop: 2,
+    paddingTop: 6,
     paddingHorizontal: 13,
     backgroundColor: BG,
+    borderTopWidth: 1,
+    borderTopColor: "#E8EBE7",
+  },
+
+  messageInputDockInScroll: {
+    marginHorizontal: -H_PADDING,
+    width: SCREEN_WIDTH,
+    alignSelf: "center",
+  },
+
+  composerSpacer: {
+    flexGrow: 1,
+    minHeight: 12,
   },
 
   chatDatePill: {
@@ -2960,7 +2997,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 18,
     paddingVertical: 24,
-    marginBottom: 18,
+    marginBottom: 8,
   },
 
   uploadInner: {
