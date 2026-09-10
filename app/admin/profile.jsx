@@ -13,10 +13,12 @@ import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
+  Dimensions,
   Image,
   Keyboard,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -24,16 +26,16 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import AuditLogsModal from "../../components/AuditLogsModal";
 import { PageSkeleton } from "../../components/skeletons";
 import { writeAuditLog } from "../../lib/auditLogService";
 import { clearPageCache, getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
 import { setProfileAvatarUrl } from "../../lib/profileAvatarStore";
+import { syncOwnProfileRow } from "../../lib/syncOwnProfile";
 import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
 import {
@@ -57,6 +59,7 @@ const RED = "#D71920";
 const BLUE = "#315A9A";
 
 const H_PADDING = 20;
+const PROFILE_SHEET_MAX_HEIGHT = Math.round(Dimensions.get("screen").height * 0.9);
 const AVATAR_BUCKET = "avatars";
 const ADMIN_PROFILE_CACHE_KEY = "admin.profile";
 
@@ -201,6 +204,8 @@ async function createReadableAvatarUrl(value) {
 export default function AdminProfile() {
   const router = useRouter();
   const pathname = usePathname();
+  const insets = useSafeAreaInsets();
+  const sheetBottomPad = Math.max(insets.bottom, 8);
   const { unreadNotificationCount } = useAdminUnreadNotifications();
 
   const cachedPage = getPageCache(ADMIN_PROFILE_CACHE_KEY);
@@ -399,14 +404,13 @@ export default function AdminProfile() {
   }) => {
     if (!user?.id) return;
 
-    await supabase.from("profiles").upsert({
-      id: user.id,
+    await syncOwnProfileRow({
+      userId: user.id,
+      fullName: fullName || displayName,
       email: email || displayEmail,
-      role: "admin",
-      full_name: fullName || displayName,
-      contact_number: contact || null,
+      contactNumber: contact || null,
       department: office || null,
-      avatar_url: avatarValue || null,
+      avatarUrl: avatarValue || null,
     });
   };
 
@@ -805,13 +809,10 @@ export default function AdminProfile() {
             </View>
 
             <View style={styles.profileMainInfo}>
-              <Text style={styles.profileName} numberOfLines={1}>
+              <Text style={styles.profileName} numberOfLines={2}>
                 {displayName}
               </Text>
               <Text style={styles.profileRole}>{displayRole}</Text>
-              <Text style={styles.profileEmail} numberOfLines={1}>
-                {displayEmail}
-              </Text>
             </View>
 
             <TouchableOpacity
@@ -917,92 +918,102 @@ export default function AdminProfile() {
           transparent
           onRequestClose={closeEditProfile}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <View style={styles.modalOverlay}>
-                <View style={styles.editSheet}>
-                  <View style={styles.modalHandle} />
+          <View style={styles.modalOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={Keyboard.dismiss}
+            />
+            <View
+              style={[styles.editSheet, { paddingBottom: sheetBottomPad }]}
+            >
+              <View style={styles.modalHandle} />
 
-                  <View style={styles.modalHeaderRow}>
-                    <Text style={styles.modalTitle}>Edit Profile</Text>
+              <View style={styles.modalHeaderRow}>
+                <Text style={styles.modalTitle}>Edit Profile</Text>
 
-                    <TouchableOpacity
-                      activeOpacity={0.75}
-                      style={styles.modalCloseButton}
-                      onPress={closeEditProfile}
-                    >
-                      <Feather name="x" size={21} color={TEXT} />
-                    </TouchableOpacity>
-                  </View>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  style={styles.modalCloseButton}
+                  onPress={closeEditProfile}
+                >
+                  <Feather name="x" size={21} color={TEXT} />
+                </TouchableOpacity>
+              </View>
 
-                  <KeyboardAwareScrollView
-                    modal
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={styles.modalScrollContent}
-                  >
-                    <Text style={styles.inputLabel}>Full Name</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={fullNameDraft}
-                      onChangeText={setFullNameDraft}
-                      placeholder="Enter full name"
-                      placeholderTextColor="#9A9A9A"
-                    />
+              <KeyboardAwareScrollView
+                modal
+                bottomOffset={72}
+                style={styles.editSheetScroll}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={
+                  Platform.OS === "ios" ? "interactive" : "on-drag"
+                }
+                contentContainerStyle={styles.modalScrollContent}
+              >
+                <Text style={styles.inputLabel}>Full Name</Text>
+                <TextInput
+                  style={styles.input}
+                  value={fullNameDraft}
+                  onChangeText={setFullNameDraft}
+                  placeholder="Enter full name"
+                  placeholderTextColor="#9A9A9A"
+                />
 
-                    <Text style={styles.inputLabel}>Email Address</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={emailDraft}
-                      onChangeText={setEmailDraft}
-                      placeholder="Enter email address"
-                      placeholderTextColor="#9A9A9A"
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                    />
+                <Text style={styles.inputLabel}>Email Address</Text>
+                <TextInput
+                  style={styles.input}
+                  value={emailDraft}
+                  onChangeText={setEmailDraft}
+                  placeholder="Enter email address"
+                  placeholderTextColor="#9A9A9A"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
 
-                    <Text style={styles.inputLabel}>Contact Number</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={contactDraft}
-                      onChangeText={setContactDraft}
-                      placeholder="Enter contact number"
-                      placeholderTextColor="#9A9A9A"
-                      keyboardType="phone-pad"
-                    />
+                <Text style={styles.inputLabel}>Contact Number</Text>
+                <TextInput
+                  style={styles.input}
+                  value={contactDraft}
+                  onChangeText={setContactDraft}
+                  placeholder="Enter contact number"
+                  placeholderTextColor="#9A9A9A"
+                  keyboardType="phone-pad"
+                />
 
-                    <Text style={styles.inputLabel}>Office</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={officeDraft}
-                      onChangeText={setOfficeDraft}
-                      placeholder="Enter office"
-                      placeholderTextColor="#9A9A9A"
-                    />
+                <Text style={styles.inputLabel}>Office</Text>
+                <TextInput
+                  style={styles.input}
+                  value={officeDraft}
+                  onChangeText={setOfficeDraft}
+                  placeholder="Enter office"
+                  placeholderTextColor="#9A9A9A"
+                />
 
-                    <Text style={styles.inputLabel}>Location</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={locationDraft}
-                      onChangeText={setLocationDraft}
-                      placeholder="Enter location"
-                      placeholderTextColor="#9A9A9A"
-                    />
+                <Text style={styles.inputLabel}>Location</Text>
+                <TextInput
+                  style={styles.input}
+                  value={locationDraft}
+                  onChangeText={setLocationDraft}
+                  placeholder="Enter location"
+                  placeholderTextColor="#9A9A9A"
+                />
 
-                    <TouchableOpacity
-                      activeOpacity={0.8}
-                      style={styles.saveButton}
-                      onPress={saveProfileChanges}
-                      disabled={savingProfile}
-                    >
-                      {savingProfile ? (
-                        <ActivityIndicator size="small" color={WHITE} />
-                      ) : (
-                        <Text style={styles.saveButtonText}>Save Changes</Text>
-                      )}
-                    </TouchableOpacity>
-                  </KeyboardAwareScrollView>
-                </View>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  style={styles.saveButton}
+                  onPress={saveProfileChanges}
+                  disabled={savingProfile}
+                >
+                  {savingProfile ? (
+                    <ActivityIndicator size="small" color={WHITE} />
+                  ) : (
+                    <Text style={styles.saveButtonText}>Save Changes</Text>
+                  )}
+                </TouchableOpacity>
+              </KeyboardAwareScrollView>
             </View>
-          </TouchableWithoutFeedback>
+          </View>
         </Modal>
 
         <Modal
@@ -1011,64 +1022,74 @@ export default function AdminProfile() {
           transparent
           onRequestClose={closePasswordModal}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <View style={styles.modalOverlay}>
-                <View style={styles.passwordSheet}>
-                  <View style={styles.modalHandle} />
+          <View style={styles.modalOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={Keyboard.dismiss}
+            />
+            <View
+              style={[styles.passwordSheet, { paddingBottom: sheetBottomPad }]}
+            >
+              <View style={styles.modalHandle} />
 
-                  <View style={styles.modalHeaderRow}>
-                    <Text style={styles.modalTitle}>Change Password</Text>
+              <View style={styles.modalHeaderRow}>
+                <Text style={styles.modalTitle}>Change Password</Text>
 
-                    <TouchableOpacity
-                      activeOpacity={0.75}
-                      style={styles.modalCloseButton}
-                      onPress={closePasswordModal}
-                    >
-                      <Feather name="x" size={21} color={TEXT} />
-                    </TouchableOpacity>
-                  </View>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  style={styles.modalCloseButton}
+                  onPress={closePasswordModal}
+                >
+                  <Feather name="x" size={21} color={TEXT} />
+                </TouchableOpacity>
+              </View>
 
-                  <KeyboardAwareScrollView
-                    modal
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={styles.modalScrollContent}
-                  >
-                  <Text style={styles.inputLabel}>New Password</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={newPassword}
-                    onChangeText={setNewPassword}
-                    placeholder="Enter new password"
-                    placeholderTextColor="#9A9A9A"
-                    secureTextEntry
-                  />
+              <KeyboardAwareScrollView
+                modal
+                bottomOffset={24}
+                style={styles.editSheetScroll}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={
+                  Platform.OS === "ios" ? "interactive" : "on-drag"
+                }
+                contentContainerStyle={styles.modalScrollContent}
+              >
+                <Text style={styles.inputLabel}>New Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={newPassword}
+                  onChangeText={setNewPassword}
+                  placeholder="Enter new password"
+                  placeholderTextColor="#9A9A9A"
+                  secureTextEntry
+                />
 
-                  <Text style={styles.inputLabel}>Confirm Password</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={confirmPassword}
-                    onChangeText={setConfirmPassword}
-                    placeholder="Confirm new password"
-                    placeholderTextColor="#9A9A9A"
-                    secureTextEntry
-                  />
+                <Text style={styles.inputLabel}>Confirm Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  placeholder="Confirm new password"
+                  placeholderTextColor="#9A9A9A"
+                  secureTextEntry
+                />
 
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    style={styles.saveButton}
-                    onPress={handleChangePassword}
-                    disabled={changingPassword}
-                  >
-                    {changingPassword ? (
-                      <ActivityIndicator size="small" color={WHITE} />
-                    ) : (
-                      <Text style={styles.saveButtonText}>Update Password</Text>
-                    )}
-                  </TouchableOpacity>
-                  </KeyboardAwareScrollView>
-                </View>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  style={styles.saveButton}
+                  onPress={handleChangePassword}
+                  disabled={changingPassword}
+                >
+                  {changingPassword ? (
+                    <ActivityIndicator size="small" color={WHITE} />
+                  ) : (
+                    <Text style={styles.saveButtonText}>Update Password</Text>
+                  )}
+                </TouchableOpacity>
+              </KeyboardAwareScrollView>
             </View>
-          </TouchableWithoutFeedback>
+          </View>
         </Modal>
 
         <AuditLogsModal
@@ -1209,6 +1230,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 14,
+    position: "relative",
     shadowColor: "#000000",
     shadowOpacity: 0.12,
     shadowRadius: 6,
@@ -1259,6 +1281,7 @@ const styles = StyleSheet.create({
 
   profileMainInfo: {
     flex: 1,
+    paddingRight: 70,
   },
 
   profileName: {
@@ -1275,14 +1298,10 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
-  profileEmail: {
-    fontFamily: "Poppins_400Regular",
-    fontSize: 10.5,
-    color: "rgba(255,255,255,0.78)",
-    marginTop: 2,
-  },
-
   editButton: {
+    position: "absolute",
+    top: 12,
+    right: 12,
     minWidth: 58,
     height: 31,
     borderRadius: 16,
@@ -1291,6 +1310,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 9,
+    zIndex: 2,
   },
 
   editButtonText: {
@@ -1497,27 +1517,31 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
 
-  keyboardView: {
-    width: "100%",
-  },
-
   editSheet: {
-    maxHeight: "90%",
+    maxHeight: PROFILE_SHEET_MAX_HEIGHT,
+    width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     backgroundColor: WHITE,
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 28 : 18,
+    overflow: "hidden",
   },
 
   passwordSheet: {
+    maxHeight: PROFILE_SHEET_MAX_HEIGHT,
+    width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     backgroundColor: WHITE,
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 28 : 18,
+    overflow: "hidden",
+  },
+
+  editSheetScroll: {
+    flexShrink: 1,
+    minHeight: 0,
   },
 
   modalHandle: {
@@ -1552,7 +1576,7 @@ const styles = StyleSheet.create({
   },
 
   modalScrollContent: {
-    paddingBottom: 12,
+    paddingBottom: 0,
   },
 
   inputLabel: {
