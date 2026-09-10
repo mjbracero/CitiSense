@@ -14,10 +14,12 @@ import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Dimensions,
   Image,
   Keyboard,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -25,16 +27,16 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import AuditLogsModal from "../../components/AuditLogsModal";
 import { PageSkeleton } from "../../components/skeletons";
 import { writeAuditLog } from "../../lib/auditLogService";
 import { clearPageCache, getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
 import { setProfileAvatarUrl } from "../../lib/profileAvatarStore";
+import { syncOwnProfileRow } from "../../lib/syncOwnProfile";
 import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
 import {
@@ -61,6 +63,7 @@ const RED = "#D71920";
 const BLUE = "#315A9A";
 
 const H_PADDING = 20;
+const PROFILE_SHEET_MAX_HEIGHT = Math.round(Dimensions.get("screen").height * 0.9);
 const AVATAR_BUCKET = "avatars";
 const CITIZEN_PROFILE_CACHE_KEY = "citizen.profile";
 
@@ -165,6 +168,8 @@ function getImageExtension(asset) {
 export default function CitizenProfile() {
   const router = useRouter();
   const pathname = usePathname();
+  const insets = useSafeAreaInsets();
+  const sheetBottomPad = Math.max(insets.bottom, 8);
 
   const cachedProfile = getPageCache(CITIZEN_PROFILE_CACHE_KEY);
   const [user, setUser] = useState(cachedProfile?.user ?? null);
@@ -528,6 +533,15 @@ export default function CitizenProfile() {
         // Optional profile table sync only.
       }
 
+      await syncOwnProfileRow({
+        userId: user.id,
+        fullName: metadata.full_name || displayName,
+        email: displayEmail,
+        contactNumber: metadata.contact_number || null,
+        barangay: metadata.barangay || null,
+        avatarUrl: publicUrl,
+      });
+
       setUser(data?.user || user);
       setProfileAvatarUrl(publicUrl);
       const prevDashboard = getPageCache("citizen.dashboard") || {};
@@ -605,6 +619,19 @@ export default function CitizenProfile() {
       } catch {
         // Optional profile table sync only.
       }
+
+      await syncOwnProfileRow({
+        userId: user?.id,
+        fullName: cleanName,
+        email: displayEmail,
+        contactNumber: cleanContact,
+        barangay: cleanBarangay,
+        avatarUrl: metadata.avatar_url || null,
+      }).then(({ error: syncError }) => {
+        if (syncError) {
+          console.log("Citizen profile manage-users sync failed:", syncError);
+        }
+      });
 
       const emailChanged =
         cleanEmail.toLowerCase() !== displayEmail.toLowerCase();
@@ -820,13 +847,10 @@ export default function CitizenProfile() {
             </View>
 
             <View style={styles.profileMainInfo}>
-              <Text style={styles.profileName} numberOfLines={1}>
+              <Text style={styles.profileName} numberOfLines={2}>
                 {displayName}
               </Text>
               <Text style={styles.profileRole}>Citizen Account</Text>
-              <Text style={styles.profileEmail} numberOfLines={1}>
-                {displayEmail}
-              </Text>
             </View>
 
             <TouchableOpacity
@@ -937,28 +961,38 @@ export default function CitizenProfile() {
           transparent
           onRequestClose={closeEditProfile}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <View style={styles.modalOverlay}>
-                <View style={styles.editSheet}>
-                  <View style={styles.modalHandle} />
+          <View style={styles.modalOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={Keyboard.dismiss}
+            />
+            <View
+              style={[styles.editSheet, { paddingBottom: sheetBottomPad }]}
+            >
+              <View style={styles.modalHandle} />
 
-                  <View style={styles.modalHeaderRow}>
-                    <Text style={styles.modalTitle}>Edit Profile</Text>
+              <View style={styles.modalHeaderRow}>
+                <Text style={styles.modalTitle}>Edit Profile</Text>
 
-                    <TouchableOpacity
-                      activeOpacity={0.75}
-                      style={styles.modalCloseButton}
-                      onPress={closeEditProfile}
-                    >
-                      <Feather name="x" size={21} color={TEXT} />
-                    </TouchableOpacity>
-                  </View>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  style={styles.modalCloseButton}
+                  onPress={closeEditProfile}
+                >
+                  <Feather name="x" size={21} color={TEXT} />
+                </TouchableOpacity>
+              </View>
 
-                  <KeyboardAwareScrollView
-                    modal
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={styles.modalScrollContent}
-                  >
+              <KeyboardAwareScrollView
+                modal
+                style={styles.editSheetScroll}
+                enableOnAndroid
+                enableResetScrollToCoords={false}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="none"
+                contentContainerStyle={styles.modalScrollContent}
+              >
                     <Text style={styles.inputLabel}>Full Name</Text>
                     <TextInput
                       style={styles.input}
@@ -1019,10 +1053,9 @@ export default function CitizenProfile() {
                         <Text style={styles.saveButtonText}>Save Changes</Text>
                       )}
                     </TouchableOpacity>
-                  </KeyboardAwareScrollView>
-                </View>
+              </KeyboardAwareScrollView>
             </View>
-          </TouchableWithoutFeedback>
+          </View>
         </Modal>
 
         <Modal
@@ -1031,28 +1064,38 @@ export default function CitizenProfile() {
           transparent
           onRequestClose={closePasswordModal}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <View style={styles.modalOverlay}>
-                <View style={styles.passwordSheet}>
-                  <View style={styles.modalHandle} />
+          <View style={styles.modalOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={Keyboard.dismiss}
+            />
+            <View
+              style={[styles.passwordSheet, { paddingBottom: sheetBottomPad }]}
+            >
+              <View style={styles.modalHandle} />
 
-                  <View style={styles.modalHeaderRow}>
-                    <Text style={styles.modalTitle}>Change Password</Text>
+              <View style={styles.modalHeaderRow}>
+                <Text style={styles.modalTitle}>Change Password</Text>
 
-                    <TouchableOpacity
-                      activeOpacity={0.75}
-                      style={styles.modalCloseButton}
-                      onPress={closePasswordModal}
-                    >
-                      <Feather name="x" size={21} color={TEXT} />
-                    </TouchableOpacity>
-                  </View>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  style={styles.modalCloseButton}
+                  onPress={closePasswordModal}
+                >
+                  <Feather name="x" size={21} color={TEXT} />
+                </TouchableOpacity>
+              </View>
 
-                  <KeyboardAwareScrollView
-                    modal
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={styles.modalScrollContent}
-                  >
+              <KeyboardAwareScrollView
+                modal
+                style={styles.editSheetScroll}
+                enableOnAndroid
+                enableResetScrollToCoords={false}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="none"
+                contentContainerStyle={styles.modalScrollContent}
+              >
                   <Text style={styles.inputLabel}>New Password</Text>
                   <TextInput
                     style={styles.input}
@@ -1085,10 +1128,9 @@ export default function CitizenProfile() {
                       <Text style={styles.saveButtonText}>Update Password</Text>
                     )}
                   </TouchableOpacity>
-                  </KeyboardAwareScrollView>
-                </View>
+              </KeyboardAwareScrollView>
             </View>
-          </TouchableWithoutFeedback>
+          </View>
         </Modal>
 
         <Modal
@@ -1284,6 +1326,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 14,
+    position: "relative",
     shadowColor: "#000000",
     shadowOpacity: 0.12,
     shadowRadius: 6,
@@ -1334,6 +1377,7 @@ const styles = StyleSheet.create({
 
   profileMainInfo: {
     flex: 1,
+    paddingRight: 70,
   },
 
   profileName: {
@@ -1350,14 +1394,10 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
-  profileEmail: {
-    fontFamily: "Poppins_400Regular",
-    fontSize: 10.5,
-    color: "rgba(255,255,255,0.78)",
-    marginTop: 2,
-  },
-
   editButton: {
+    position: "absolute",
+    top: 12,
+    right: 12,
     minWidth: 58,
     height: 31,
     borderRadius: 16,
@@ -1366,6 +1406,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 9,
+    zIndex: 2,
   },
 
   editButtonText: {
@@ -1541,27 +1582,31 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
 
-  keyboardView: {
-    width: "100%",
-  },
-
   editSheet: {
-    maxHeight: "90%",
+    maxHeight: PROFILE_SHEET_MAX_HEIGHT,
+    width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     backgroundColor: WHITE,
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 28 : 18,
+    overflow: "hidden",
   },
 
   passwordSheet: {
+    maxHeight: PROFILE_SHEET_MAX_HEIGHT,
+    width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     backgroundColor: WHITE,
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 28 : 18,
+    overflow: "hidden",
+  },
+
+  editSheetScroll: {
+    flexShrink: 1,
+    minHeight: 0,
   },
 
   modalHandle: {
@@ -1596,7 +1641,7 @@ const styles = StyleSheet.create({
   },
 
   modalScrollContent: {
-    paddingBottom: 12,
+    paddingBottom: 0,
   },
 
   inputLabel: {
