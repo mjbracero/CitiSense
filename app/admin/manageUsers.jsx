@@ -8,7 +8,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/poppins";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -144,6 +144,7 @@ export default function AdminManageUsers() {
   const [deletingUserId, setDeletingUserId] = useState(null);
   const [banningUserId, setBanningUserId] = useState(null);
   const [searchText, setSearchText] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [roleModalUser, setRoleModalUser] = useState(null);
   const [selectedRole, setSelectedRole] = useState("citizen");
   const [selectedDepartment, setSelectedDepartment] = useState("");
@@ -152,6 +153,8 @@ export default function AdminManageUsers() {
   const usersRef = useRef(cachedUsers?.users ?? []);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(cachedUsers?.hasMore !== false);
+  const searchRef = useRef("");
+  const loadRequestIdRef = useRef(0);
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -165,7 +168,10 @@ export default function AdminManageUsers() {
   };
 
   const loadUsers = useCallback(async (showLoader = true, append = false) => {
-    const cached = !append ? getPageCache(ADMIN_USERS_CACHE_KEY) : null;
+    const search = String(searchRef.current || "").trim();
+    const requestId = ++loadRequestIdRef.current;
+    const cached =
+      !append && !search ? getPageCache(ADMIN_USERS_CACHE_KEY) : null;
 
     if (!append && cached?.users) {
       usersRef.current = cached.users;
@@ -184,7 +190,9 @@ export default function AdminManageUsers() {
     }
 
     try {
-      if (showLoader && !append && shouldShowPageLoader(ADMIN_USERS_CACHE_KEY)) {
+      if (showLoader && !append && shouldShowPageLoader(ADMIN_USERS_CACHE_KEY) && !search) {
+        setLoadingUsers(true);
+      } else if (showLoader && !append && search) {
         setLoadingUsers(true);
       }
 
@@ -207,14 +215,21 @@ export default function AdminManageUsers() {
       setCurrentAdminId(user.id);
 
       const offset = append ? usersRef.current.length : 0;
-      const pageSize = getUserPageSize(append, cached?.users?.length || 0);
+      const pageSize = search
+        ? getUserPageSize(append, 0)
+        : getUserPageSize(append, cached?.users?.length || 0);
 
       await waitOffsetPageDelay(offset);
 
       const { data, error, count } = await buildUserPageQuery(supabase, {
         offset,
         pageSize,
+        search,
       });
+
+      if (requestId !== loadRequestIdRef.current) {
+        return;
+      }
 
       if (error) {
         notify("Load Failed", error.message);
@@ -244,12 +259,14 @@ export default function AdminManageUsers() {
       hasMoreRef.current = more;
       setHasMoreUsers(more);
 
-      setPageCache(ADMIN_USERS_CACHE_KEY, {
-        users: nextUsers,
-        currentAdminId: user.id,
-        total,
-        hasMore: more,
-      });
+      if (!search) {
+        setPageCache(ADMIN_USERS_CACHE_KEY, {
+          users: nextUsers,
+          currentAdminId: user.id,
+          total,
+          hasMore: more,
+        });
+      }
     } catch (error) {
       console.log("Load users error:", error);
       if (shouldShowPageLoader(ADMIN_USERS_CACHE_KEY) && !append) {
@@ -258,12 +275,27 @@ export default function AdminManageUsers() {
         setUsersTotal(0);
       }
     } finally {
-      setLoadingUsers(false);
-      setRefreshing(false);
-      loadingMoreRef.current = false;
-      setLoadingMoreUsers(false);
+      if (requestId === loadRequestIdRef.current) {
+        setLoadingUsers(false);
+        setRefreshing(false);
+        loadingMoreRef.current = false;
+        setLoadingMoreUsers(false);
+      }
     }
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(String(searchText || "").trim());
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  useEffect(() => {
+    searchRef.current = debouncedSearch;
+    loadUsers(true, false);
+  }, [debouncedSearch, loadUsers]);
 
   useFocusEffect(
     useCallback(() => {
@@ -271,34 +303,35 @@ export default function AdminManageUsers() {
     }, [loadUsers])
   );
 
+  useEffect(() => {
+    const channel = supabase
+      .channel(`admin-manage-users-profiles-${Date.now()}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "profiles",
+        },
+        () => {
+          loadUsers(false);
+        }
+      )
+      .subscribe((status) => {
+        console.log("Admin manage users realtime status:", status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadUsers]);
+
   const onRefresh = () => {
     setRefreshing(true);
     loadUsers(false);
   };
 
-  const filteredUsers = useMemo(() => {
-    const keyword = normalizeText(searchText);
-
-    if (!keyword) return users;
-
-    return users.filter((item) => {
-      const name = normalizeText(item.full_name);
-      const email = normalizeText(item.email);
-      const role = roleLabelFrom(item.role).toLowerCase();
-      const department = normalizeText(item.department);
-      const contact = normalizeText(item.contact_number);
-      const banned = isUserBanned(item) ? "banned" : "";
-
-      return (
-        name.includes(keyword) ||
-        email.includes(keyword) ||
-        role.includes(keyword) ||
-        department.includes(keyword) ||
-        contact.includes(keyword) ||
-        banned.includes(keyword)
-      );
-    });
-  }, [users, searchText]);
+  const filteredUsers = users;
 
   const applyUserUpdate = (updatedUser) => {
     if (!updatedUser?.id) return;
@@ -768,7 +801,7 @@ export default function AdminManageUsers() {
           <Text style={styles.sectionTitle}>User Accounts</Text>
           <Text style={styles.userCount}>
             {searchText.trim()
-              ? `${filteredUsers.length} shown`
+              ? `${users.length} of ${usersTotal || users.length} found`
               : `${users.length} of ${usersTotal || users.length}`}
           </Text>
         </View>
@@ -807,17 +840,15 @@ export default function AdminManageUsers() {
               </View>
             }
             onEndReached={() => {
-              if (searchText.trim() || !hasMoreUsers) return;
+              if (!hasMoreUsers) return;
               loadUsers(false, true);
             }}
             onEndReachedThreshold={0.3}
             ListFooterComponent={
-              !searchText.trim() ? (
-                <ComplaintsLoadMoreFooter
-                  loading={loadingMoreUsers}
-                  label="Loading more users..."
-                />
-              ) : null
+              <ComplaintsLoadMoreFooter
+                loading={loadingMoreUsers}
+                label="Loading more users..."
+              />
             }
           />
         )}
