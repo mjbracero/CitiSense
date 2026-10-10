@@ -1,5 +1,5 @@
 # CitiSense backup API — runs on any Docker host (Render, Railway, Fly.io, a VPS).
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 
 # pg_dump must be the same major version as the database (Supabase = PostgreSQL 17).
 RUN apt-get update \

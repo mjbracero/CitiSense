@@ -29,7 +29,7 @@ jobs:
       BACKUP_TIMEZONE: Asia/Manila
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check secrets
         run: |
@@ -41,9 +41,9 @@ jobs:
           done
           echo "BACKUP_DIR=$RUNNER_TEMP/backups" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: backup-server/package-lock.json
 
@@ -81,7 +81,7 @@ jobs:
             console.log(`## CitiSense backup ${m.status}\n\n- **Backup:** ${m.id}\n- **Size:** ${mb} MB\n- **Duration:** ${Math.round(m.durationMs / 1000)} s\n\n| Bucket | Files | Failed |\n| --- | --- | --- |\n${rows}`);
           ' >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ steps.encrypt.outputs.id }}
           path: ${{ runner.temp }}/upload/${{ steps.encrypt.outputs.id }}.7z
