@@ -7,12 +7,13 @@ import {
   useRef,
 } from "react";
 import { StyleSheet, View } from "react-native";
-import { WebView } from "react-native-webview";
+import WebView from "./AppWebView";
 import {
   createMaplibreMapHtml,
   getMaplibreStyleUrl,
 } from "../lib/maplibreMapHtml";
 
+// ===== [MAP VIEW] MapLibre WebView map component (forwardRef) =====
 const ComplaintMapView = forwardRef(function ComplaintMapView(
   {
     latitude,
@@ -25,6 +26,7 @@ const ComplaintMapView = forwardRef(function ComplaintMapView(
   },
   ref
 ) {
+  // --- [MAP VIEW] Refs, coordinate & map HTML ---
   const webViewRef = useRef(null);
   const isMapReadyRef = useRef(false);
 
@@ -60,6 +62,7 @@ const ComplaintMapView = forwardRef(function ComplaintMapView(
     ]
   );
 
+  // --- [MAP VIEW] Sync marker to current coordinate ---
   const syncMarkerPosition = useCallback(() => {
     if (!webViewRef.current || !isMapReadyRef.current) {
       return;
@@ -76,6 +79,7 @@ const ComplaintMapView = forwardRef(function ComplaintMapView(
     );
   }, [coordinate]);
 
+  // --- [MAP VIEW] Imperative API: flyToLocation, resetMarker ---
   useImperativeHandle(ref, () => ({
     flyToLocation: (lng, lat) => {
       const parsedLat = Number(lat);
@@ -107,6 +111,7 @@ const ComplaintMapView = forwardRef(function ComplaintMapView(
     syncMarkerPosition();
   }, [syncMarkerPosition]);
 
+  // --- [MAP VIEW] WebView messages -> coordinate change ---
   const handleMessage = useCallback(
     (event) => {
       if (!onCoordinateChange) {
@@ -129,8 +134,10 @@ const ComplaintMapView = forwardRef(function ComplaintMapView(
     [onCoordinateChange]
   );
 
+  // --- [MAP VIEW] Render ---
   return (
     <View style={[styles.container, style]}>
+      {/* [MAP VIEW UI] Map WebView */}
       <WebView
         ref={webViewRef}
         style={styles.map}
@@ -152,6 +159,7 @@ const ComplaintMapView = forwardRef(function ComplaintMapView(
         pointerEvents={isInteractive ? "auto" : "none"}
       />
 
+      {/* [MAP VIEW UI] Touch blocker for preview (non-interactive) maps */}
       {!isInteractive && <View style={styles.touchBlocker} pointerEvents="auto" />}
     </View>
   );
@@ -159,10 +167,11 @@ const ComplaintMapView = forwardRef(function ComplaintMapView(
 
 export default ComplaintMapView;
 
+// ===== [MAP VIEW] Styles =====
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
   },
   map: {
     ...StyleSheet.absoluteFillObject,

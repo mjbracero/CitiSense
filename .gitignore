@@ -48,3 +48,14 @@ app-example
 
 # Supabase local CLI temp
 supabase/.temp/
+
+# privacy_module (Python)
+privacy_module/.venv/
+privacy_module/output/
+privacy_module/__pycache__/
+
+# Backup server (backups and secrets never go to git)
+backup-server/node_modules/
+backup-server/data/
+backup-server/restore-work/
+backup-server/.env

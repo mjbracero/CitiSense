@@ -14,16 +14,7 @@ import ComplaintsLoadMoreFooter from "./ComplaintsLoadMoreFooter";
 import { useHideBottomNav } from "./PersistentBottomNav";
 import { AuditLogListSkeleton } from "./skeletons";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const BLUE = "#315A9A";
-const ORANGE = "#F4A24C";
-const RED = "#D71920";
-
+// ===== [AUDIT LOGS MODAL] Helpers: date/time formatting, icon style per action =====
 function formatLogDate(value) {
   const date = new Date(value);
 
@@ -52,80 +43,81 @@ function getLogStyle(action) {
   const clean = String(action || "").toLowerCase();
 
   if (clean.includes("login") || clean.includes("signup")) {
-    return { icon: "log-in", color: GREEN, bg: LIGHT_GREEN };
+    return { icon: "log-in", color: "rgba(8, 122, 13, 1)", bg: "rgba(234, 246, 228, 1)" };
   }
 
   if (clean.includes("logout")) {
-    return { icon: "log-out", color: RED, bg: "#FFF0F0" };
+    return { icon: "log-out", color: "rgba(215, 25, 32, 1)", bg: "rgba(255, 240, 240, 1)" };
   }
 
   if (clean.includes("password")) {
-    return { icon: "lock", color: BLUE, bg: "#E8EEFF" };
+    return { icon: "lock", color: "rgba(49, 90, 154, 1)", bg: "rgba(232, 238, 255, 1)" };
   }
 
   if (clean.includes("avatar") || clean.includes("photo")) {
-    return { icon: "camera", color: BLUE, bg: "#E8EEFF" };
+    return { icon: "camera", color: "rgba(49, 90, 154, 1)", bg: "rgba(232, 238, 255, 1)" };
   }
 
   if (clean.includes("push") || clean.includes("email_alert")) {
-    return { icon: "bell", color: GREEN, bg: LIGHT_GREEN };
+    return { icon: "bell", color: "rgba(8, 122, 13, 1)", bg: "rgba(234, 246, 228, 1)" };
   }
 
   if (clean.includes("location")) {
-    return { icon: "map-pin", color: GREEN, bg: LIGHT_GREEN };
+    return { icon: "map-pin", color: "rgba(8, 122, 13, 1)", bg: "rgba(234, 246, 228, 1)" };
   }
 
   if (clean.includes("profile")) {
-    return { icon: "user", color: GREEN, bg: LIGHT_GREEN };
+    return { icon: "user", color: "rgba(8, 122, 13, 1)", bg: "rgba(234, 246, 228, 1)" };
   }
 
   if (clean.includes("complete")) {
-    return { icon: "check-circle", color: GREEN, bg: LIGHT_GREEN };
+    return { icon: "check-circle", color: "rgba(8, 122, 13, 1)", bg: "rgba(234, 246, 228, 1)" };
   }
 
   if (clean.includes("reassign")) {
-    return { icon: "shuffle", color: GREEN, bg: LIGHT_GREEN };
+    return { icon: "shuffle", color: "rgba(8, 122, 13, 1)", bg: "rgba(234, 246, 228, 1)" };
   }
 
   if (clean.includes("export") || clean.includes("csv")) {
-    return { icon: "download", color: BLUE, bg: "#E8EEFF" };
+    return { icon: "download", color: "rgba(49, 90, 154, 1)", bg: "rgba(232, 238, 255, 1)" };
   }
 
   if (clean.includes("ai_validation")) {
-    return { icon: "zap", color: BLUE, bg: "#E8EEFF" };
+    return { icon: "zap", color: "rgba(49, 90, 154, 1)", bg: "rgba(232, 238, 255, 1)" };
   }
 
   if (clean.includes("notification")) {
-    return { icon: "bell", color: MUTED, bg: "#F1F4F1" };
+    return { icon: "bell", color: "rgba(111, 119, 111, 1)", bg: "rgba(241, 244, 241, 1)" };
   }
 
   if (clean.includes("status") || clean.includes("return")) {
-    return { icon: "refresh-cw", color: ORANGE, bg: "#FFF2E8" };
+    return { icon: "refresh-cw", color: "rgba(244, 162, 76, 1)", bg: "rgba(255, 242, 232, 1)" };
   }
 
   if (clean.includes("validation")) {
-    return { icon: "clipboard", color: ORANGE, bg: "#FFF8EB" };
+    return { icon: "clipboard", color: "rgba(244, 162, 76, 1)", bg: "rgba(255, 248, 235, 1)" };
   }
 
   if (clean.includes("submit") || clean.includes("complaint")) {
-    return { icon: "file-text", color: BLUE, bg: "#E8EEFF" };
+    return { icon: "file-text", color: "rgba(49, 90, 154, 1)", bg: "rgba(232, 238, 255, 1)" };
   }
 
   if (clean.includes("role")) {
-    return { icon: "edit-3", color: BLUE, bg: "#E8EEFF" };
+    return { icon: "edit-3", color: "rgba(49, 90, 154, 1)", bg: "rgba(232, 238, 255, 1)" };
   }
 
   if (clean.includes("ban")) {
-    return { icon: "slash", color: RED, bg: "#FFF0F0" };
+    return { icon: "slash", color: "rgba(215, 25, 32, 1)", bg: "rgba(255, 240, 240, 1)" };
   }
 
   if (clean.includes("delete") || clean.includes("user")) {
-    return { icon: "user-x", color: RED, bg: "#FFF0F0" };
+    return { icon: "user-x", color: "rgba(215, 25, 32, 1)", bg: "rgba(255, 240, 240, 1)" };
   }
 
-  return { icon: "activity", color: MUTED, bg: "#F1F4F1" };
+  return { icon: "activity", color: "rgba(111, 119, 111, 1)", bg: "rgba(241, 244, 241, 1)" };
 }
 
+// ===== [AUDIT LOGS MODAL] Subcomponent: single log row =====
 function AuditLogRow({ item }) {
   const style = getLogStyle(item.action);
 
@@ -152,10 +144,12 @@ function AuditLogRow({ item }) {
   );
 }
 
+// ===== [AUDIT LOGS MODAL] Exported modal component =====
 export default function AuditLogsModal({
   visible,
   onClose,
 }) {
+  // --- [AUDIT LOGS MODAL] State & pagination refs ---
   const [logs, setLogs] = useState([]);
   const [logsTotal, setLogsTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -168,8 +162,10 @@ export default function AuditLogsModal({
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
 
+  // --- [AUDIT LOGS MODAL] Hide bottom nav while open ---
   useHideBottomNav(visible);
 
+  // --- [AUDIT LOGS MODAL] Load logs (initial, refresh, append page) ---
   const loadLogs = useCallback(async (showLoader = true, append = false) => {
     if (append) {
       if (loadingMoreRef.current || !hasMoreRef.current) return;
@@ -214,6 +210,7 @@ export default function AuditLogsModal({
     setLoadingMore(false);
   }, []);
 
+  // --- [AUDIT LOGS MODAL] Reload when modal opens ---
   useEffect(() => {
     if (visible) {
       remoteOffsetRef.current = 0;
@@ -222,6 +219,7 @@ export default function AuditLogsModal({
     }
   }, [visible, loadLogs]);
 
+  // --- [AUDIT LOGS MODAL] Render ---
   return (
     <Modal
       visible={visible}
@@ -231,8 +229,10 @@ export default function AuditLogsModal({
     >
       <View style={styles.overlay}>
         <View style={styles.sheet}>
+          {/* [AUDIT LOGS MODAL UI] Drag handle */}
           <View style={styles.handle} />
 
+          {/* [AUDIT LOGS MODAL UI] Header: title, count, close button */}
           <View style={styles.headerRow}>
             <View style={styles.headerTextBox}>
               <Text style={styles.title}>Audit Logs</Text>
@@ -247,10 +247,11 @@ export default function AuditLogsModal({
               style={styles.closeButton}
               onPress={onClose}
             >
-              <Feather name="x" size={21} color={TEXT} />
+              <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
             </TouchableOpacity>
           </View>
 
+          {/* [AUDIT LOGS MODAL UI] Skeleton or paginated log list (with empty state) */}
           {loading ? (
             <AuditLogListSkeleton count={7} />
           ) : (
@@ -267,8 +268,8 @@ export default function AuditLogsModal({
                     setRefreshing(true);
                     loadLogs(false);
                   }}
-                  tintColor={GREEN}
-                  colors={[GREEN]}
+                  tintColor="rgba(8, 122, 13, 1)"
+                  colors={["rgba(8, 122, 13, 1)"]}
                 />
               }
               onEndReached={() => {
@@ -284,7 +285,7 @@ export default function AuditLogsModal({
               }
               ListEmptyComponent={
                 <View style={styles.emptyBox}>
-                  <Feather name="activity" size={36} color={MUTED} />
+                  <Feather name="activity" size={36} color="rgba(111, 119, 111, 1)" />
                   <Text style={styles.emptyTitle}>No activity yet</Text>
                   <Text style={styles.emptyText}>
                     Your logins, profile changes, and complaint actions will
@@ -300,7 +301,9 @@ export default function AuditLogsModal({
   );
 }
 
+// ===== [AUDIT LOGS MODAL] Styles =====
 const styles = StyleSheet.create({
+  // --- Sheet & header ---
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -312,7 +315,7 @@ const styles = StyleSheet.create({
     minHeight: "62%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 18,
@@ -322,7 +325,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 5,
     borderRadius: 3,
-    backgroundColor: BORDER,
+    backgroundColor: "rgba(226, 231, 224, 1)",
     alignSelf: "center",
     marginBottom: 12,
   },
@@ -341,13 +344,13 @@ const styles = StyleSheet.create({
   title: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   subtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 3,
     lineHeight: 18,
   },
@@ -356,7 +359,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "#F1F4F1",
+    backgroundColor: "rgba(241, 244, 241, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -371,7 +374,7 @@ const styles = StyleSheet.create({
   loaderText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 10,
   },
 
@@ -379,11 +382,12 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
   },
 
+  // --- Log rows ---
   logRow: {
     flexDirection: "row",
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    borderBottomColor: "rgba(226, 231, 224, 1)",
   },
 
   logIcon: {
@@ -402,14 +406,14 @@ const styles = StyleSheet.create({
   logTitle: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 3,
   },
 
   logDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginBottom: 4,
   },
@@ -417,9 +421,10 @@ const styles = StyleSheet.create({
   logTime: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
+  // --- Empty state ---
   emptyBox: {
     alignItems: "center",
     paddingTop: 48,
@@ -429,14 +434,14 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 15,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 12,
   },
 
   emptyText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     lineHeight: 18,
     marginTop: 6,

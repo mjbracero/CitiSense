@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Animated } from "react-native";
 
-const BONE = "#E4EBE2";
+// ===== [SKELETON] Pulsing placeholder block =====
 
 export default function Skeleton({
   width,
@@ -38,7 +38,7 @@ export default function Skeleton({
         {
           height,
           borderRadius,
-          backgroundColor: BONE,
+          backgroundColor: "rgba(228, 235, 226, 1)",
           opacity,
         },
         width !== undefined ? { width } : null,

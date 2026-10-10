@@ -1,17 +1,25 @@
 import { Stack } from "expo-router";
 import { View, StyleSheet } from "react-native";
-import { APP_BACKGROUND } from "../../lib/platformUi";
 import PersistentBottomNav from "../../components/PersistentBottomNav";
 import useRoleLayoutBootstrap from "../../hooks/useRoleLayoutBootstrap";
 
+// ===== [CITIZEN LAYOUT] Router settings: default route =====
+export const unstable_settings = {
+  initialRouteName: "dashboard",
+};
+
+// ===== [CITIZEN LAYOUT] Layout component =====
 export default function CitizenLayout() {
+  // --- [CITIZEN LAYOUT] Role bootstrap (session/profile ready gate) ---
   const ready = useRoleLayoutBootstrap("citizen");
 
   if (!ready) {
     return <View style={styles.container} />;
   }
+  // --- [CITIZEN LAYOUT] Render ---
   return (
     <View style={styles.container}>
+      {/* [CITIZEN LAYOUT UI] Screen stack (no headers, no animation) */}
       <View style={styles.stack}>
         <Stack
           detachInactiveScreens={false}
@@ -23,15 +31,17 @@ export default function CitizenLayout() {
           }}
         />
       </View>
+      {/* [CITIZEN LAYOUT UI] Persistent bottom navigation */}
       <PersistentBottomNav role="citizen" />
     </View>
   );
 }
 
+// ===== [CITIZEN LAYOUT] Styles =====
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: APP_BACKGROUND,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
   stack: {
     flex: 1,

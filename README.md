@@ -144,8 +144,8 @@ Administrators can:
 - **Backend:** Supabase (PostgreSQL + Row-Level Security)
 - **Authentication:** Supabase Auth
 - **Storage:** Supabase Storage (complaint images and evidence)
-- **AI/ML:** NLP-based complaint classification, prioritization, and duplicate detection
-- **Automation:** n8n AI Agent
+- **AI/ML:** Google Gemini API (NLP-based complaint classification, prioritization, and duplicate detection), Roboflow (privacy blurring), Deepgram (speech-to-text)
+- **Automation:** Supabase Edge Functions (Deno / TypeScript)
 - **Maps & Geolocation:** MapTiler, Expo Location, Geotagging
 - **Notifications:** Firebase Cloud Messaging (FCM)
 

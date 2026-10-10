@@ -57,18 +57,8 @@ import {
   resolveReadableComplaintPhotoUrl,
 } from "../../lib/complaintPhotoCache";
 
+// ===== [ADMIN COMPLAINTS] Constants: colors, layout, cache keys =====
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
-const ORANGE = "#F4A24C";
 
 const H_PADDING = 20;
 const ADMIN_COMPLAINTS_LAST_FILTER_KEY = "admin.complaints.lastFilter";
@@ -82,6 +72,7 @@ function adminComplaintsCacheKey({
   return `admin.complaints:${concernType}:${category}:${status}:${priority}`;
 }
 
+// ===== [ADMIN COMPLAINTS] Filter options (concern, category, status, priority) =====
 const emergencyPriorityLevels = ["Critical", "Urgent", "High"];
 
 const concernTypeFilters = ["All Concerns", "Emergency", "Non-Emergency"];
@@ -89,7 +80,6 @@ const concernTypeFilters = ["All Concerns", "Emergency", "Non-Emergency"];
 const categoryFilters = [
   "All Category",
   "Water Concerns",
-  "Electricity Concerns",
   "Streetlight Concerns",
   "Road and Infrastructure Concerns",
   "Drainage and Flooding Concerns",
@@ -105,7 +95,6 @@ const categoryFilters = [
   "Public Plaza Concerns",
   "Public Library Concerns",
   "City Facility Concerns",
-  "Tourism Site / Public Attraction Concerns",
   "Disaster and Emergency Concerns",
   "Fire Safety Concerns",
   "Peace and Order Concerns",
@@ -124,6 +113,7 @@ const statusFilters = [
 
 const priorityFilters = ["All Priority", "Critical", "Urgent", "High", "Normal", "Low"];
 
+// ===== [ADMIN COMPLAINTS] Sample complaints & bottom tabs =====
 const initialComplaints = [
   {
     id: "ADM-2026-0010",
@@ -279,6 +269,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [ADMIN COMPLAINTS] Badge style helpers: concern, status, priority =====
 function getConcernType(item) {
   return emergencyPriorityLevels.includes(item.priority)
     ? "Emergency"
@@ -286,29 +277,30 @@ function getConcernType(item) {
 }
 
 function getConcernTypeStyle(type) {
-  if (type === "Emergency") return { bg: "#FFF0F0", color: RED };
-  return { bg: LIGHT_GREEN, color: GREEN };
+  if (type === "Emergency") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
+  return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
 }
 
 function getStatusStyle(status) {
-  if (status === "Pending") return { bg: "#E8EEFF", color: BLUE };
-  if (status === "In Progress") return { bg: "#FFF8D6", color: "#C9A000" };
-  if (status === "For Validation") return { bg: "#F3EAFF", color: "#7A3EA8" };
-  if (status === "Completed") return { bg: "#DFF0DF", color: GREEN };
-  if (status === "Returned") return { bg: "#FFF0F0", color: RED };
+  if (status === "Pending") return { bg: "rgba(232, 238, 255, 1)", color: "rgba(49, 90, 154, 1)" };
+  if (status === "In Progress") return { bg: "rgba(255, 248, 214, 1)", color: "rgba(201, 160, 0, 1)" };
+  if (status === "For Validation") return { bg: "rgba(243, 234, 255, 1)", color: "rgba(122, 62, 168, 1)" };
+  if (status === "Completed") return { bg: "rgba(223, 240, 223, 1)", color: "rgba(8, 122, 13, 1)" };
+  if (status === "Returned") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
 
-  return { bg: "#F1F1F1", color: MUTED };
+  return { bg: "rgba(241, 241, 241, 1)", color: "rgba(111, 119, 111, 1)" };
 }
 
 function getPriorityStyle(priority) {
-  if (priority === "Critical" || priority === "Urgent") return { bg: "#FFF0F0", color: RED };
-  if (priority === "High") return { bg: "#FFF2E8", color: ORANGE };
-  if (priority === "Normal") return { bg: LIGHT_GREEN, color: GREEN };
-  if (priority === "Low") return { bg: "#F1F4F1", color: MUTED };
+  if (priority === "Critical" || priority === "Urgent") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
+  if (priority === "High") return { bg: "rgba(255, 242, 232, 1)", color: "rgba(244, 162, 76, 1)" };
+  if (priority === "Normal") return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
+  if (priority === "Low") return { bg: "rgba(241, 244, 241, 1)", color: "rgba(111, 119, 111, 1)" };
 
-  return { bg: LIGHT_GREEN, color: GREEN };
+  return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
 }
 
+// ===== [ADMIN COMPLAINTS] Normalizers: date, status, priority, concern type =====
 function parseComplaintDateTime(date, time) {
   const months = {
     January: 0,
@@ -431,6 +423,7 @@ function normalizeConcernType(value, isEmergency = false, priority = "") {
   return "Non-Emergency";
 }
 
+// ===== [ADMIN COMPLAINTS] Formatting & photo/profile resolvers =====
 function formatDbDate(value) {
   const date = new Date(value);
 
@@ -471,6 +464,7 @@ async function resolveValidationPhotoUrls(row) {
   return resolveComplaintValidationPhotoUrls(row);
 }
 
+// ===== [ADMIN COMPLAINTS] Citizen validation helpers =====
 function getCitizenValidationAnswer(row) {
   return (
     row?.citizen_validation_answer ||
@@ -547,6 +541,7 @@ function getComplaintSortTime(complaint) {
   return Math.max(validatedAt, createdAt);
 }
 
+// ===== [ADMIN COMPLAINTS] Map DB complaint row -> UI complaint object =====
 async function mapComplaintRow(row, profileMap = {}) {
   const createdAt = row.created_at || row.submitted_at || new Date().toISOString();
   const citizenProfile = profileMap[row.citizen_id] || {};
@@ -630,6 +625,7 @@ async function mapComplaintRow(row, profileMap = {}) {
   };
 }
 
+// ===== [ADMIN COMPLAINTS] Route param, AI decision & override helpers =====
 function getRouteParam(value) {
   if (Array.isArray(value)) {
     return value[0] || "";
@@ -677,16 +673,19 @@ function getAiValidationDecision(complaint) {
   return "pending";
 }
 
+// ===== [ADMIN COMPLAINTS] Screen component =====
 export default function AdminComplaints() {
   const router = useRouter();
   const pathname = usePathname();
   const params = useLocalSearchParams();
   const { unreadNotificationCount } = useAdminUnreadNotifications();
 
+  // --- [ADMIN COMPLAINTS] Route params (deep link / filter) ---
   const targetComplaintId = getRouteParam(params?.complaintId) || null;
   const shouldAutoOpenDetails = getRouteParam(params?.openDetails) === "true";
   const routeStatusFilter = getRouteParam(params?.filter) || null;
 
+  // --- [ADMIN COMPLAINTS] Restore last filters & cached list ---
   const lastAdminFilter = getPageCache(ADMIN_COMPLAINTS_LAST_FILTER_KEY) || {};
   const selectedConcernTypeInit = lastAdminFilter.concernType || "All Concerns";
   const selectedCategoryInit = lastAdminFilter.category || "All Category";
@@ -706,6 +705,7 @@ export default function AdminComplaints() {
     })
   );
 
+  // --- [ADMIN COMPLAINTS] State: list, filters, dropdowns, details modal, actions ---
   const [complaints, setComplaints] = useState(
     cachedAdminComplaints?.complaints ?? []
   );
@@ -743,6 +743,7 @@ export default function AdminComplaints() {
 
   useHideBottomNav(detailsVisible);
 
+  // --- [ADMIN COMPLAINTS] Refs (navigation lock, pagination, viewport) ---
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
   const complaintsRef = useRef(cachedAdminComplaints?.complaints ?? []);
@@ -762,6 +763,7 @@ export default function AdminComplaints() {
     Poppins_700Bold,
   });
 
+  // --- [ADMIN COMPLAINTS] Debounced navigation ---
   const smoothNavigate = useCallback(
     (route, isActive = false) => {
       if (isActive || navigationLockRef.current) return;
@@ -791,6 +793,7 @@ export default function AdminComplaints() {
     };
   }, []);
 
+  // --- [ADMIN COMPLAINTS] Load complaints from Supabase (cached + paginated) ---
   const loadAllComplaints = useCallback(async (showLoader = true, append = false) => {
     const cacheKey = adminComplaintsCacheKey({
       concernType: selectedConcernType,
@@ -942,6 +945,7 @@ export default function AdminComplaints() {
   const loadAllComplaintsRef = useRef(loadAllComplaints);
   loadAllComplaintsRef.current = loadAllComplaints;
 
+  // --- [ADMIN COMPLAINTS] Infinite scroll: load more / fill viewport ---
   const loadMoreComplaints = useCallback(() => {
     loadAllComplaints(false, true);
   }, [loadAllComplaints]);
@@ -967,6 +971,7 @@ export default function AdminComplaints() {
     complaintsRef.current = complaints;
   }, [complaints]);
 
+  // --- [ADMIN COMPLAINTS] Apply status filter from route params ---
   useEffect(() => {
     const next = routeStatusFilter;
 
@@ -983,6 +988,7 @@ export default function AdminComplaints() {
     });
   }, [routeStatusFilter, selectedConcernType, selectedCategory, selectedPriority]);
 
+  // --- [ADMIN COMPLAINTS] Initial load & refresh on focus ---
   useEffect(() => {
     loadAllComplaints(true);
   }, [loadAllComplaints]);
@@ -993,6 +999,7 @@ export default function AdminComplaints() {
     }, [loadAllComplaints])
   );
 
+  // --- [ADMIN COMPLAINTS] Realtime: reload when complaints table changes ---
   useEffect(() => {
     const channel = supabase
       .channel(`admin-complaints-all-${Date.now()}`)
@@ -1016,6 +1023,7 @@ export default function AdminComplaints() {
     };
   }, []);
 
+  // --- [ADMIN COMPLAINTS] Filter & sort complaints ---
   const filteredComplaints = useMemo(() => {
     const filtered = complaints.filter((item) => {
       const concernType = item.concernType || getConcernType(item);
@@ -1050,6 +1058,7 @@ export default function AdminComplaints() {
     selectedPriority,
   ]);
 
+  // --- [ADMIN COMPLAINTS] Details modal: open & refresh selected complaint ---
   const openDetails = useCallback(async (complaint) => {
     setSelectedComplaint(complaint);
     setDetailsVisible(true);
@@ -1103,6 +1112,7 @@ export default function AdminComplaints() {
     }
   }, []);
 
+  // --- [ADMIN COMPLAINTS] Auto-open details from deep link ---
   useEffect(() => {
     if (!shouldAutoOpenDetails || !targetComplaintId) {
       return;
@@ -1153,6 +1163,7 @@ export default function AdminComplaints() {
     targetComplaintId,
   ]);
 
+  // --- [ADMIN COMPLAINTS] Details modal close & photo viewer ---
   const closeDetails = () => {
     setSelectedComplaint(null);
     setDetailsVisible(false);
@@ -1180,6 +1191,7 @@ export default function AdminComplaints() {
     }, 160);
   };
 
+  // --- [ADMIN COMPLAINTS] AI validation (guidance for admin decision) ---
   const applyAiValidationToComplaint = (complaintId, aiValidation) => {
     const patch = {
       aiValidationStatus: aiValidation?.status || null,
@@ -1296,6 +1308,7 @@ export default function AdminComplaints() {
     }
   };
 
+  // --- [ADMIN COMPLAINTS] Local status update helper ---
   const applyComplaintStatusLocally = useCallback((complaintId, nextStatus) => {
     const matchId = String(complaintId || "");
 
@@ -1337,6 +1350,7 @@ export default function AdminComplaints() {
     }
   }, []);
 
+  // --- [ADMIN COMPLAINTS] Mark complete (notifies citizen & department heads) ---
   const markAsComplete = async () => {
     if (!selectedComplaint || completingComplaint || returningComplaint) return;
 
@@ -1448,6 +1462,8 @@ export default function AdminComplaints() {
             metadata: {
               assigned_office: complaintSnapshot.department,
               category: complaintSnapshot.category,
+              analysis_type: "resolution_performance",
+              milestone: "completed",
             },
           });
 
@@ -1461,6 +1477,7 @@ export default function AdminComplaints() {
     }
   };
 
+  // --- [ADMIN COMPLAINTS] Return to department (notifies department heads) ---
   const returnForReview = async () => {
     if (!selectedComplaint || returningComplaint || completingComplaint) return;
 
@@ -1574,20 +1591,23 @@ export default function AdminComplaints() {
     }
   };
 
+  // --- [ADMIN COMPLAINTS] Render ---
   if (!fontsLoaded) {
     return <PageSkeleton variant="list" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [ADMIN COMPLAINTS UI] Sticky header: title & filter pills */}
         <View style={styles.stickyHeader}>
           <View style={styles.headerContainer}>
             <Text style={styles.headerTitle}>Overall Complaints</Text>
           </View>
 
+          {/* [ADMIN COMPLAINTS UI] Filter pills: concern, category, status, priority */}
           <View style={styles.filterGrid}>
             <View style={styles.filterHalfRow}>
               <TouchableOpacity
@@ -1598,7 +1618,7 @@ export default function AdminComplaints() {
                 <Text style={styles.filterText} numberOfLines={1}>
                   {selectedConcernType}
                 </Text>
-                <Ionicons name="chevron-down" size={14} color={MUTED} />
+                <Ionicons name="chevron-down" size={14} color="rgba(111, 119, 111, 1)" />
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1609,7 +1629,7 @@ export default function AdminComplaints() {
                 <Text style={styles.filterText} numberOfLines={1}>
                   {selectedCategory}
                 </Text>
-                <Ionicons name="chevron-down" size={14} color={MUTED} />
+                <Ionicons name="chevron-down" size={14} color="rgba(111, 119, 111, 1)" />
               </TouchableOpacity>
             </View>
 
@@ -1622,7 +1642,7 @@ export default function AdminComplaints() {
                 <Text style={styles.filterText} numberOfLines={1}>
                   {selectedStatus}
                 </Text>
-                <Ionicons name="chevron-down" size={14} color={MUTED} />
+                <Ionicons name="chevron-down" size={14} color="rgba(111, 119, 111, 1)" />
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1633,12 +1653,13 @@ export default function AdminComplaints() {
                 <Text style={styles.filterText} numberOfLines={1}>
                   {selectedPriority}
                 </Text>
-                <Ionicons name="chevron-down" size={14} color={MUTED} />
+                <Ionicons name="chevron-down" size={14} color="rgba(111, 119, 111, 1)" />
               </TouchableOpacity>
             </View>
           </View>
         </View>
 
+        {/* [ADMIN COMPLAINTS UI] Complaint list (infinite scroll) */}
         <ScrollView
           style={styles.listScroll}
           showsVerticalScrollIndicator={false}
@@ -1650,12 +1671,13 @@ export default function AdminComplaints() {
           }}
           onContentSizeChange={(_, height) => maybeFillViewport(height)}
         >
+          {/* [ADMIN COMPLAINTS UI] Loading skeleton / empty state / complaint cards */}
           <View style={styles.complaintsList}>
             {loadingComplaints && complaints.length === 0 ? (
               <ComplaintListSkeleton count={COMPLAINTS_PAGE_SIZE} />
             ) : filteredComplaints.length === 0 ? (
               <View style={styles.emptyCard}>
-                <Ionicons name="document-text-outline" size={30} color={MUTED} />
+                <Ionicons name="document-text-outline" size={30} color="rgba(111, 119, 111, 1)" />
                 <Text style={styles.emptyTitle}>No complaints found</Text>
                 <Text style={styles.emptyText}>
                   No submitted complaints match the selected filters.
@@ -1675,6 +1697,7 @@ export default function AdminComplaints() {
                     style={styles.complaintCard}
                     onPress={() => openDetails(item)}
                   >
+                    {/* [ADMIN COMPLAINTS UI] Card: title & location */}
                     <View style={styles.complaintHeaderRow}>
                       <View style={styles.complaintTitleBox}>
                         <Text style={styles.complaintTitle} numberOfLines={1}>
@@ -1686,26 +1709,28 @@ export default function AdminComplaints() {
                         </Text>
                       </View>
 
-                      <Feather name="chevron-right" size={20} color={MUTED} />
+                      <Feather name="chevron-right" size={20} color="rgba(111, 119, 111, 1)" />
                     </View>
 
+                    {/* [ADMIN COMPLAINTS UI] Card: assigned department */}
                     <View style={styles.departmentRow}>
                       <MaterialCommunityIcons
                         name="office-building-outline"
                         size={14}
-                        color={GREEN}
+                        color="rgba(8, 122, 13, 1)"
                       />
                       <Text style={styles.departmentText} numberOfLines={1}>
                         {item.department}
                       </Text>
                     </View>
 
+                    {/* [ADMIN COMPLAINTS UI] Card: citizen validation review banner */}
                     {item.needsValidationReview ? (
                       <View style={styles.validationReviewBanner}>
                         <MaterialCommunityIcons
                           name="account-check-outline"
                           size={14}
-                          color={GREEN}
+                          color="rgba(8, 122, 13, 1)"
                         />
                         <Text style={styles.validationReviewText}>
                           Citizen validation submitted — review required
@@ -1713,15 +1738,16 @@ export default function AdminComplaints() {
                       </View>
                     ) : null}
 
+                    {/* [ADMIN COMPLAINTS UI] Card: date/time & concern/status/priority badges */}
                     <View style={styles.metaAndBadgeRow}>
                       <View style={styles.dateTimeColumn}>
                         <View style={styles.metaItem}>
-                          <Feather name="calendar" size={12} color={MUTED} />
+                          <Feather name="calendar" size={12} color="rgba(111, 119, 111, 1)" />
                           <Text style={styles.metaText}>{item.date}</Text>
                         </View>
 
                         <View style={styles.metaItem}>
-                          <Feather name="clock" size={12} color={MUTED} />
+                          <Feather name="clock" size={12} color="rgba(111, 119, 111, 1)" />
                           <Text style={styles.metaText}>{item.time}</Text>
                         </View>
                       </View>
@@ -1787,9 +1813,11 @@ export default function AdminComplaints() {
             )}
           </View>
 
+          {/* [ADMIN COMPLAINTS UI] Load-more footer */}
           <ComplaintsLoadMoreFooter loading={loadingMoreComplaints} />
         </ScrollView>
 
+        {/* [ADMIN COMPLAINTS UI] Filter dropdown modals */}
         <DropdownModal
           visible={concernTypeDropdownVisible}
           title="Select Concern Type"
@@ -1838,6 +1866,7 @@ export default function AdminComplaints() {
           }}
         />
 
+        {/* [ADMIN COMPLAINTS UI] Complaint details modal */}
         <Modal
           visible={detailsVisible}
           transparent
@@ -1848,6 +1877,7 @@ export default function AdminComplaints() {
             <View style={styles.detailsSheet}>
               <View style={styles.modalHandle} />
 
+              {/* [ADMIN COMPLAINTS UI] Details: header & close button */}
               <View style={styles.modalHeaderRow}>
                 <Text style={styles.modalTitle}>Complaint Details</Text>
 
@@ -1856,12 +1886,14 @@ export default function AdminComplaints() {
                   style={styles.modalCloseButton}
                   onPress={closeDetails}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
+              {/* [ADMIN COMPLAINTS UI] Details: scrollable content */}
               {selectedComplaint && (
                 <ScrollView showsVerticalScrollIndicator={false}>
+                  {/* [ADMIN COMPLAINTS UI] Details: title & ID */}
                   <Text style={styles.modalComplaintTitle}>
                     {selectedComplaint.title}
                   </Text>
@@ -1870,6 +1902,7 @@ export default function AdminComplaints() {
                     {selectedComplaint.id}
                   </Text>
 
+                  {/* [ADMIN COMPLAINTS UI] Details: citizen, contact, location */}
                   <View style={styles.importantInfoCard}>
                     <ImportantInfoRow
                       label="Citizen"
@@ -1886,6 +1919,7 @@ export default function AdminComplaints() {
                     />
                   </View>
 
+                  {/* [ADMIN COMPLAINTS UI] Details: description */}
                   <View style={styles.descriptionBox}>
                     <Text style={styles.infoLabel}>Description</Text>
                     <Text style={styles.descriptionText}>
@@ -1893,6 +1927,7 @@ export default function AdminComplaints() {
                     </Text>
                   </View>
 
+                  {/* [ADMIN COMPLAINTS UI] Details: complaint information rows */}
                   <View style={styles.modalInfoCard}>
                     <Text style={styles.detailsSectionTitle}>
                       Complaint Information
@@ -1924,6 +1959,7 @@ export default function AdminComplaints() {
                     />
                   </View>
 
+                  {/* [ADMIN COMPLAINTS UI] Details: photo evidence */}
                   <View style={styles.photoSection}>
                     <Text style={styles.detailsSectionTitle}>Photo Evidence</Text>
 
@@ -1948,7 +1984,7 @@ export default function AdminComplaints() {
                       </ScrollView>
                     ) : (
                       <View style={styles.noPhotoBox}>
-                        <Ionicons name="image-outline" size={34} color={MUTED} />
+                        <Ionicons name="image-outline" size={34} color="rgba(111, 119, 111, 1)" />
                         <Text style={styles.noPhotoText}>
                           No photo evidence available
                         </Text>
@@ -1956,6 +1992,7 @@ export default function AdminComplaints() {
                     )}
                   </View>
 
+                  {/* [ADMIN COMPLAINTS UI] Details: citizen validation */}
                   <View style={styles.validationCard}>
                     <Text style={styles.detailsSectionTitle}>
                       Citizen Validation
@@ -1994,6 +2031,7 @@ export default function AdminComplaints() {
                           </Text>
                         )}
 
+                        {/* [ADMIN COMPLAINTS UI] Validation: citizen feedback */}
                         <Text style={styles.validationFieldLabel}>
                           Citizen Feedback
                         </Text>
@@ -2002,6 +2040,7 @@ export default function AdminComplaints() {
                             "No feedback provided."}
                         </Text>
 
+                        {/* [ADMIN COMPLAINTS UI] Validation: photo evidence */}
                         <Text style={styles.validationFieldLabel}>
                           Photo Evidence
                         </Text>
@@ -2033,6 +2072,7 @@ export default function AdminComplaints() {
                           </Text>
                         )}
 
+                        {/* [ADMIN COMPLAINTS UI] Validation: AI recommendation box */}
                         <Text style={styles.validationFieldLabel}>
                           AI Validation
                         </Text>
@@ -2077,6 +2117,7 @@ export default function AdminComplaints() {
                           ) : null}
                         </View>
 
+                        {/* [ADMIN COMPLAINTS UI] Validation: run AI validation button */}
                         {selectedComplaint.status === "For Validation" ? (
                           <TouchableOpacity
                             activeOpacity={0.8}
@@ -2101,12 +2142,12 @@ export default function AdminComplaints() {
                             }}
                           >
                             {runningAiValidation ? (
-                              <ActivityIndicator size="small" color={WHITE} />
+                              <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                             ) : (
                               <MaterialCommunityIcons
                                 name="robot-outline"
                                 size={16}
-                                color={WHITE}
+                                color="rgba(255, 255, 255, 1)"
                               />
                             )}
                             <Text style={styles.runAiValidationButtonText}>
@@ -2126,6 +2167,7 @@ export default function AdminComplaints() {
                     )}
                   </View>
 
+                  {/* [ADMIN COMPLAINTS UI] Details: Mark Complete / Return to Department buttons */}
                   {selectedComplaint.status === "For Validation" && (
                     <View style={styles.actionRow}>
                       <TouchableOpacity
@@ -2138,12 +2180,12 @@ export default function AdminComplaints() {
                         disabled={completingComplaint || returningComplaint}
                       >
                         {completingComplaint ? (
-                          <ActivityIndicator size="small" color={WHITE} />
+                          <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                         ) : (
                           <MaterialCommunityIcons
                             name="check-circle-outline"
                             size={16}
-                            color={WHITE}
+                            color="rgba(255, 255, 255, 1)"
                           />
                         )}
                         <Text style={styles.completeButtonText}>
@@ -2161,12 +2203,12 @@ export default function AdminComplaints() {
                         disabled={returningComplaint || completingComplaint}
                       >
                         {returningComplaint ? (
-                          <ActivityIndicator size="small" color={GREEN} />
+                          <ActivityIndicator size="small" color="rgba(8, 122, 13, 1)" />
                         ) : (
                           <MaterialCommunityIcons
                             name="reply-outline"
                             size={16}
-                            color={GREEN}
+                            color="rgba(8, 122, 13, 1)"
                           />
                         )}
                         <Text style={styles.returnButtonText}>
@@ -2181,6 +2223,7 @@ export default function AdminComplaints() {
               )}
             </View>
 
+            {/* [ADMIN COMPLAINTS UI] Photo viewer (inside details modal) */}
             <FullscreenPhotoViewer
               variant="overlay"
               visible={photoViewerVisible && detailsVisible}
@@ -2190,6 +2233,7 @@ export default function AdminComplaints() {
           </View>
         </Modal>
 
+        {/* [ADMIN COMPLAINTS UI] Photo viewer (standalone) */}
         <FullscreenPhotoViewer
           visible={photoViewerVisible && !detailsVisible}
           uri={selectedPhoto}
@@ -2200,6 +2244,7 @@ export default function AdminComplaints() {
   );
 }
 
+// ===== [ADMIN COMPLAINTS] Subcomponent: dropdown modal =====
 function DropdownModal({
   visible,
   title,
@@ -2225,7 +2270,7 @@ function DropdownModal({
               style={styles.modalCloseButton}
               onPress={onClose}
             >
-              <Feather name="x" size={21} color={TEXT} />
+              <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
             </TouchableOpacity>
           </View>
 
@@ -2250,7 +2295,7 @@ function DropdownModal({
                 </Text>
 
                 {selectedValue === item && (
-                  <Feather name="check" size={18} color={GREEN} />
+                  <Feather name="check" size={18} color="rgba(8, 122, 13, 1)" />
                 )}
               </TouchableOpacity>
             ))}
@@ -2261,6 +2306,7 @@ function DropdownModal({
   );
 }
 
+// ===== [ADMIN COMPLAINTS] Subcomponents: info rows =====
 function InfoRow({ label, value, last }) {
   return (
     <View style={[styles.infoRow, last && styles.infoRowLast]}>
@@ -2279,24 +2325,26 @@ function ImportantInfoRow({ label, value, last }) {
   );
 }
 
+// ===== [ADMIN COMPLAINTS] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & sticky header ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   stickyHeader: {
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 4,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    borderBottomColor: "rgba(226, 231, 224, 1)",
     zIndex: 2,
   },
 
@@ -2306,7 +2354,7 @@ const styles = StyleSheet.create({
 
   loader: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2324,11 +2372,12 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 29,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     lineHeight: 35,
     letterSpacing: 0.3,
   },
 
+  // --- Filter pills ---
   filterGrid: {
     gap: 8,
     marginBottom: 0,
@@ -2339,8 +2388,8 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
@@ -2360,8 +2409,8 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
@@ -2373,21 +2422,22 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 10.8,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
+  // --- Complaint cards ---
   complaintsList: {
     gap: 10,
   },
 
   complaintCard: {
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     borderRadius: 14,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 14,
     paddingVertical: 12,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.04,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
@@ -2407,13 +2457,13 @@ const styles = StyleSheet.create({
   complaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   complaintLocation: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     lineHeight: 15,
     marginTop: 3,
   },
@@ -2428,7 +2478,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_600SemiBold",
     fontSize: 10.6,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginLeft: 6,
   },
 
@@ -2440,16 +2490,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 10,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#CFE8C4",
+    borderColor: "rgba(207, 232, 196, 1)",
   },
 
   validationReviewText: {
     flex: 1,
     fontFamily: "Poppins_600SemiBold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   metaAndBadgeRow: {
@@ -2473,7 +2523,7 @@ const styles = StyleSheet.create({
   metaText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginLeft: 6,
   },
 
@@ -2489,6 +2539,7 @@ const styles = StyleSheet.create({
     maxWidth: 178,
   },
 
+  // --- Badges ---
   concernBadge: {
     minHeight: 23,
     borderRadius: 12,
@@ -2528,12 +2579,13 @@ const styles = StyleSheet.create({
     fontSize: 9.2,
   },
 
+  // --- Empty state ---
   emptyCard: {
     minHeight: 130,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18,
@@ -2542,28 +2594,29 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 8,
   },
 
   emptyText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     marginTop: 3,
   },
 
+  // --- Bottom navigation ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -2583,7 +2636,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
 
-
   navIconWrap: {
     position: "relative",
     width: 30,
@@ -2599,9 +2651,9 @@ const styles = StyleSheet.create({
     minWidth: 17,
     height: 17,
     borderRadius: 9,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 1.5,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -2610,7 +2662,7 @@ const styles = StyleSheet.create({
   notificationNavBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     includeFontPadding: false,
     lineHeight: 11,
   },
@@ -2623,6 +2675,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Dropdown modal ---
   centerModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -2635,7 +2688,7 @@ const styles = StyleSheet.create({
     width: "100%",
     maxHeight: "72%",
     borderRadius: 22,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 12,
@@ -2651,7 +2704,7 @@ const styles = StyleSheet.create({
   dropdownTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   dropdownOption: {
@@ -2659,32 +2712,33 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     paddingHorizontal: 12,
     marginBottom: 7,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
 
   dropdownOptionActive: {
-    backgroundColor: LIGHT_GREEN,
-    borderColor: "#BFE3B5",
+    backgroundColor: "rgba(234, 246, 228, 1)",
+    borderColor: "rgba(191, 227, 181, 1)",
   },
 
   dropdownOptionText: {
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     paddingRight: 8,
   },
 
   dropdownOptionTextActive: {
     fontFamily: "Poppins_700Bold",
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Details modal ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -2695,7 +2749,7 @@ const styles = StyleSheet.create({
     maxHeight: "90%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 30 : 20,
@@ -2705,7 +2759,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -2720,14 +2774,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2735,13 +2789,13 @@ const styles = StyleSheet.create({
   modalComplaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 17,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   modalComplaintId: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
     marginBottom: 12,
   },
@@ -2749,8 +2803,8 @@ const styles = StyleSheet.create({
   importantInfoCard: {
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     marginBottom: 12,
@@ -2771,7 +2825,7 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   importantInfoLabel: {
@@ -2781,7 +2835,7 @@ const styles = StyleSheet.create({
   infoValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 16,
     marginTop: 1,
   },
@@ -2790,14 +2844,14 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins_600SemiBold",
     fontSize: 13.2,
     lineHeight: 18,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   descriptionBox: {
     borderRadius: 14,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 14,
@@ -2806,7 +2860,7 @@ const styles = StyleSheet.create({
   descriptionText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginTop: 3,
   },
@@ -2814,20 +2868,21 @@ const styles = StyleSheet.create({
   detailsSectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 8,
   },
 
   modalInfoCard: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 13,
   },
 
+  // --- Photo evidence ---
   photoSection: {
     marginBottom: 15,
   },
@@ -2841,17 +2896,17 @@ const styles = StyleSheet.create({
     width: Math.min(185, SCREEN_WIDTH * 0.48),
     height: 125,
     borderRadius: 13,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
   },
 
   noPhotoBox: {
     height: 90,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2859,15 +2914,16 @@ const styles = StyleSheet.create({
   noPhotoText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 3,
   },
 
+  // --- Citizen validation ---
   validationCard: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 13,
@@ -2876,7 +2932,7 @@ const styles = StyleSheet.create({
   validationFieldLabel: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 11.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 6,
     marginTop: 2,
   },
@@ -2886,36 +2942,36 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingHorizontal: 12,
     paddingVertical: 5,
-    backgroundColor: "#EEF2F7",
+    backgroundColor: "rgba(238, 242, 247, 1)",
     marginBottom: 10,
   },
 
   validationAnswerPillYes: {
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
   },
 
   validationAnswerPillNo: {
-    backgroundColor: "#FFF0F0",
+    backgroundColor: "rgba(255, 240, 240, 1)",
   },
 
   validationAnswerText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   validationAnswerTextYes: {
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   validationAnswerTextNo: {
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
   },
 
   feedbackText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginBottom: 9,
   },
@@ -2923,9 +2979,10 @@ const styles = StyleSheet.create({
   noValidationText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
+  // --- AI validation ---
   aiValidationBox: {
     borderRadius: 12,
     borderWidth: 1,
@@ -2936,38 +2993,38 @@ const styles = StyleSheet.create({
   },
 
   aiValidationBoxApproved: {
-    backgroundColor: LIGHT_GREEN,
-    borderColor: "#B7DFB4",
+    backgroundColor: "rgba(234, 246, 228, 1)",
+    borderColor: "rgba(183, 223, 180, 1)",
   },
 
   aiValidationBoxRejected: {
-    backgroundColor: "#FFF0F0",
-    borderColor: "#F0C0C0",
+    backgroundColor: "rgba(255, 240, 240, 1)",
+    borderColor: "rgba(240, 192, 192, 1)",
   },
 
   aiValidationBoxPending: {
-    backgroundColor: "#FFF8EB",
-    borderColor: "#F0D9A8",
+    backgroundColor: "rgba(255, 248, 235, 1)",
+    borderColor: "rgba(240, 217, 168, 1)",
   },
 
   aiValidationStatusText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 4,
   },
 
   aiValidationSummaryText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 17,
   },
 
   aiValidationReasonText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     lineHeight: 16,
     marginTop: 6,
   },
@@ -2975,7 +3032,7 @@ const styles = StyleSheet.create({
   runAiValidationButton: {
     height: 38,
     borderRadius: 19,
-    backgroundColor: BLUE,
+    backgroundColor: "rgba(49, 90, 154, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -2991,7 +3048,7 @@ const styles = StyleSheet.create({
   runAiValidationButtonText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   validationPhotoRow: {
@@ -3004,11 +3061,12 @@ const styles = StyleSheet.create({
     width: Math.min(185, SCREEN_WIDTH * 0.48),
     height: 125,
     borderRadius: 13,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
   },
 
+  // --- Action buttons ---
   actionRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3020,7 +3078,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 40,
     borderRadius: 20,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -3034,16 +3092,16 @@ const styles = StyleSheet.create({
   completeButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   returnButton: {
     flex: 1,
     height: 40,
     borderRadius: 20,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: GREEN,
+    borderColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -3057,9 +3115,10 @@ const styles = StyleSheet.create({
   returnButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Photo viewer ---
   photoViewerOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.92)",

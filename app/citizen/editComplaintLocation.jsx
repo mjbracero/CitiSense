@@ -33,12 +33,10 @@ import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
 import { HEADER_TOP_SPACING } from "../../constants/screenLayout";
 
-const GREEN = "#087A0D";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
+// ===== [CITIZEN EDIT LOCATION] Constants: colors & cache key =====
 const EDIT_LOCATION_CACHE_KEY = "citizen.editComplaintLocation";
 
+// ===== [CITIZEN EDIT LOCATION] Helper: outside Bogo City warning =====
 function warnOutsideBogoCity() {
   notify(
     "Outside Bogo City",
@@ -46,7 +44,9 @@ function warnOutsideBogoCity() {
   );
 }
 
+// ===== [CITIZEN EDIT LOCATION] Screen component =====
 export default function EditComplaintLocationScreen() {
+  // --- [CITIZEN EDIT LOCATION] State, refs & fonts ---
   const router = useRouter();
   const params = useLocalSearchParams();
   const mapRef = useRef(null);
@@ -69,12 +69,14 @@ export default function EditComplaintLocationScreen() {
     Poppins_600SemiBold,
     Poppins_700Bold,
   });
+  // --- [CITIZEN EDIT LOCATION] Page cache (skip skeleton on revisit) ---
   const cachedEditLocation = getPageCache(EDIT_LOCATION_CACHE_KEY);
 
   useEffect(() => {
     setPageCache(EDIT_LOCATION_CACHE_KEY, { visited: true });
   }, []);
 
+  // --- [CITIZEN EDIT LOCATION] Reverse geocode pinned coords to address ---
   const updateAddressFromCoords = useCallback(async (coords) => {
     const nextAddress = await resolveExactAddress(
       coords.latitude,
@@ -91,6 +93,7 @@ export default function EditComplaintLocationScreen() {
     return fallback;
   }, []);
 
+  // --- [CITIZEN EDIT LOCATION] Defer map mount until interactions finish ---
   useEffect(() => {
     const task = InteractionManager.runAfterInteractions(() => {
       requestAnimationFrame(() => {
@@ -105,6 +108,7 @@ export default function EditComplaintLocationScreen() {
     updateAddressFromCoords(draftLocation);
   }, [draftLocation.latitude, draftLocation.longitude, updateAddressFromCoords]);
 
+  // --- [CITIZEN EDIT LOCATION] Map tap: keep pin inside Bogo City ---
   const handleCoordinateChange = (coords) => {
     if (!isInsideBogoCity(coords.latitude, coords.longitude)) {
       warnOutsideBogoCity();
@@ -123,6 +127,7 @@ export default function EditComplaintLocationScreen() {
     setDraftLocation(nextCoords);
   };
 
+  // --- [CITIZEN EDIT LOCATION] Use current GPS location ---
   const locateUser = async () => {
     try {
       setIsLocating(true);
@@ -175,6 +180,7 @@ export default function EditComplaintLocationScreen() {
     }
   };
 
+  // --- [CITIZEN EDIT LOCATION] Confirm: save pending edit + audit log ---
   const handleConfirm = async () => {
     if (!isInsideBogoCity(draftLocation.latitude, draftLocation.longitude)) {
       warnOutsideBogoCity();
@@ -220,6 +226,7 @@ export default function EditComplaintLocationScreen() {
     }
   };
 
+  // --- [CITIZEN EDIT LOCATION] Back navigation ---
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
@@ -228,21 +235,23 @@ export default function EditComplaintLocationScreen() {
     }
   };
 
+  // --- [CITIZEN EDIT LOCATION] Render ---
   if (!fontsLoaded && !cachedEditLocation) {
     return <PageSkeleton variant="map" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(255, 255, 255, 1)" />
 
+      {/* [CITIZEN EDIT LOCATION UI] Header: back, title, my-location button */}
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
           activeOpacity={0.7}
           onPress={handleBack}
         >
-          <Feather name="chevron-left" size={26} color={TEXT} />
+          <Feather name="chevron-left" size={26} color="rgba(23, 23, 23, 1)" />
         </TouchableOpacity>
 
         <View style={styles.headerTextBox}>
@@ -259,13 +268,14 @@ export default function EditComplaintLocationScreen() {
           disabled={isLocating}
         >
           {isLocating ? (
-            <ActivityIndicator size="small" color={GREEN} />
+            <ActivityIndicator size="small" color="rgba(8, 122, 13, 1)" />
           ) : (
-            <Ionicons name="navigate" size={20} color={GREEN} />
+            <Ionicons name="navigate" size={20} color="rgba(8, 122, 13, 1)" />
           )}
         </TouchableOpacity>
       </View>
 
+      {/* [CITIZEN EDIT LOCATION UI] Map (skeleton until ready) */}
       <View style={styles.mapWrapper}>
         {mapReady ? (
           <ComplaintMapView
@@ -281,6 +291,7 @@ export default function EditComplaintLocationScreen() {
         )}
       </View>
 
+      {/* [CITIZEN EDIT LOCATION UI] Bottom sheet: address & coordinates */}
       <View style={styles.bottomSheet}>
         <Text style={styles.sectionLabel}>Exact Address</Text>
         <Text style={styles.addressText}>
@@ -292,6 +303,7 @@ export default function EditComplaintLocationScreen() {
           {draftLocation.longitude.toFixed(6)}
         </Text>
 
+        {/* [CITIZEN EDIT LOCATION UI] Confirm location button */}
         <TouchableOpacity
           activeOpacity={0.8}
           style={[styles.confirmButton, isSaving && styles.confirmButtonDisabled]}
@@ -299,10 +311,10 @@ export default function EditComplaintLocationScreen() {
           disabled={isSaving}
         >
           {isSaving ? (
-            <ActivityIndicator size="small" color={WHITE} />
+            <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
           ) : (
             <>
-              <Ionicons name="checkmark-circle" size={22} color={WHITE} />
+              <Ionicons name="checkmark-circle" size={22} color="rgba(255, 255, 255, 1)" />
               <Text style={styles.confirmButtonText}>Confirm Location</Text>
             </>
           )}
@@ -312,17 +324,20 @@ export default function EditComplaintLocationScreen() {
   );
 }
 
+// ===== [CITIZEN EDIT LOCATION] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & loader ---
   safeArea: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
   loader: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
+  // --- Header ---
   header: {
     minHeight: 72,
     flexDirection: "row",
@@ -331,14 +346,14 @@ const styles = StyleSheet.create({
     paddingTop: HEADER_TOP_SPACING,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#E8EDE8",
-    backgroundColor: WHITE,
+    borderBottomColor: "rgba(232, 237, 232, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
   backButton: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: "#F1F4F0",
+    backgroundColor: "rgba(241, 244, 240, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -349,49 +364,51 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
   headerSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
   },
   myLocationButton: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: "#EAF6E4",
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
+  // --- Map ---
   mapWrapper: {
     flex: 1,
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
   },
   mapLoader: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F3F5F3",
+    backgroundColor: "rgba(243, 245, 243, 1)",
   },
   mapLoaderText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 10,
   },
   map: {
     flex: 1,
   },
+  // --- Bottom sheet & confirm button ---
   bottomSheet: {
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 18,
     paddingTop: 14,
     paddingBottom: Platform.OS === "ios" ? 24 : 18,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.12,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: -4 },
@@ -400,26 +417,26 @@ const styles = StyleSheet.create({
   sectionLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 4,
   },
   addressText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 12.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 18,
   },
   coordinatesText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 8,
     marginBottom: 14,
   },
   confirmButton: {
     height: 52,
     borderRadius: 10,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -431,6 +448,6 @@ const styles = StyleSheet.create({
   confirmButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 });

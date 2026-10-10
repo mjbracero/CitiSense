@@ -1,5 +1,5 @@
 import "react-native-gesture-handler";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Platform } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -10,7 +10,9 @@ import {
 import * as SplashScreen from "expo-splash-screen";
 import * as Linking from "expo-linking";
 import AndroidSystemChrome from "../components/AndroidSystemChrome";
+import AppKeyboardProvider from "../components/AppKeyboardProvider";
 import ConfirmDialogHost from "../components/ConfirmDialogHost";
+import NetworkStatusBanner from "../components/NetworkStatusBanner";
 import ToastHost from "../components/ToastHost";
 import usePushNotifications from "../hooks/usePushNotifications";
 import { supabase } from "../lib/supabase";
@@ -22,16 +24,27 @@ import {
   markPasswordRecoveryActive,
 } from "../lib/passwordReset";
 
+// ===== [ROOT LAYOUT] Dev-only Cmd+I UI inspector (web dev server only, stripped from production) =====
+const DevUiInspector =
+  process.env.NODE_ENV === "development" && Platform.OS === "web"
+    ? lazy(() => import("../dev/DevUiInspector"))
+    : null;
+
+// ===== [ROOT LAYOUT] Keep native splash visible until mount =====
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
+// ===== [ROOT LAYOUT] Root layout component =====
 export default function RootLayout() {
+  // --- [ROOT LAYOUT] Router & push notifications ---
   const router = useRouter();
   usePushNotifications();
 
+  // --- [ROOT LAYOUT] Hide native splash on mount ---
   useEffect(() => {
     SplashScreen.hideAsync().catch(() => {});
   }, []);
 
+  // --- [ROOT LAYOUT] Auth deep links & password recovery listener ---
   useEffect(() => {
     const handleIncomingUrl = async (url) => {
       if (!url || !isAuthCallbackUrl(url)) {
@@ -84,20 +97,33 @@ export default function RootLayout() {
     };
   }, [router]);
 
+  // --- [ROOT LAYOUT] Render ---
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-      <StatusBar style="dark" translucent={Platform.OS === "android"} />
-      <AndroidSystemChrome />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          animation: "none",
-          gestureEnabled: false,
-          fullScreenGestureEnabled: false,
-        }}
-      />
-      <ToastHost />
-      <ConfirmDialogHost />
+      <AppKeyboardProvider>
+        {/* [ROOT LAYOUT UI] Status bar & Android system chrome */}
+        <StatusBar style="dark" translucent={Platform.OS === "android"} />
+        <AndroidSystemChrome />
+        {/* [ROOT LAYOUT UI] Main navigation stack */}
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            animation: "none",
+            gestureEnabled: false,
+            fullScreenGestureEnabled: false,
+          }}
+        />
+        {/* [ROOT LAYOUT UI] Offline / slow internet banner */}
+        <NetworkStatusBanner />
+        {/* [ROOT LAYOUT UI] Global toast & confirm dialog hosts */}
+        <ToastHost />
+        <ConfirmDialogHost />
+        {DevUiInspector ? (
+          <Suspense fallback={null}>
+            <DevUiInspector />
+          </Suspense>
+        ) : null}
+      </AppKeyboardProvider>
     </SafeAreaProvider>
   );
 }

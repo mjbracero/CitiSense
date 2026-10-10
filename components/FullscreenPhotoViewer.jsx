@@ -9,19 +9,22 @@ import {
   View,
 } from "react-native";
 
+// ===== [PHOTO VIEWER] Subcomponent: fullscreen photo content =====
 function PhotoViewerContent({ uri, onClose }) {
   return (
     <View style={styles.overlay}>
       <StatusBar barStyle="light-content" />
 
+      {/* [PHOTO VIEWER UI] Close button */}
       <TouchableOpacity
         activeOpacity={0.8}
         style={styles.closeButton}
         onPress={onClose}
       >
-        <Feather name="x" size={24} color="#FFFFFF" />
+        <Feather name="x" size={24} color="rgba(255, 255, 255, 1)" />
       </TouchableOpacity>
 
+      {/* [PHOTO VIEWER UI] Photo (tap to close) */}
       <TouchableOpacity
         activeOpacity={1}
         style={styles.photoWrap}
@@ -38,6 +41,7 @@ function PhotoViewerContent({ uri, onClose }) {
   );
 }
 
+// ===== [PHOTO VIEWER] Exported viewer (modal or in-place overlay) =====
 /**
  * @param {"modal" | "overlay"} variant
  * Use "overlay" inside an already-open Modal (nested Modals often fail).
@@ -73,6 +77,7 @@ export default function FullscreenPhotoViewer({
   );
 }
 
+// ===== [PHOTO VIEWER] Styles =====
 const styles = StyleSheet.create({
   overlayHost: {
     ...StyleSheet.absoluteFillObject,

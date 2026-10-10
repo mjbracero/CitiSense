@@ -35,6 +35,7 @@ import {
   countComplaintsMany,
 } from "../../lib/complaintCountService";
 import {
+  ensureDashboardCacheHydrated,
   getPageCache,
   setPageCache,
   shouldShowPageLoader,
@@ -46,48 +47,40 @@ import {
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
 import { supabase } from "../../lib/supabase";
 
+// ===== [ADMIN DASHBOARD] Constants: logo, colors, layout, cache key =====
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 const MAIN_LOGO = require("../../assets/images/mainlogo.png");
-
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const ACCENT_GREEN = "#6DBB3F";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
-const ORANGE = "#F4A24C";
-const GRAY = "#8A8F8A";
-const TRACK = "#EDF1EC";
 
 const H_PADDING = 20;
 const CARD_GAP = 8;
 const CARD_WIDTH = (SCREEN_WIDTH - H_PADDING * 2 - CARD_GAP * 3) / 4;
 const ADMIN_DASHBOARD_CACHE_KEY = "admin.dashboard";
 
+// ===== [ADMIN DASHBOARD] Stat card config, priority order, bottom tabs =====
 const dashboardCardConfig = [
   {
     title: "Total Complaints",
     key: "total",
+    filter: "All Status",
     icon: "clipboard-text-outline",
   },
   {
     title: "Pending Complaints",
     key: "pending",
+    filter: "Pending",
     icon: "clock-outline",
   },
   {
     title: "For Validation",
     key: "forValidation",
+    filter: "For Validation",
     icon: "account-check-outline",
   },
   {
     title: "Completed",
     key: "completed",
+    filter: "Completed",
     icon: "check-circle-outline",
   },
 ];
@@ -137,6 +130,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [ADMIN DASHBOARD] Helpers: normalize priority, greeting, priority colors =====
 function normalizeText(value) {
   return String(value || "")
     .trim()
@@ -168,15 +162,16 @@ function getGreetingByTime(date) {
 function getPriorityStyle(priority) {
   const normalizedPriority = normalizePriority(priority);
 
-  if (normalizedPriority === "Critical") return { bg: "#FFF0F0", color: RED };
-  if (normalizedPriority === "Urgent") return { bg: "#FFF0F0", color: RED };
-  if (normalizedPriority === "High") return { bg: "#FFF2E8", color: ORANGE };
-  if (normalizedPriority === "Normal") return { bg: LIGHT_GREEN, color: GREEN };
-  if (normalizedPriority === "Low") return { bg: "#F1F4F1", color: BLUE };
+  if (normalizedPriority === "Critical") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
+  if (normalizedPriority === "Urgent") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
+  if (normalizedPriority === "High") return { bg: "rgba(255, 242, 232, 1)", color: "rgba(244, 162, 76, 1)" };
+  if (normalizedPriority === "Normal") return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
+  if (normalizedPriority === "Low") return { bg: "rgba(241, 244, 241, 1)", color: "rgba(49, 90, 154, 1)" };
 
-  return { bg: LIGHT_GREEN, color: GREEN };
+  return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
 }
 
+// ===== [ADMIN DASHBOARD] Chart helpers: leading/least, category labels & chart data =====
 function getLeadingAndLeast(stats) {
   if (!stats.length) {
     return {
@@ -207,11 +202,9 @@ function getCategoryShortLabel(label) {
     .replace(/Waste and Environmental/gi, "Waste")
     .replace(/Traffic and Road Safety/gi, "Traffic")
     .replace(/Streetlight/gi, "Streetlight")
-    .replace(/Electricity/gi, "Electric")
     .replace(/Health and Sanitation/gi, "Health")
     .replace(/Disaster and Emergency/gi, "Disaster")
     .replace(/Peace and Order/gi, "Peace")
-    .replace(/Tourism Site \/ Public Attraction/gi, "Tourism")
     .replace(/Coastal and Marine Protection/gi, "Coastal")
     .trim();
 
@@ -238,6 +231,7 @@ function getCategoryChartData(categoryStats) {
   return merged.slice(0, 6);
 }
 
+// ===== [ADMIN DASHBOARD] Supabase count loaders: cards, categories, priorities, departments =====
 async function loadDashboardCardCounts() {
   return countComplaintsMany([
     { key: "total" },
@@ -336,6 +330,7 @@ async function loadDashboardDepartmentStats() {
     );
 }
 
+// ===== [ADMIN DASHBOARD] Subcomponents: mini card, category graph, priority row, report button =====
 function SummaryMiniCard({ label, item }) {
   return (
     <View style={styles.summaryMiniCard}>
@@ -420,16 +415,19 @@ function ViewFullReportButton({ onPress }) {
       onPress={onPress}
     >
       <Text style={styles.viewReportText}>View full report</Text>
-      <Feather name="chevron-right" size={22} color={GREEN} />
+      <Feather name="chevron-right" size={22} color="rgba(8, 122, 13, 1)" />
     </TouchableOpacity>
   );
 }
 
+// ===== [ADMIN DASHBOARD] Screen component =====
 export default function AdminDashboard() {
+  // --- [ADMIN DASHBOARD] Navigation & unread notifications ---
   const router = useRouter();
   const pathname = usePathname();
   const { unreadNotificationCount } = useAdminUnreadNotifications();
 
+  // --- [ADMIN DASHBOARD] State (seeded from page cache) & refs ---
   const cachedDashboard = getPageCache(ADMIN_DASHBOARD_CACHE_KEY);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dashboardCounts, setDashboardCounts] = useState(
@@ -449,7 +447,9 @@ export default function AdminDashboard() {
   const [departmentStats, setDepartmentStats] = useState(
     cachedDashboard?.departmentStats ?? [],
   );
-  const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
+  const [loadingComplaints, setLoadingComplaints] = useState(
+    !cachedDashboard?.counts,
+  );
   const [profilePhotoUrl, setProfilePhotoUrl] = useState(
     getProfileAvatarUrl() || cachedDashboard?.profilePhotoUrl || null,
   );
@@ -464,6 +464,7 @@ export default function AdminDashboard() {
     Poppins_700Bold,
   });
 
+  // --- [ADMIN DASHBOARD] Profile avatar subscription ---
   useEffect(() => {
     return subscribeProfileAvatar((url) => {
       setProfilePhotoUrl(url);
@@ -475,6 +476,7 @@ export default function AdminDashboard() {
     });
   }, []);
 
+  // --- [ADMIN DASHBOARD] Debounced navigation ---
   const smoothNavigate = useCallback(
     (route, isActive = false) => {
       if (isActive || navigationLockRef.current) return;
@@ -504,6 +506,7 @@ export default function AdminDashboard() {
     };
   }, []);
 
+  // --- [ADMIN DASHBOARD] Clock tick for greeting ---
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentDate(new Date());
@@ -512,6 +515,7 @@ export default function AdminDashboard() {
     return () => clearInterval(timer);
   }, []);
 
+  // --- [ADMIN DASHBOARD] Load dashboard counts & chart stats (cached) ---
   const loadDashboardData = useCallback(async (showLoader = true) => {
     const cached = getPageCache(ADMIN_DASHBOARD_CACHE_KEY);
     const hasCachedCounts = Boolean(cached?.counts);
@@ -529,6 +533,7 @@ export default function AdminDashboard() {
         return;
       }
 
+      const userId = session.user.id;
       const counts = await loadDashboardCardCounts();
       setDashboardCounts(counts);
 
@@ -536,6 +541,7 @@ export default function AdminDashboard() {
       setPageCache(ADMIN_DASHBOARD_CACHE_KEY, {
         ...prev,
         counts,
+        currentUserId: userId,
       });
     } catch (error) {
       console.log("Admin dashboard card count error:", error);
@@ -566,6 +572,7 @@ export default function AdminDashboard() {
         categoryStats: nextCategoryStats,
         priorityStats: nextPriorityStats,
         departmentStats: nextDepartmentStats,
+        currentUserId: prev.currentUserId || cached?.currentUserId,
       });
     } catch (error) {
       console.log("Admin dashboard chart stats error:", error);
@@ -580,27 +587,64 @@ export default function AdminDashboard() {
     }
   }, []);
 
+  // --- [ADMIN DASHBOARD] On focus: restore cache, refresh, register push token ---
   useFocusEffect(
     useCallback(() => {
-      const cached = getPageCache(ADMIN_DASHBOARD_CACHE_KEY);
-      if (cached?.counts) {
-        setDashboardCounts(cached.counts);
-      }
-      if (cached?.categoryStats) {
-        setCategoryStats(cached.categoryStats);
-      }
-      if (cached?.priorityStats) {
-        setPriorityStats(cached.priorityStats);
-      }
-      if (cached?.departmentStats) {
-        setDepartmentStats(cached.departmentStats);
-      }
+      let cancelled = false;
 
-      loadDashboardData(true);
-      registerPushTokenForCurrentUser();
+      const restoreAndRefresh = async () => {
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          const userId = session?.user?.id;
+
+          if (userId) {
+            const cached = await ensureDashboardCacheHydrated(
+              userId,
+              ADMIN_DASHBOARD_CACHE_KEY,
+            );
+            if (cancelled) return;
+
+            if (cached?.counts) {
+              setDashboardCounts(cached.counts);
+              setLoadingComplaints(false);
+            }
+            if (cached?.categoryStats) {
+              setCategoryStats(cached.categoryStats);
+            }
+            if (cached?.priorityStats) {
+              setPriorityStats(cached.priorityStats);
+            }
+            if (cached?.departmentStats) {
+              setDepartmentStats(cached.departmentStats);
+            }
+          } else {
+            const cached = getPageCache(ADMIN_DASHBOARD_CACHE_KEY);
+            if (cached?.counts) {
+              setDashboardCounts(cached.counts);
+              setLoadingComplaints(false);
+            }
+          }
+        } catch (error) {
+          console.log("Admin dashboard cache restore error:", error);
+        }
+
+        if (!cancelled) {
+          loadDashboardData(true);
+          registerPushTokenForCurrentUser();
+        }
+      };
+
+      restoreAndRefresh();
+
+      return () => {
+        cancelled = true;
+      };
     }, [loadDashboardData]),
   );
 
+  // --- [ADMIN DASHBOARD] Realtime: reload when complaints table changes ---
   useEffect(() => {
     const channel = supabase
       .channel(`admin-dashboard-complaints-${Date.now()}`)
@@ -624,6 +668,7 @@ export default function AdminDashboard() {
     };
   }, [loadDashboardData]);
 
+  // --- [ADMIN DASHBOARD] Derived values: greeting, stat cards, chart data, top department ---
   const greeting = useMemo(() => getGreetingByTime(currentDate), [currentDate]);
 
   const dashboardCards = useMemo(() => {
@@ -655,15 +700,17 @@ export default function AdminDashboard() {
     percent: 0,
   };
 
-  if (!fontsLoaded) {
+  // --- [ADMIN DASHBOARD] Render ---
+  if (!fontsLoaded && !getPageCache(ADMIN_DASHBOARD_CACHE_KEY)?.counts) {
     return <PageSkeleton variant="dashboard" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [ADMIN DASHBOARD UI] Fixed header: logo & profile avatar */}
         <View style={styles.fixedHeader}>
           <View style={styles.logoRow}>
             <Image source={MAIN_LOGO} style={styles.mainLogoImage} />
@@ -681,32 +728,37 @@ export default function AdminDashboard() {
             {profilePhotoUrl ? (
               <Image source={{ uri: profilePhotoUrl }} style={styles.avatar} />
             ) : (
-              <Ionicons name="person" size={25} color={GREEN} />
+              <Ionicons name="person" size={25} color="rgba(8, 122, 13, 1)" />
             )}
           </TouchableOpacity>
         </View>
 
+        {/* [ADMIN DASHBOARD UI] Scrollable dashboard content */}
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+          {/* [ADMIN DASHBOARD UI] Greeting */}
           <View style={styles.greetingContainer}>
             <Text style={styles.greetingSmall}>{greeting}</Text>
             <Text style={styles.greetingLarge}>Admin!</Text>
             <Text style={styles.officeText}>City Administrator</Text>
           </View>
 
+          {/* [ADMIN DASHBOARD UI] Section title: Dashboard */}
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Dashboard</Text>
           </View>
 
+          {/* [ADMIN DASHBOARD UI] Stat cards (or skeleton while loading) */}
           {loadingComplaints ? (
             <DashboardStatsSkeleton />
           ) : (
             <View style={styles.dashboardCardsRow}>
               {dashboardCards.map((item, index) => (
-                <View
+                <TouchableOpacity
                   key={item.title}
+                  activeOpacity={0.78}
                   style={[
                     styles.dashboardCard,
                     {
@@ -715,22 +767,29 @@ export default function AdminDashboard() {
                         index === dashboardCards.length - 1 ? 0 : CARD_GAP,
                     },
                   ]}
+                  onPress={() =>
+                    smoothNavigate({
+                      pathname: "/admin/complaints",
+                      params: { filter: item.filter },
+                    })
+                  }
                 >
                   <View style={styles.cardIconCircle}>
                     <MaterialCommunityIcons
                       name={item.icon}
                       size={23}
-                      color={WHITE}
+                      color="rgba(255, 255, 255, 1)"
                     />
                   </View>
 
                   <Text style={styles.cardTitle}>{item.title}</Text>
                   <Text style={styles.cardValue}>{item.value}</Text>
-                </View>
+                </TouchableOpacity>
               ))}
             </View>
           )}
 
+          {/* [ADMIN DASHBOARD UI] Manage Users shortcut card */}
           <TouchableOpacity
             activeOpacity={0.78}
             style={styles.manageUsersCard}
@@ -740,7 +799,7 @@ export default function AdminDashboard() {
               <MaterialCommunityIcons
                 name="account-group-outline"
                 size={27}
-                color={GREEN}
+                color="rgba(8, 122, 13, 1)"
               />
             </View>
 
@@ -751,9 +810,10 @@ export default function AdminDashboard() {
               </Text>
             </View>
 
-            <Feather name="chevron-right" size={22} color={MUTED} />
+            <Feather name="chevron-right" size={22} color="rgba(111, 119, 111, 1)" />
           </TouchableOpacity>
 
+          {/* [ADMIN DASHBOARD UI] Categories card: leading/least & bar graph */}
           <View style={styles.categoriesCard}>
             <View style={styles.summaryCardHeader}>
               <Text style={styles.summaryTitle}>Categories</Text>
@@ -761,7 +821,7 @@ export default function AdminDashboard() {
                 <MaterialCommunityIcons
                   name="chart-bar"
                   size={27}
-                  color={GREEN}
+                  color="rgba(8, 122, 13, 1)"
                 />
               </View>
             </View>
@@ -784,7 +844,9 @@ export default function AdminDashboard() {
             />
           </View>
 
+          {/* [ADMIN DASHBOARD UI] Bottom analytics row */}
           <View style={styles.bottomAnalyticsRow}>
+            {/* [ADMIN DASHBOARD UI] Top-performing department card */}
             <View style={styles.smallAnalyticsCard}>
               <Text style={styles.smallCardTitle}>
                 Top-Performing Departments
@@ -794,7 +856,7 @@ export default function AdminDashboard() {
                 <MaterialCommunityIcons
                   name="trophy-outline"
                   size={30}
-                  color={GREEN}
+                  color="rgba(8, 122, 13, 1)"
                 />
               </View>
 
@@ -824,6 +886,7 @@ export default function AdminDashboard() {
               />
             </View>
 
+            {/* [ADMIN DASHBOARD UI] Priority levels card */}
             <View style={styles.smallAnalyticsCard}>
               <Text style={styles.smallCardTitle}>Priority Levels</Text>
 
@@ -868,20 +931,22 @@ export default function AdminDashboard() {
   );
 }
 
+// ===== [ADMIN DASHBOARD] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   loader: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -913,21 +978,21 @@ const styles = StyleSheet.create({
   logoText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 25,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.1,
   },
 
   logoTextLight: {
-    color: ACCENT_GREEN,
+    color: "rgba(109, 187, 63, 1)",
   },
 
   avatarCircle: {
     width: 43,
     height: 43,
     borderRadius: 22,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -945,6 +1010,7 @@ const styles = StyleSheet.create({
     paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
+  // --- Greeting & section title ---
   greetingContainer: {
     marginBottom: 16,
   },
@@ -952,14 +1018,14 @@ const styles = StyleSheet.create({
   greetingSmall: {
     fontFamily: "Poppins_700Bold",
     fontSize: 19,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.4,
   },
 
   greetingLarge: {
     fontFamily: "Poppins_700Bold",
     fontSize: 29,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     lineHeight: 35,
     letterSpacing: 0.3,
   },
@@ -967,7 +1033,7 @@ const styles = StyleSheet.create({
   officeText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 13,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 4,
   },
 
@@ -981,9 +1047,10 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 20,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Stat cards ---
   dashboardCardsRow: {
     flexDirection: "row",
     marginBottom: 19,
@@ -993,11 +1060,11 @@ const styles = StyleSheet.create({
     height: 138,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     paddingTop: 12,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.04,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
@@ -1008,7 +1075,7 @@ const styles = StyleSheet.create({
     width: 43,
     height: 43,
     borderRadius: 22,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 7,
@@ -1017,7 +1084,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.2,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     textAlign: "center",
     lineHeight: 14,
     height: 34,
@@ -1027,22 +1094,23 @@ const styles = StyleSheet.create({
   cardValue: {
     fontFamily: "Poppins_700Bold",
     fontSize: 31,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginTop: 0,
     lineHeight: 36,
   },
 
+  // --- Manage Users card ---
   manageUsersCard: {
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: WHITE,
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 14,
     paddingVertical: 13,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 18,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.04,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
@@ -1053,9 +1121,9 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#BFE3B5",
+    borderColor: "rgba(191, 227, 181, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
@@ -1069,25 +1137,26 @@ const styles = StyleSheet.create({
   manageUsersTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   manageUsersSubtitle: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.8,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
   },
 
+  // --- Categories card & graph ---
   categoriesCard: {
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 14,
     paddingVertical: 15,
     marginBottom: 14,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.045,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
@@ -1105,7 +1174,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     paddingRight: 10,
   },
 
@@ -1113,7 +1182,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1128,9 +1197,9 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 74,
     borderRadius: 13,
-    backgroundColor: "#FBFEFA",
+    backgroundColor: "rgba(251, 254, 250, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     paddingHorizontal: 10,
     paddingVertical: 9,
     justifyContent: "center",
@@ -1139,7 +1208,7 @@ const styles = StyleSheet.create({
   summaryMiniLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 3,
   },
 
@@ -1147,13 +1216,13 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins_700Bold",
     fontSize: 13.5,
     lineHeight: 17,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   summaryMiniCount: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.8,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
   },
 
@@ -1176,7 +1245,7 @@ const styles = StyleSheet.create({
   categoryGraphCount: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 4,
   },
 
@@ -1184,7 +1253,7 @@ const styles = StyleSheet.create({
     width: 25,
     height: 86,
     borderRadius: 14,
-    backgroundColor: "#EEF5EC",
+    backgroundColor: "rgba(238, 245, 236, 1)",
     overflow: "hidden",
     justifyContent: "flex-end",
   },
@@ -1195,14 +1264,14 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 14,
     borderBottomLeftRadius: 14,
     borderBottomRightRadius: 14,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
   },
 
   categoryGraphLabel: {
     width: "100%",
     fontFamily: "Poppins_600SemiBold",
     fontSize: 8.7,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 7,
     textAlign: "center",
   },
@@ -1218,9 +1287,10 @@ const styles = StyleSheet.create({
   viewReportText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Bottom analytics cards (departments, priority) ---
   bottomAnalyticsRow: {
     flexDirection: "row",
     gap: 10,
@@ -1232,11 +1302,11 @@ const styles = StyleSheet.create({
     minHeight: 255,
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 12,
     paddingVertical: 14,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.04,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
@@ -1247,7 +1317,7 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins_700Bold",
     fontSize: 16,
     lineHeight: 19,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 14,
   },
 
@@ -1255,7 +1325,7 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 11,
@@ -1265,21 +1335,21 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins_700Bold",
     fontSize: 13.3,
     lineHeight: 17,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 6,
   },
 
   departmentRate: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 12,
   },
 
   departmentProgressTrack: {
     height: 9,
     borderRadius: 9,
-    backgroundColor: TRACK,
+    backgroundColor: "rgba(237, 241, 236, 1)",
     overflow: "hidden",
   },
 
@@ -1287,7 +1357,7 @@ const styles = StyleSheet.create({
     height: "100%",
     minWidth: 4,
     borderRadius: 9,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
   },
 
   smallCardSpacer: {
@@ -1297,14 +1367,14 @@ const styles = StyleSheet.create({
   priorityMainTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 22,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginTop: 1,
   },
 
   priorityMainSubtitle: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.8,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 0,
     marginBottom: 9,
   },
@@ -1335,20 +1405,20 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     paddingRight: 4,
   },
 
   priorityPercent: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   priorityTrack: {
     height: 6,
     borderRadius: 6,
-    backgroundColor: TRACK,
+    backgroundColor: "rgba(237, 241, 236, 1)",
     overflow: "hidden",
   },
 
@@ -1361,27 +1431,28 @@ const styles = StyleSheet.create({
   priorityLeastText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 9.8,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginBottom: 5,
   },
 
   analyticsEmpty: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     paddingVertical: 8,
   },
 
+  // --- Bottom navigation ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -1416,9 +1487,9 @@ const styles = StyleSheet.create({
     minWidth: 17,
     height: 17,
     borderRadius: 9,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 1.5,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -1427,7 +1498,7 @@ const styles = StyleSheet.create({
   notificationNavBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     includeFontPadding: false,
     lineHeight: 11,
   },

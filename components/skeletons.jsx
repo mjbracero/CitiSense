@@ -2,10 +2,7 @@ import { ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Skeleton from "./Skeleton";
 
-const WHITE = "#FFFFFF";
-const BG = "#F7FAF6";
-const BORDER = "#E2E7E0";
-
+// ===== [SKELETONS] Complaint card & list =====
 export function ComplaintCardSkeleton() {
   return (
     <View style={styles.complaintCard}>
@@ -35,6 +32,7 @@ export function ComplaintListSkeleton({ count = 4 }) {
   );
 }
 
+// ===== [SKELETONS] Notification card & list =====
 export function NotificationCardSkeleton() {
   return (
     <View style={styles.notificationCard}>
@@ -65,6 +63,7 @@ export function NotificationListSkeleton({ count = 5 }) {
   );
 }
 
+// ===== [SKELETONS] User card & list =====
 export function UserCardSkeleton() {
   return (
     <View style={styles.userCard}>
@@ -100,6 +99,7 @@ export function UserListSkeleton({ count = 4 }) {
   );
 }
 
+// ===== [SKELETONS] Dashboard stats & home =====
 export function DashboardStatsSkeleton() {
   return (
     <View style={styles.statsRow}>
@@ -131,6 +131,7 @@ export function DashboardHomeSkeleton() {
   );
 }
 
+// ===== [SKELETONS] Profile screen =====
 export function ProfileScreenSkeleton() {
   return (
     <ScrollView
@@ -160,6 +161,7 @@ export function ProfileScreenSkeleton() {
   );
 }
 
+// ===== [SKELETONS] Analytics report =====
 export function AnalyticsReportSkeleton({ hideIntro = false }) {
   const Wrapper = hideIntro ? View : ScrollView;
   const wrapperProps = hideIntro
@@ -193,6 +195,7 @@ export function AnalyticsReportSkeleton({ hideIntro = false }) {
   );
 }
 
+// ===== [SKELETONS] Audit log list =====
 export function AuditLogListSkeleton({ count = 8 }) {
   return (
     <View>
@@ -210,6 +213,7 @@ export function AuditLogListSkeleton({ count = 8 }) {
   );
 }
 
+// ===== [SKELETONS] AI analysis result =====
 export function AnalysisResultSkeleton() {
   return (
     <ScrollView
@@ -243,6 +247,7 @@ export function AnalysisResultSkeleton() {
   );
 }
 
+// ===== [SKELETONS] Map block, submit screen & auth form =====
 export function MapBlockSkeleton({ style }) {
   return (
     <View style={[styles.mapBlock, style]}>
@@ -288,6 +293,7 @@ export function AuthFormSkeleton() {
   );
 }
 
+// ===== [SKELETONS] Full-page skeleton picker by variant =====
 export function PageSkeleton({ variant = "list" }) {
   const content =
     variant === "dashboard" ? (
@@ -344,10 +350,12 @@ export function PageSkeleton({ variant = "list" }) {
   );
 }
 
+// ===== [SKELETONS] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & spacing utilities ---
   safe: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
   flex: {
     flex: 1,
@@ -381,20 +389,21 @@ const styles = StyleSheet.create({
   compactPad: {
     paddingBottom: 24,
   },
+  // --- Card shells ---
   complaintCard: {
     borderRadius: 18,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     padding: 14,
     marginBottom: 12,
   },
   notificationCard: {
     flexDirection: "row",
     borderRadius: 18,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     padding: 14,
     marginBottom: 12,
   },
@@ -404,17 +413,17 @@ const styles = StyleSheet.create({
   },
   userCard: {
     borderRadius: 18,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     padding: 14,
     marginBottom: 12,
   },
   detailsBox: {
     borderRadius: 14,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: "#EDF1EC",
+    borderColor: "rgba(237, 241, 236, 1)",
     padding: 12,
     marginTop: 12,
     gap: 8,
@@ -431,33 +440,33 @@ const styles = StyleSheet.create({
   statCard: {
     flex: 1,
     borderRadius: 16,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     padding: 10,
   },
   profileHero: {
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 20,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     padding: 16,
   },
   infoCard: {
     borderRadius: 16,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     padding: 16,
     gap: 12,
   },
   reportCard: {
     borderRadius: 18,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     padding: 16,
     marginTop: 16,
   },
@@ -470,7 +479,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    borderBottomColor: "rgba(226, 231, 224, 1)",
   },
   stepRow: {
     flexDirection: "row",
@@ -478,14 +487,15 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 18,
   },
+  // --- Map, submit & auth layouts ---
   mapBlock: {
     flex: 1,
     overflow: "hidden",
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
   submitWrap: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
   chatPad: {
     flex: 1,
@@ -504,7 +514,7 @@ const styles = StyleSheet.create({
   },
   authWrap: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 28,

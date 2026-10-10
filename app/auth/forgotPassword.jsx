@@ -8,6 +8,7 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -26,15 +27,19 @@ import {
   Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
 
+// ===== [AUTH FORGOT] Assets =====
 const logo = require("../../assets/images/logowname.png");
 
+// ===== [AUTH FORGOT] Forgot password screen component =====
 export default function ForgotPasswordScreen() {
+  // --- [AUTH FORGOT] State ---
   const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
 
+  // --- [AUTH FORGOT] Fonts (skeleton until loaded) ---
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
@@ -44,6 +49,7 @@ export default function ForgotPasswordScreen() {
 
   if (!fontsLoaded) return <PageSkeleton variant="auth" />;
 
+  // --- [AUTH FORGOT] Send reset link handler ---
   const handleResetPassword = async () => {
     const cleanEmail = email.trim().toLowerCase();
 
@@ -84,20 +90,33 @@ export default function ForgotPasswordScreen() {
     }
   };
 
+  // --- [AUTH FORGOT] Render ---
   return (
     <SafeAreaView style={styles.safeArea}>
+      {/* [AUTH FORGOT UI] Keyboard-aware scroll container */}
       <KeyboardAwareScrollView
-          contentContainerStyle={styles.container}
-          showsVerticalScrollIndicator={false}
-        >
+        style={styles.scroll}
+        contentContainerStyle={styles.container}
+        enableOnAndroid
+        enableAutomaticScroll
+        enableResetScrollToCoords={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        extraScrollHeight={Platform.OS === "android" ? 8 : 12}
+        extraHeight={Platform.OS === "android" ? 10 : 12}
+        showsVerticalScrollIndicator={false}
+        bounces
+      >
+          {/* [AUTH FORGOT UI] Back button */}
           <TouchableOpacity
             style={styles.backButton}
             onPress={() => router.back()}
             activeOpacity={0.7}
           >
-            <Ionicons name="chevron-back" size={24} color="#0A760A" />
+            <Ionicons name="chevron-back" size={24} color="rgba(10, 118, 10, 1)" />
           </TouchableOpacity>
 
+          {/* [AUTH FORGOT UI] Logo, title & subtitle */}
           <Image source={logo} style={styles.logo} resizeMode="contain" />
 
           <Text
@@ -123,7 +142,9 @@ export default function ForgotPasswordScreen() {
             reset your password.
           </Text>
 
+          {/* [AUTH FORGOT UI] Form */}
           <View style={styles.form}>
+            {/* [AUTH FORGOT UI] Email field */}
             <Text
               style={[
                 styles.label,
@@ -136,7 +157,7 @@ export default function ForgotPasswordScreen() {
             </Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="mail" size={18} color="#0A760A" />
+              <Ionicons name="mail" size={18} color="rgba(10, 118, 10, 1)" />
 
               <TextInput
                 style={[
@@ -146,7 +167,7 @@ export default function ForgotPasswordScreen() {
                   },
                 ]}
                 placeholder="Enter your registered email"
-                placeholderTextColor="#717A6D"
+                placeholderTextColor="rgba(113, 122, 109, 1)"
                 value={email}
                 onChangeText={setEmail}
                 keyboardType="email-address"
@@ -155,9 +176,10 @@ export default function ForgotPasswordScreen() {
               />
             </View>
 
+            {/* [AUTH FORGOT UI] "Reset link sent" success box */}
             {emailSent && (
               <View style={styles.successBox}>
-                <Ionicons name="checkmark-circle" size={20} color="#0A760A" />
+                <Ionicons name="checkmark-circle" size={20} color="rgba(10, 118, 10, 1)" />
 
                 <Text
                   style={[
@@ -172,6 +194,7 @@ export default function ForgotPasswordScreen() {
               </View>
             )}
 
+            {/* [AUTH FORGOT UI] Send Reset Link button */}
             <TouchableOpacity
               style={[styles.resetButton, loading && styles.disabledButton]}
               onPress={handleResetPassword}
@@ -179,7 +202,7 @@ export default function ForgotPasswordScreen() {
               activeOpacity={0.8}
             >
               {loading ? (
-                <ActivityIndicator color="#FFFFFF" />
+                <ActivityIndicator color="rgba(255, 255, 255, 1)" />
               ) : (
                 <Text
                   style={[
@@ -194,6 +217,7 @@ export default function ForgotPasswordScreen() {
               )}
             </TouchableOpacity>
 
+            {/* [AUTH FORGOT UI] Back to Log In link */}
             <TouchableOpacity
               style={styles.loginButton}
               onPress={() => router.back()}
@@ -216,13 +240,15 @@ export default function ForgotPasswordScreen() {
   );
 }
 
+// ===== [AUTH FORGOT] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
-  keyboardView: {
+  scroll: {
     flex: 1,
   },
 
@@ -241,7 +267,7 @@ const styles = StyleSheet.create({
     borderRadius: 21,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#E7F5DB",
+    backgroundColor: "rgba(231, 245, 219, 1)",
     marginBottom: 8,
   },
 
@@ -253,7 +279,7 @@ const styles = StyleSheet.create({
 
   title: {
     fontSize: 28,
-    color: "#0A760A",
+    color: "rgba(10, 118, 10, 1)",
     textAlign: "center",
     marginTop: 4,
   },
@@ -262,11 +288,12 @@ const styles = StyleSheet.create({
     width: 300,
     textAlign: "center",
     fontSize: 12,
-    color: "#41493E",
+    color: "rgba(65, 73, 62, 1)",
     lineHeight: 18,
     marginTop: 8,
   },
 
+  // --- Form, success box & buttons ---
   form: {
     width: "100%",
     marginTop: 30,
@@ -274,7 +301,7 @@ const styles = StyleSheet.create({
 
   label: {
     fontSize: 13,
-    color: "#41493E",
+    color: "rgba(65, 73, 62, 1)",
     marginBottom: 6,
   },
 
@@ -282,27 +309,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#B4B4B4",
+    borderColor: "rgba(180, 180, 180, 1)",
     borderRadius: 7,
     paddingHorizontal: 12,
     height: 48,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   input: {
     flex: 1,
     height: "100%",
     fontSize: 13,
-    color: "#41493E",
+    color: "rgba(65, 73, 62, 1)",
     marginLeft: 8,
   },
 
   successBox: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#E7F5DB",
+    backgroundColor: "rgba(231, 245, 219, 1)",
     borderWidth: 1,
-    borderColor: "#0A760A",
+    borderColor: "rgba(10, 118, 10, 1)",
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -312,13 +339,13 @@ const styles = StyleSheet.create({
   successText: {
     flex: 1,
     fontSize: 12,
-    color: "#0A760A",
+    color: "rgba(10, 118, 10, 1)",
     marginLeft: 8,
     lineHeight: 17,
   },
 
   resetButton: {
-    backgroundColor: "#0A760A",
+    backgroundColor: "rgba(10, 118, 10, 1)",
     borderRadius: 50,
     height: 50,
     justifyContent: "center",
@@ -331,7 +358,7 @@ const styles = StyleSheet.create({
   },
 
   resetButtonText: {
-    color: "#FFFFFF",
+    color: "rgba(255, 255, 255, 1)",
     fontSize: 16,
   },
 
@@ -341,7 +368,7 @@ const styles = StyleSheet.create({
   },
 
   loginText: {
-    color: "#0A760A",
+    color: "rgba(10, 118, 10, 1)",
     fontSize: 14,
   },
 });

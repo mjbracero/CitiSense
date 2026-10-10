@@ -38,19 +38,12 @@ import { writeAuditLog } from "../../lib/auditLogService";
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
+// ===== [ADMIN NOTIFS] Constants: colors, layout, cache key =====
 
 const H_PADDING = 20;
 const ADMIN_NOTIFICATIONS_CACHE_KEY = "admin.notifications";
 
+// ===== [ADMIN NOTIFS] Filter chips & legacy bottom tabs config =====
 const filterOptions = [
   "All",
   "Unread",
@@ -104,6 +97,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [ADMIN NOTIFS] Helpers: text, metadata, date/time formatting =====
 function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -147,6 +141,7 @@ function formatTime(value) {
   });
 }
 
+// ===== [ADMIN NOTIFS] Notification type -> display label & icon style =====
 function getDisplayType(type, metadata = {}) {
   const cleanType = normalizeText(type);
 
@@ -205,51 +200,52 @@ function getNotificationStyle(type) {
 
   if (displayType === "New Complaint") {
     return {
-      bg: "#E8EEFF",
-      color: BLUE,
+      bg: "rgba(232, 238, 255, 1)",
+      color: "rgba(49, 90, 154, 1)",
       icon: "clipboard-text-outline",
     };
   }
 
   if (displayType === "Citizen Validation") {
     return {
-      bg: "#F3EAFF",
-      color: "#7A3EA8",
+      bg: "rgba(243, 234, 255, 1)",
+      color: "rgba(122, 62, 168, 1)",
       icon: "account-check-outline",
     };
   }
 
   if (displayType === "Reassignment") {
     return {
-      bg: "#E8EEFF",
-      color: BLUE,
+      bg: "rgba(232, 238, 255, 1)",
+      color: "rgba(49, 90, 154, 1)",
       icon: "swap-horizontal-circle-outline",
     };
   }
 
   if (displayType === "Final Confirmation") {
     return {
-      bg: "#DFF0DF",
-      color: GREEN,
+      bg: "rgba(223, 240, 223, 1)",
+      color: "rgba(8, 122, 13, 1)",
       icon: "check-decagram-outline",
     };
   }
 
   if (displayType === "Returned") {
     return {
-      bg: "#FFF0F0",
-      color: RED,
+      bg: "rgba(255, 240, 240, 1)",
+      color: "rgba(215, 25, 32, 1)",
       icon: "arrow-u-left-top",
     };
   }
 
   return {
-    bg: "#F1F4F1",
-    color: MUTED,
+    bg: "rgba(241, 244, 241, 1)",
+    color: "rgba(111, 119, 111, 1)",
     icon: "bell-outline",
   };
 }
 
+// ===== [ADMIN NOTIFS] Map DB notification row -> UI notification object =====
 function mapNotification(row) {
   const metadata = normalizeMetadata(row.metadata);
   const displayType = getDisplayType(row.type, metadata);
@@ -291,7 +287,9 @@ function mapNotification(row) {
   };
 }
 
+// ===== [ADMIN NOTIFS] Screen component =====
 export default function AdminNotification() {
+  // --- [ADMIN NOTIFS] State, refs & navigation ---
   const router = useRouter();
   const pathname = usePathname();
 
@@ -340,6 +338,7 @@ export default function AdminNotification() {
     Poppins_700Bold,
   });
 
+  // --- [ADMIN NOTIFS] Navigation lock (prevents double taps) ---
   const smoothNavigate = useCallback(
     (route, isActive = false) => {
       if (isActive || navigationLockRef.current) return;
@@ -373,6 +372,7 @@ export default function AdminNotification() {
     notificationsDataRef.current = notifications;
   }, [notifications]);
 
+  // --- [ADMIN NOTIFS] Load notifications from Supabase (cached + paginated) ---
   const loadNotifications = useCallback(async (options = {}) => {
     const normalized =
       typeof options === "boolean" ? { showLoader: options } : options;
@@ -500,6 +500,7 @@ export default function AdminNotification() {
     }
   }, [selectedFilter]);
 
+  // --- [ADMIN NOTIFS] Infinite scroll: load more & fill viewport ---
   const loadMoreNotifications = useCallback(() => {
     loadNotifications({ append: true, showLoader: false });
   }, [loadNotifications]);
@@ -522,6 +523,7 @@ export default function AdminNotification() {
     }
   };
 
+  // --- [ADMIN NOTIFS] Initial load & reload on focus ---
   useEffect(() => {
     loadNotificationsRef.current = loadNotifications;
   }, [loadNotifications]);
@@ -541,6 +543,7 @@ export default function AdminNotification() {
     loadNotifications(true);
   }, [loadNotifications]);
 
+  // --- [ADMIN NOTIFS] Realtime: reload when admin_notifications changes ---
   useEffect(() => {
     if (!currentAdminId) return;
 
@@ -599,6 +602,7 @@ export default function AdminNotification() {
     };
   }, [currentAdminId]);
 
+  // --- [ADMIN NOTIFS] Filter notifications by selected chip ---
   const filteredNotifications = useMemo(() => {
     if (selectedFilter === "Unread") {
       return notifications.filter((item) => item.unread);
@@ -611,6 +615,7 @@ export default function AdminNotification() {
     return notifications.filter((item) => item.type === selectedFilter);
   }, [notifications, selectedFilter]);
 
+  // --- [ADMIN NOTIFS] Mark one / all as read ---
   const markNotificationAsRead = async (notification) => {
     if (!notification?.rawId || !currentAdminId || !notification.unread) return;
 
@@ -666,6 +671,7 @@ export default function AdminNotification() {
     });
   };
 
+  // --- [ADMIN NOTIFS] Open / close details modal ---
   const openNotificationDetails = async (notification) => {
     const updatedNotification = { ...notification, unread: false };
 
@@ -680,15 +686,17 @@ export default function AdminNotification() {
     setSelectedNotification(null);
   };
 
+  // --- [ADMIN NOTIFS] Render ---
   if (!fontsLoaded) {
     return <PageSkeleton variant="notifications" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [ADMIN NOTIFS UI] Sticky header: title, unread count, mark all read */}
         <View style={styles.stickyHeader}>
           <View style={styles.headerTopRow}>
             <View style={{ flex: 1 }}>
@@ -713,6 +721,7 @@ export default function AdminNotification() {
             )}
           </View>
 
+          {/* [ADMIN NOTIFS UI] Filter chips (horizontal scroll) */}
           <ScrollView
             horizontal
             nestedScrollEnabled
@@ -746,6 +755,7 @@ export default function AdminNotification() {
           </ScrollView>
         </View>
 
+        {/* [ADMIN NOTIFS UI] Notification list (infinite scroll) */}
         <ScrollView
           style={styles.listScroll}
           showsVerticalScrollIndicator={false}
@@ -758,6 +768,7 @@ export default function AdminNotification() {
           onContentSizeChange={(_, height) => maybeFillViewport(height)}
         >
           <View style={styles.notificationList}>
+            {/* [ADMIN NOTIFS UI] Skeleton / empty state / notification cards */}
             {loadingNotifications && notifications.length === 0 ? (
               <NotificationListSkeleton count={5} />
             ) : filteredNotifications.length === 0 ? (
@@ -765,7 +776,7 @@ export default function AdminNotification() {
                 <Ionicons
                   name="notifications-off-outline"
                   size={34}
-                  color={MUTED}
+                  color="rgba(111, 119, 111, 1)"
                 />
                 <Text style={styles.emptyTitle}>No notifications found</Text>
                 <Text style={styles.emptyText}>
@@ -843,6 +854,7 @@ export default function AdminNotification() {
                 );
               })
             )}
+            {/* [ADMIN NOTIFS UI] Load-more footer */}
             <ComplaintsLoadMoreFooter
               loading={loadingMoreNotifications}
               label="Loading more notifications..."
@@ -850,6 +862,7 @@ export default function AdminNotification() {
           </View>
         </ScrollView>
 
+        {/* [ADMIN NOTIFS UI] Notification details modal */}
         <Modal
           visible={detailsVisible}
           transparent
@@ -868,10 +881,11 @@ export default function AdminNotification() {
                   style={styles.modalCloseButton}
                   onPress={closeNotificationDetails}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
+              {/* [ADMIN NOTIFS UI] Details body: type, message, complaint info */}
               {selectedNotification && (
                 <ScrollView showsVerticalScrollIndicator={false}>
                   <View style={styles.detailsTypeRow}>
@@ -942,6 +956,7 @@ export default function AdminNotification() {
                     />
                   </View>
 
+                  {/* [ADMIN NOTIFS UI] Review Complaint button */}
                   <TouchableOpacity
                     activeOpacity={0.78}
                     style={styles.viewComplaintButton}
@@ -959,7 +974,7 @@ export default function AdminNotification() {
                     <Text style={styles.viewComplaintButtonText}>
                       Review Complaint
                     </Text>
-                    <Feather name="arrow-right" size={17} color={WHITE} />
+                    <Feather name="arrow-right" size={17} color="rgba(255, 255, 255, 1)" />
                   </TouchableOpacity>
                 </ScrollView>
               )}
@@ -971,6 +986,7 @@ export default function AdminNotification() {
   );
 }
 
+// ===== [ADMIN NOTIFS] Subcomponent: InfoRow (label/value in details modal) =====
 function InfoRow({ label, value, last }) {
   return (
     <View style={[styles.infoRow, last && styles.infoRowLast]}>
@@ -980,24 +996,26 @@ function InfoRow({ label, value, last }) {
   );
 }
 
+// ===== [ADMIN NOTIFS] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   stickyHeader: {
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 4,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    borderBottomColor: "rgba(226, 231, 224, 1)",
     zIndex: 2,
   },
 
@@ -1007,7 +1025,7 @@ const styles = StyleSheet.create({
 
   loader: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1027,7 +1045,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 29,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     lineHeight: 35,
     letterSpacing: 0.3,
   },
@@ -1035,14 +1053,14 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
   },
 
   markAllReadButton: {
     minHeight: 32,
     borderRadius: 16,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",
@@ -1051,9 +1069,10 @@ const styles = StyleSheet.create({
   markAllReadButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Filter chips ---
   filterScrollContent: {
     gap: 8,
     paddingRight: 10,
@@ -1063,42 +1082,43 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 15,
     alignItems: "center",
     justifyContent: "center",
   },
 
   filterChipActive: {
-    backgroundColor: GREEN,
-    borderColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
+    borderColor: "rgba(8, 122, 13, 1)",
   },
 
   filterChipText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 11,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   filterChipTextActive: {
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Notification cards ---
   notificationList: {
     gap: 10,
   },
 
   notificationCard: {
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     borderRadius: 14,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.03,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
@@ -1106,8 +1126,8 @@ const styles = StyleSheet.create({
   },
 
   notificationCardUnread: {
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
   },
 
   notificationIconCircle: {
@@ -1133,20 +1153,20 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_700Bold",
     fontSize: 13.2,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   unreadDot: {
     width: 9,
     height: 9,
     borderRadius: 5,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
   },
 
   notificationMessage: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.8,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     lineHeight: 15,
     marginTop: 2,
   },
@@ -1154,7 +1174,7 @@ const styles = StyleSheet.create({
   complaintTitleText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.2,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 4,
   },
 
@@ -1184,15 +1204,16 @@ const styles = StyleSheet.create({
     textAlign: "right",
     fontFamily: "Poppins_500Medium",
     fontSize: 9.6,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
+  // --- Empty state ---
   emptyCard: {
     minHeight: 150,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 20,
@@ -1201,29 +1222,30 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 8,
   },
 
   emptyText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     lineHeight: 16,
     marginTop: 3,
   },
 
+  // --- Legacy bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -1258,9 +1280,9 @@ const styles = StyleSheet.create({
     minWidth: 17,
     height: 17,
     borderRadius: 9,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 1.5,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -1269,7 +1291,7 @@ const styles = StyleSheet.create({
   notificationNavBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     includeFontPadding: false,
     lineHeight: 11,
   },
@@ -1282,6 +1304,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Details modal ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -1292,7 +1315,7 @@ const styles = StyleSheet.create({
     maxHeight: "88%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 30 : 20,
@@ -1302,7 +1325,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -1317,14 +1340,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1351,22 +1374,22 @@ const styles = StyleSheet.create({
   detailsTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 16,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 22,
   },
 
   detailsSubtitle: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 3,
   },
 
   messageBox: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 12,
@@ -1375,7 +1398,7 @@ const styles = StyleSheet.create({
   messageText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginTop: 3,
   },
@@ -1383,8 +1406,8 @@ const styles = StyleSheet.create({
   complaintInfoCard: {
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     marginBottom: 14,
@@ -1393,7 +1416,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 8,
   },
 
@@ -1408,13 +1431,13 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   infoValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 16,
     marginTop: 1,
   },
@@ -1422,7 +1445,7 @@ const styles = StyleSheet.create({
   viewComplaintButton: {
     height: 44,
     borderRadius: 22,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1433,6 +1456,6 @@ const styles = StyleSheet.create({
   viewComplaintButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 });

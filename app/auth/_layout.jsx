@@ -1,7 +1,7 @@
 import { Stack } from "expo-router";
 import { View, StyleSheet } from "react-native";
-import { APP_BACKGROUND } from "../../lib/platformUi";
 
+// ===== [AUTH LAYOUT] Auth stack layout (login, signup, forgot/reset password) =====
 export default function AuthLayout() {
   return (
     <View style={styles.container}>
@@ -20,6 +20,6 @@ export default function AuthLayout() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: APP_BACKGROUND,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 });

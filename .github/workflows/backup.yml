@@ -1,0 +1,90 @@
+name: Nightly Backup
+
+# Full CitiSense backup (database + user accounts + photos), stored outside Supabase
+# as an encrypted GitHub artifact. RPO: 24 hours.
+on:
+  schedule:
+    - cron: "0 18 * * *" # 18:00 UTC = 2:00 AM Asia/Manila
+  workflow_dispatch: # "Run workflow" button = Back Up Now
+
+concurrency:
+  group: citisense-backup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: backup-server
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_PASSWORD: ${{ secrets.BACKUP_PASSWORD }}
+      BACKUP_TIMEZONE: Asia/Manila
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        run: |
+          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL BACKUP_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing repository secret: $name"
+              exit 1
+            fi
+          done
+          echo "BACKUP_DIR=$RUNNER_TEMP/backups" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backup-server/package-lock.json
+
+      # pg_dump must match the database major version (Supabase = PostgreSQL 17).
+      - name: Install PostgreSQL 17 client and 7-Zip
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common p7zip-full
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - run: npm ci --omit=dev
+
+      - name: Run backup
+        run: npm run backup:now
+
+      - name: Encrypt backup
+        id: encrypt
+        run: |
+          archive=$(ls "$BACKUP_DIR"/citisense-*.tar.gz | head -n 1)
+          id=$(basename "$archive" .tar.gz)
+          mkdir -p "$RUNNER_TEMP/upload"
+          7z a -t7z -mhe=on -mx=0 -p"$BACKUP_PASSWORD" \
+            "$RUNNER_TEMP/upload/$id.7z" "$archive" "$BACKUP_DIR/$id.json" > /dev/null
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          node -e '
+            const m = require(process.env.BACKUP_DIR + "/${{ steps.encrypt.outputs.id }}.json");
+            const mb = (m.sizeBytes / 1048576).toFixed(1);
+            const rows = Object.entries(m.storage || {})
+              .map(([b, s]) => `| ${b} | ${s.files} files | ${s.failed} failed |`).join("\n");
+            console.log(`## CitiSense backup ${m.status}\n\n- **Backup:** ${m.id}\n- **Size:** ${mb} MB\n- **Duration:** ${Math.round(m.durationMs / 1000)} s\n\n| Bucket | Files | Failed |\n| --- | --- | --- |\n${rows}`);
+          ' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.encrypt.outputs.id }}
+          path: ${{ runner.temp }}/upload/${{ steps.encrypt.outputs.id }}.7z
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error

@@ -34,6 +34,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { PageSkeleton } from "../../components/skeletons";
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import QuickCaptureCamera from "../../components/QuickCaptureCamera";
+import EvidencePrivacyEditor from "../../components/EvidencePrivacyEditor";
 import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
 import { resolveCommonAddress } from "../../lib/addressUtils";
 import {
@@ -78,17 +79,8 @@ import { notify } from "../../lib/toast";
 import { getPageCache, setPageCache } from "../../lib/pageDataCache";
 import { createVoiceTranscriber } from "../../lib/voiceRecording";
 
+// ===== [CITIZEN SUBMIT] Constants: colors, layout, cache keys =====
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-
-const GREEN = "#087A0D";
-const SOFT_GREEN = "#EAF6E4";
-const RED = "#D71920";
-const DARK_RED = "#B71C1C";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
 
 const H_PADDING = 18;
 const MAX_PHOTOS = 3;
@@ -99,6 +91,7 @@ const CITIZEN_PROFILE_CACHE_KEY = "citizen.profile";
 const INPUT_KEYBOARD_GAP = 8;
 const SUBMIT_COMPOSER_GAP = 8;
 
+// ===== [CITIZEN SUBMIT] Keyboard controller helpers (Android input mode) =====
 /** Lazy require — import-time TurboModule checks can miss the native module. */
 function getKeyboardControllerModule() {
   try {
@@ -134,6 +127,7 @@ function unlockSubmitKeyboardMode() {
   }
 }
 
+// ===== [CITIZEN SUBMIT] Voice/speech digit parsing & PH mobile sanitizing =====
 const PH_MOBILE_REGEX = /^09\d{9}$/;
 
 const SPOKEN_DIGIT_WORDS = {
@@ -227,6 +221,7 @@ function isValidPhilippineMobile(number) {
   return PH_MOBILE_REGEX.test(String(number || "").replace(/\D/g, ""));
 }
 
+// ===== [CITIZEN SUBMIT] Profile contact number lookup & validation =====
 function getValidStoredContact(...candidates) {
   for (const candidate of candidates) {
     const digits = String(candidate || "").replace(/\D/g, "");
@@ -276,10 +271,21 @@ function isAcceptableContactNumber(number) {
   return PH_MOBILE_REGEX.test(digits) || /^\d{11}$/.test(digits);
 }
 
+const CONTACT_PREFIX = "09";
+
+function sanitizeTypedContact(text) {
+  const digits = String(text || "").replace(/\D/g, "").slice(0, 11);
+  if (digits.length <= CONTACT_PREFIX.length) return CONTACT_PREFIX;
+  return digits.startsWith(CONTACT_PREFIX)
+    ? digits
+    : sanitizePhilippineMobileInput(digits);
+}
+
 function getContactNumberErrorMessage() {
   return "Contact number must start with 09 and be exactly 11 digits.";
 }
 
+// ===== [CITIZEN SUBMIT] Map defaults & GPS location helpers =====
 const BOT_LOGO = require("../../assets/images/botlogo.png");
 
 const DEFAULT_REGION = {
@@ -325,40 +331,189 @@ async function getFreshDeviceLocation() {
   };
 }
 
+// ===== [CITIZEN SUBMIT] Emergency keywords & bottom tab config =====
+// Avoid generic words that also describe non-emergencies ("patay ang suga",
+// "namatay ang ilaw", "tabangi mi") — those appear in ordinary complaints.
 const emergencyKeywords = [
+  // English
   "fire",
-  "sunog",
+  "burning",
   "murder",
   "killing",
   "kill",
   "stab",
   "stabbing",
+  "stabbed",
   "shoot",
   "shooting",
+  "shot",
   "gun",
   "drowning",
   "drown",
-  "nalumos",
-  "lunod",
   "accident",
   "crash",
+  "collision",
+  "run over",
   "bleeding",
   "unconscious",
+  "fainted",
+  "not breathing",
   "rescue",
+  "trapped",
   "earthquake",
   "landslide",
+  "collapsed",
   "attack",
   "violence",
   "medical emergency",
   "heart attack",
   "stroke",
+  "seizure",
+  "electrocuted",
+  "live wire",
   "explosion",
-  "bomba",
+  "gas leak",
+  "bomb",
   "riot",
   "hostage",
+  "kidnap",
+  "rape",
+  "robbery",
+  "holdup",
+  "hold-up",
   "suicide",
+  "overdose",
+  "poisoned",
+  "snake bite",
+  "flash flood",
+  "tsunami",
+  "storm surge",
   "emergency",
+
+  // Tagalog
+  "sunog",
+  "nasusunog",
+  "nasunog",
+  "aksidente",
+  "naaksidente",
+  "disgrasya",
+  "desgrasya",
+  "banggaan",
+  "nabangga",
+  "bumangga",
+  "nasagasaan",
+  "sinagasaan",
+  "saksak",
+  "sinaksak",
+  "nasaksak",
+  "binaril",
+  "nabaril",
+  "barilan",
+  "pamamaril",
+  "pinatay",
+  "patayan",
+  "nalunod",
+  "nalulunod",
+  "lindol",
+  "gumuho",
+  "pagguho",
+  "nagdurugo",
+  "duguan",
+  "walang malay",
+  "nawalan ng malay",
+  "nahimatay",
+  "hindi humihinga",
+  "inatake sa puso",
+  "atake sa puso",
+  "nakuryente",
+  "pagsabog",
+  "sumabog",
+  "holdap",
+  "kinidnap",
+  "dinukot",
+  "ginahasa",
+  "nalason",
+  "tinuklaw",
+  "kagat ng ahas",
+  "magpapakamatay",
+  "nagpakamatay",
+  "saklolo",
+  "tulong agad",
+  "emerhensya",
+
+  // Bisaya / Cebuano
+  "nagsunog",
+  "kalayo",
+  "nadisgrasya",
+  "bangga",
+  "nakabangga",
+  "naligsan",
+  "giligsan",
+  "dunggab",
+  "gidunggab",
+  "nadunggab",
+  "pusil",
+  "gipusil",
+  "napusil",
+  "pinusilay",
+  "gipatay",
+  "patyanay",
+  "nalumos",
+  "lunod",
+  "nalumsan",
+  "naanod",
+  "linog",
+  "pagdahili",
+  "nadahili",
+  "nagdugo",
+  "walay panimuot",
+  "nawad-an og panimuot",
+  "nakuyapan",
+  "dili makaginhawa",
+  "giatake sa kasingkasing",
+  "nakuryente",
+  "nakoryente",
+  "kuryentehan",
+  "mibuto",
+  "nibuto",
+  "pagbuto",
+  "gitulis",
+  "gikidnap",
+  "gilugos",
+  "nahiloan",
+  "gipaak sa bitin",
+  "naghikog",
+  "maghikog",
+  "tabang dayon",
 ];
+
+// Short words must match as whole words ("skill" ≠ kill, "stable" ≠ stab).
+const WHOLE_WORD_EMERGENCY_KEYWORDS = new Set([
+  "fire",
+  "kill",
+  "stab",
+  "shot",
+  "gun",
+  "bomb",
+  "rape",
+  "riot",
+  "lunod",
+  "linog",
+  "pusil",
+  "bangga",
+  "kalayo",
+]);
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const EMERGENCY_PATTERNS = emergencyKeywords.map((keyword) => {
+  const escaped = escapeRegExp(keyword);
+  return WHOLE_WORD_EMERGENCY_KEYWORDS.has(keyword)
+    ? new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`)
+    : new RegExp(escaped);
+});
 
 const bottomTabs = [
   {
@@ -395,6 +550,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [CITIZEN SUBMIT] Formatting helpers: time, date, recording timer =====
 function formatTime(date) {
   return date.toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -427,19 +583,23 @@ function formatRecordingTime(seconds) {
   return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
 }
 
+// ===== [CITIZEN SUBMIT] Emergency detection & category helpers =====
 function detectEmergency(text) {
-  const lowerText = text.toLowerCase();
-  return emergencyKeywords.some((keyword) => lowerText.includes(keyword));
+  const lowerText = String(text || "").toLowerCase();
+  return EMERGENCY_PATTERNS.some((pattern) => pattern.test(lowerText));
 }
 
-function classifyComplaintTitle(title) {
-  return detectEmergency(title) ? "emergency" : "non-emergency";
+function classifyComplaintTitle(title, description = "") {
+  return detectEmergency(`${title} ${description}`)
+    ? "emergency"
+    : "non-emergency";
 }
 
 function detectComplaintCategory(title, description = "") {
   return detectComplaintCategoryFromKeywords(title, description);
 }
 
+// ===== [CITIZEN SUBMIT] Emergency hotlines & dialer =====
 const EMERGENCY_HOTLINES = {
   national: {
     title: "Call Emergency Hotline",
@@ -485,6 +645,7 @@ function dialHotline(phoneNumber) {
   });
 }
 
+// ===== [CITIZEN SUBMIT] Photo format validation & content type helpers =====
 function isValidImageFormat(asset) {
   const mimeType = asset.mimeType?.toLowerCase() || "";
   const uri = asset.uri?.toLowerCase() || "";
@@ -537,6 +698,7 @@ function getPhotoContentType(extension) {
   return "image/jpeg";
 }
 
+// ===== [CITIZEN SUBMIT] Photo prepare (resize/compress) & read for upload =====
 async function preparePickedPhotoAsset(asset) {
   if (!asset?.uri) {
     return null;
@@ -599,12 +761,14 @@ async function readPhotoForUpload(photo) {
   };
 }
 
+// ===== [CITIZEN SUBMIT] Screen component =====
 export default function CitizenSubmit() {
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const cachedSubmit = getPageCache(CITIZEN_SUBMIT_CACHE_KEY);
 
+  // --- [CITIZEN SUBMIT] Refs (scroll, voice, photos, submit guards) ---
   const scrollViewRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const textInputRef = useRef(null);
@@ -622,6 +786,7 @@ export default function CitizenSubmit() {
   const isRecordingRef = useRef(false);
   const messageFromVoiceRef = useRef(false);
 
+  // --- [CITIZEN SUBMIT] State: chat steps, voice, location, photos, review ---
   const [message, setMessage] = useState("");
   const { keyboardHeight } = useKeyboardInset();
 
@@ -651,6 +816,9 @@ export default function CitizenSubmit() {
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [isPreparingPhotos, setIsPreparingPhotos] = useState(false);
   const [quickCameraVisible, setQuickCameraVisible] = useState(false);
+  const [privacyQueue, setPrivacyQueue] = useState([]);
+  const [privacyPhoto, setPrivacyPhoto] = useState(null);
+  const [privacyReplaceId, setPrivacyReplaceId] = useState(null);
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [reviewPhotoUri, setReviewPhotoUri] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -665,9 +833,11 @@ export default function CitizenSubmit() {
     contact: "",
   });
 
+  // --- [CITIZEN SUBMIT] Derived layout flags & keyboard padding ---
   const hasSelectedPhotos = selectedPhotos.length > 0;
-  // Title (0) + description (1) only — contact comes from the citizen profile.
-  const shouldShowInput = chatStep < 2;
+  // Title (0) + description (1) + contact number (2).
+  const shouldShowInput = chatStep < 3;
+  const isContactStep = chatStep === 2;
   const isKeyboardOpen = keyboardHeight > 0;
 
   useEffect(() => {
@@ -691,11 +861,7 @@ export default function CitizenSubmit() {
   // Bottom nav is hidden on Submit — don't reserve nav height under the photo card.
   const mainBottomInset = 0;
 
-  const profileContactForUpdates = useMemo(
-    () => getValidStoredContact(contactNumber, profileContactRef.current) || "",
-    [contactNumber]
-  );
-
+  // --- [CITIZEN SUBMIT] Derived: contact, timestamps, Bogo boundary, hotlines ---
   const submittedDateTime = useMemo(() => {
     const stamp = complaintCapturedAt || currentDate;
     return `${formatDateTime(stamp)} ${formatTime(stamp)}`;
@@ -732,6 +898,7 @@ export default function CitizenSubmit() {
     return hotlines;
   }, [complaintTitle, complaintDescription]);
 
+  // --- [CITIZEN SUBMIT] Navigation & fonts ---
   const handleBackPress = () => {
     if (router.canGoBack()) {
       router.back();
@@ -752,6 +919,7 @@ export default function CitizenSubmit() {
     setPageCache(CITIZEN_SUBMIT_CACHE_KEY, { visited: true });
   }, []);
 
+  // --- [CITIZEN SUBMIT] Scroll helpers ---
   const scrollToBottom = (animated = true) => {
     requestAnimationFrame(() => {
       scrollViewRef.current?.scrollToEnd?.({ animated });
@@ -765,22 +933,7 @@ export default function CitizenSubmit() {
     });
   };
 
-  const applyProfileContact = (resolved, { advanceToPhotoStep = false } = {}) => {
-    const normalized = getValidStoredContact(resolved);
-    if (!normalized) return false;
-
-    profileContactRef.current = normalized;
-    setContactNumber(normalized);
-    setUsedProfileContact(true);
-    setContactMessage(null);
-
-    if (advanceToPhotoStep && chatStepRef.current < 3) {
-      setChatStep(3);
-    }
-
-    return true;
-  };
-
+  // --- [CITIZEN SUBMIT] Profile contact sync ---
   const syncProfileContact = async () => {
     try {
       const cached = getCachedProfileContact();
@@ -800,15 +953,12 @@ export default function CitizenSubmit() {
 
       profileContactRef.current = resolved;
       setContactNumber((prev) => prev || resolved);
-
-      if (chatStepRef.current >= 1 && chatStepRef.current < 3) {
-        applyProfileContact(resolved, { advanceToPhotoStep: true });
-      }
     } catch {
       // Chat will still require a profile number before submit.
     }
   };
 
+  // --- [CITIZEN SUBMIT] Lifecycle: mount, keyboard mode, focus, clock, auto-scroll ---
   useEffect(() => {
     isMountedRef.current = true;
 
@@ -880,6 +1030,7 @@ export default function CitizenSubmit() {
     };
   }, []);
 
+  // --- [CITIZEN SUBMIT] Voice: microphone permission ---
   const askMicrophonePermission = async () => {
     const alreadyAllowed = await hasMicrophoneConsent();
     if (alreadyAllowed) {
@@ -912,6 +1063,7 @@ export default function CitizenSubmit() {
     });
   };
 
+  // --- [CITIZEN SUBMIT] Location: reverse geocode & locate user ---
   const updateAddressFromCoords = async (coords, shouldSetConfirmed = false) => {
     const nextAddress = await resolveCommonAddress(
       coords.latitude,
@@ -1001,6 +1153,7 @@ export default function CitizenSubmit() {
     }
   };
 
+  // --- [CITIZEN SUBMIT] Chat steps: title -> description -> contact ---
   const sendChatMessage = (rawText) => {
     const cleanMessage = String(rawText || "").trim();
 
@@ -1021,28 +1174,37 @@ export default function CitizenSubmit() {
       setIsEmergency(detectedType === "emergency");
       setChatStep(1);
     } else if (chatStep === 1) {
+      const detectedType = classifyComplaintTitle(complaintTitle, cleanMessage);
+
       setComplaintDescription(cleanMessage);
       setDescriptionMessage(newMessage);
+      setComplaintType(detectedType);
+      setIsEmergency(detectedType === "emergency");
+      setChatStep(2);
+      messageFromVoiceRef.current = false;
+      setMessage(CONTACT_PREFIX);
 
-      const savedContact = getValidStoredContact(
-        profileContactRef.current,
-        contactNumber
-      );
+      setTimeout(() => {
+        scrollToBottom(true);
+      }, 120);
 
-      if (savedContact) {
-        applyProfileContact(savedContact, { advanceToPhotoStep: true });
-      } else {
-        // Never ask the citizen to type a number — pull from profile (or block).
-        setUsedProfileContact(false);
-        setContactMessage(null);
-        setChatStep(3);
-        notify(
-          "Contact Number Required",
-          "Add a valid contact number in your profile before submitting a complaint."
-        );
-        // Fetch in background; if found, attach it for submit.
-        syncProfileContact();
+      return true;
+    } else if (chatStep === 2) {
+      const typedContact = messageFromVoiceRef.current
+        ? sanitizeSpokenContactNumber(cleanMessage)
+        : sanitizePhilippineMobileInput(cleanMessage);
+
+      if (!isValidPhilippineMobile(typedContact)) {
+        notify("Invalid Contact Number", getContactNumberErrorMessage());
+        messageFromVoiceRef.current = false;
+        setMessage(typedContact || CONTACT_PREFIX);
+        return false;
       }
+
+      setContactNumber(typedContact);
+      setUsedProfileContact(false);
+      setContactMessage({ ...newMessage, text: typedContact });
+      setChatStep(3);
     }
 
     messageFromVoiceRef.current = false;
@@ -1055,6 +1217,7 @@ export default function CitizenSubmit() {
     return true;
   };
 
+  // --- [CITIZEN SUBMIT] Voice recording: start / stop / toggle ---
   const stopVoiceRecording = async () => {
     if (isStoppingVoiceRef.current) return;
     isStoppingVoiceRef.current = true;
@@ -1235,11 +1398,13 @@ export default function CitizenSubmit() {
     }
   };
 
+  // --- [CITIZEN SUBMIT] Send message ---
   const handleSendMessage = () => {
     if (isRecording || isTranscribing) return;
     sendChatMessage(message);
   };
 
+  // --- [CITIZEN SUBMIT] Review edit: start / save / toggle ---
   const startReviewEdit = (field) => {
     Keyboard.dismiss();
     setReviewEditField(field);
@@ -1269,7 +1434,7 @@ export default function CitizenSubmit() {
         return;
       }
 
-      const detectedType = classifyComplaintTitle(nextTitle);
+      const detectedType = classifyComplaintTitle(nextTitle, complaintDescription);
       setComplaintTitle(nextTitle);
       setComplaintType(detectedType);
       setIsEmergency(detectedType === "emergency");
@@ -1284,7 +1449,10 @@ export default function CitizenSubmit() {
         return;
       }
 
+      const detectedType = classifyComplaintTitle(complaintTitle, nextDescription);
       setComplaintDescription(nextDescription);
+      setComplaintType(detectedType);
+      setIsEmergency(detectedType === "emergency");
     } else if (field === "contact") {
       const cleanContact =
         sanitizePhilippineMobileInput(reviewDraft.contact) ||
@@ -1315,6 +1483,7 @@ export default function CitizenSubmit() {
     startReviewEdit(field);
   };
 
+  // --- [CITIZEN SUBMIT] Photo picking: add assets, camera, gallery ---
   const addPickedPhotoAssets = async (assets = []) => {
     if (!Array.isArray(assets) || assets.length === 0) {
       return;
@@ -1376,13 +1545,10 @@ export default function CitizenSubmit() {
         return;
       }
 
-      setSelectedPhotos((prevPhotos) =>
-        [...prevPhotos, ...preparedPhotos].slice(0, MAX_PHOTOS)
-      );
-
-      setTimeout(() => {
-        scrollToBottom(true);
-      }, 120);
+      const [firstPhoto, ...restPhotos] = preparedPhotos;
+      setPrivacyQueue(restPhotos);
+      setPrivacyReplaceId(null);
+      setPrivacyPhoto(firstPhoto);
     } finally {
       isPreparingPhotosRef.current = false;
 
@@ -1487,6 +1653,7 @@ export default function CitizenSubmit() {
     );
   };
 
+  // --- [CITIZEN SUBMIT] Photo picking: restore pending picker result ---
   useEffect(() => {
     const restorePendingImagePickerResult = async () => {
       if (isPreparingPhotosRef.current) {
@@ -1532,6 +1699,43 @@ export default function CitizenSubmit() {
     };
   }, []);
 
+  // --- [CITIZEN SUBMIT] Privacy blur editor & photo viewer handlers ---
+  const finishPrivacyPhoto = (photo) => {
+    if (privacyReplaceId) {
+      setSelectedPhotos((prevPhotos) =>
+        prevPhotos.map((item) =>
+          item.id === privacyReplaceId ? { ...item, ...photo, id: item.id } : item
+        )
+      );
+    } else {
+      setSelectedPhotos((prevPhotos) =>
+        [...prevPhotos, photo].slice(0, MAX_PHOTOS)
+      );
+      setTimeout(() => {
+        scrollToBottom(true);
+      }, 120);
+    }
+
+    const [nextPhoto, ...restPhotos] = privacyQueue;
+    setPrivacyQueue(restPhotos);
+    setPrivacyReplaceId(null);
+    setPrivacyPhoto(nextPhoto || null);
+  };
+
+  const closePrivacyEditor = () => {
+    const [nextPhoto, ...restPhotos] = privacyQueue;
+    setPrivacyQueue(restPhotos);
+    setPrivacyReplaceId(null);
+    setPrivacyPhoto(nextPhoto || null);
+  };
+
+  const openPrivacyEditorForPhoto = (photo) => {
+    if (!photo?.uri) return;
+    setPrivacyQueue([]);
+    setPrivacyReplaceId(photo.id);
+    setPrivacyPhoto(photo);
+  };
+
   const removePhoto = (photoId) => {
     setSelectedPhotos((prevPhotos) =>
       prevPhotos.filter((photo) => photo.id !== photoId)
@@ -1549,6 +1753,7 @@ export default function CitizenSubmit() {
     setReviewPhotoUri(null);
   };
 
+  // --- [CITIZEN SUBMIT] Upload complaint photos to storage ---
   const uploadComplaintPhotos = async (complaintId) => {
     const uploadedPhotoPaths = [];
 
@@ -1584,6 +1789,7 @@ export default function CitizenSubmit() {
     return uploadedPhotoPaths;
   };
 
+  // --- [CITIZEN SUBMIT] Post-submit navigation & duplicate confirm ---
   const navigateToComplaintDetails = (complaintId) => {
     InteractionManager.runAfterInteractions(() => {
       requestAnimationFrame(() => {
@@ -1658,6 +1864,7 @@ export default function CitizenSubmit() {
     });
   };
 
+  // --- [CITIZEN SUBMIT] Submit handler: validate, AI analysis, insert, upload, notify ---
   const handleSubmitComplaint = async () => {
     if (isSubmitting || isSubmittingRef.current || isAnalyzing) return;
 
@@ -1884,6 +2091,16 @@ export default function CitizenSubmit() {
         submitted_date_time: finalSubmittedDateTime,
         photo_urls: [],
         created_at: new Date().toISOString(),
+        // System Log Analysis baseline (AI snapshot at submission).
+        ai_category: analysis.category || detectedCategory,
+        ai_assigned_office: analysis.assignedOffice || assignedOffice,
+        ai_confidence:
+          typeof analysis.confidence === "number" &&
+          Number.isFinite(analysis.confidence)
+            ? analysis.confidence
+            : null,
+        ai_analyzed_at: new Date().toISOString(),
+        routed_at: assignedOffice ? new Date().toISOString() : null,
       };
 
       const { data: insertedComplaint, error: insertError } = await supabase
@@ -1921,6 +2138,28 @@ export default function CitizenSubmit() {
       const citizenName = await getProfileDisplayName(user.id);
 
       await writeAuditLog({
+        action: "system_log_ai_analysis",
+        title: "AI Complaint Analysis Logged",
+        description: `AI analyzed complaint #${
+          insertedComplaint.short_id || insertedComplaint.id
+        } and routed it to ${assignedOffice}.`,
+        entityType: "complaint",
+        entityId: insertedComplaint.id,
+        actorRole: "citizen",
+        metadata: {
+          short_id: insertedComplaint.short_id,
+          analysis_type: "complaint_routing",
+          ai_category: analysis.category || detectedCategory,
+          final_category: detectedCategory,
+          ai_assigned_office: analysis.assignedOffice || assignedOffice,
+          final_assigned_office: assignedOffice,
+          ai_confidence: analysis.confidence ?? null,
+          ai_priority: analysis.priority || defaultPriority,
+          ai_source: analysis.source || "gemini",
+        },
+      });
+
+      await writeAuditLog({
         action: "complaint_submit",
         title: "Complaint Submitted",
         description: `Complaint #${
@@ -1933,6 +2172,7 @@ export default function CitizenSubmit() {
           short_id: insertedComplaint.short_id,
           category: detectedCategory,
           assigned_office: assignedOffice,
+          ai_confidence: analysis.confidence ?? null,
         },
       });
 
@@ -1981,10 +2221,12 @@ export default function CitizenSubmit() {
     }
   };
 
+  // --- [CITIZEN SUBMIT] Loading skeleton ---
   if (!fontsLoaded && !cachedSubmit) {
     return <PageSkeleton variant="submit" />;
   }
 
+  // --- [CITIZEN SUBMIT] Render helpers: chat bubbles, warnings, map preview ---
   const renderUserMessage = (item) => {
     if (!item) return null;
 
@@ -1995,7 +2237,7 @@ export default function CitizenSubmit() {
 
           {item.voiceUri && (
             <View style={styles.voiceBubbleTag}>
-              <Ionicons name="mic" size={11} color={GREEN} />
+              <Ionicons name="mic" size={11} color="rgba(8, 122, 13, 1)" />
               <Text style={styles.voiceBubbleText}>Voice attached</Text>
             </View>
           )}
@@ -2013,7 +2255,7 @@ export default function CitizenSubmit() {
 
     return (
       <View style={styles.bogoWarningBox}>
-        <Ionicons name="warning" size={18} color={RED} />
+        <Ionicons name="warning" size={18} color="rgba(215, 25, 32, 1)" />
         <Text style={styles.bogoWarningText}>
           You are outside Bogo City, Cebu. Complaints can only be filed within
           the city boundary.
@@ -2033,7 +2275,7 @@ export default function CitizenSubmit() {
 
         {isLocating && (
           <View style={styles.mapPreviewLoading}>
-            <ActivityIndicator size="small" color={GREEN} />
+            <ActivityIndicator size="small" color="rgba(8, 122, 13, 1)" />
             <Text style={styles.mapPreviewLoadingText}>Capturing location...</Text>
           </View>
         )}
@@ -2041,6 +2283,7 @@ export default function CitizenSubmit() {
     );
   };
 
+  // --- [CITIZEN SUBMIT] Render helper: review editable field ---
   const renderReviewEditableField = (
     field,
     label,
@@ -2087,13 +2330,14 @@ export default function CitizenSubmit() {
           <Feather
             name={isEditing ? "check" : "edit-2"}
             size={15}
-            color={GREEN}
+            color="rgba(8, 122, 13, 1)"
           />
         </TouchableOpacity>
       </View>
     );
   };
 
+  // --- [CITIZEN SUBMIT] Render helpers: emergency hotline & bot message ---
   const renderEmergencyHotline = (hotline) => (
     <TouchableOpacity
       key={hotline.title}
@@ -2103,9 +2347,9 @@ export default function CitizenSubmit() {
     >
       <View style={styles.hotlineIconCircle}>
         {hotline.iconSet === "fa5" ? (
-          <FontAwesome5 name={hotline.icon} size={15} color={RED} />
+          <FontAwesome5 name={hotline.icon} size={15} color="rgba(215, 25, 32, 1)" />
         ) : (
-          <Ionicons name={hotline.icon} size={18} color={RED} />
+          <Ionicons name={hotline.icon} size={18} color="rgba(215, 25, 32, 1)" />
         )}
       </View>
 
@@ -2114,7 +2358,7 @@ export default function CitizenSubmit() {
         <Text style={styles.hotlineSubtitle}>{hotline.number}</Text>
       </View>
 
-      <Feather name="chevron-right" size={20} color={TEXT} />
+      <Feather name="chevron-right" size={20} color="rgba(23, 23, 23, 1)" />
     </TouchableOpacity>
   );
 
@@ -2131,8 +2375,10 @@ export default function CitizenSubmit() {
     </View>
   );
 
+  // --- [CITIZEN SUBMIT] Render helper: message composer (input dock) ---
   const renderMessageComposer = () => (
     <View style={styles.composerSection}>
+      {/* [CITIZEN SUBMIT UI] Recording / transcribing banner */}
       {(isRecording || isTranscribing) && (
         <View style={styles.recordingBanner}>
           <View style={styles.recordingDot} />
@@ -2149,6 +2395,7 @@ export default function CitizenSubmit() {
         </View>
       )}
 
+      {/* [CITIZEN SUBMIT UI] Text input + mic + send */}
       <View style={styles.messageRow}>
         <View
           style={[
@@ -2166,7 +2413,7 @@ export default function CitizenSubmit() {
             value={message}
             onChangeText={(text) => {
               messageFromVoiceRef.current = false;
-              setMessage(text);
+              setMessage(isContactStep ? sanitizeTypedContact(text) : text);
             }}
             placeholder={
               isRecording
@@ -2175,16 +2422,19 @@ export default function CitizenSubmit() {
                 ? "Transcribing accurately..."
                 : chatStep === 0
                 ? "Type your complaint title..."
+                : isContactStep
+                ? "09XXXXXXXXX"
                 : "Describe what happened..."
             }
-            placeholderTextColor="#9A9A9A"
+            placeholderTextColor="rgba(154, 154, 154, 1)"
             returnKeyType="send"
             onSubmitEditing={handleSendMessage}
             blurOnSubmit={false}
             editable={!isRecording && !isTranscribing}
-            keyboardType="default"
-            inputMode="text"
-            textContentType="none"
+            keyboardType={isContactStep ? "number-pad" : "default"}
+            inputMode={isContactStep ? "numeric" : "text"}
+            textContentType={isContactStep ? "telephoneNumber" : "none"}
+            maxLength={isContactStep ? 11 : undefined}
           />
 
           <TouchableOpacity
@@ -2200,7 +2450,7 @@ export default function CitizenSubmit() {
             <Ionicons
               name={isRecording ? "mic" : "mic-outline"}
               size={19}
-              color={isRecording ? WHITE : "#777777"}
+              color={isRecording ? "rgba(255, 255, 255, 1)" : "rgba(119, 119, 119, 1)"}
             />
           </TouchableOpacity>
         </View>
@@ -2221,14 +2471,40 @@ export default function CitizenSubmit() {
             message.trim().length === 0 || isRecording || isTranscribing
           }
         >
-          <Ionicons name="send" size={23} color={WHITE} />
+          <Ionicons name="send" size={23} color="rgba(255, 255, 255, 1)" />
         </TouchableOpacity>
       </View>
     </View>
   );
 
+  // --- [CITIZEN SUBMIT] Render helper: emergency alert card + hotlines ---
+  const titleIsEmergency = detectEmergency(complaintTitle);
+
+  const renderEmergencyAlert = () => (
+    <>
+      <View style={styles.emergencyCard}>
+        <View style={styles.emergencyIconBox}>
+          <Ionicons name="warning" size={30} color="rgba(255, 255, 255, 1)" />
+        </View>
+
+        <View style={styles.emergencyTextBox}>
+          <Text style={styles.emergencyTitle}>
+            Life-Threatening Emergency Detected
+          </Text>
+          <Text style={styles.emergencySubtitle}>
+            Act now. Every second counts.
+          </Text>
+        </View>
+      </View>
+
+      {emergencyHotlines.map(renderEmergencyHotline)}
+    </>
+  );
+
+  // --- [CITIZEN SUBMIT] Render helper: chat scroll content ---
   const renderChatScrollContent = () => (
     <>
+          {/* [CITIZEN SUBMIT UI] Chat date pill & welcome message */}
           <View style={styles.chatDatePill}>
             <Text style={styles.chatDateText}>{formattedDate}</Text>
           </View>
@@ -2238,29 +2514,14 @@ export default function CitizenSubmit() {
             formatTime(screenStartTime)
           )}
 
+          {/* [CITIZEN SUBMIT UI] Chat: title message */}
           {renderUserMessage(titleMessage)}
 
-          {chatStep >= 1 && complaintType === "emergency" && (
-            <>
-              <View style={styles.emergencyCard}>
-                <View style={styles.emergencyIconBox}>
-                  <Ionicons name="warning" size={30} color={WHITE} />
-                </View>
+          {/* [CITIZEN SUBMIT UI] Emergency card & hotlines (title-triggered) */}
+          {chatStep >= 1 && complaintType === "emergency" && titleIsEmergency &&
+            renderEmergencyAlert()}
 
-                <View style={styles.emergencyTextBox}>
-                  <Text style={styles.emergencyTitle}>
-                    Life-Threatening Emergency Detected
-                  </Text>
-                  <Text style={styles.emergencySubtitle}>
-                    Act now. Every second counts.
-                  </Text>
-                </View>
-              </View>
-
-              {emergencyHotlines.map(renderEmergencyHotline)}
-            </>
-          )}
-
+          {/* [CITIZEN SUBMIT UI] Chat: description prompt & reply */}
           {chatStep >= 1 &&
             renderBotMessage(
               "Please describe your concern in detail.",
@@ -2269,25 +2530,31 @@ export default function CitizenSubmit() {
 
           {renderUserMessage(descriptionMessage)}
 
-          {chatStep >= 3 &&
+          {/* [CITIZEN SUBMIT UI] Emergency card & hotlines (description-triggered) */}
+          {chatStep >= 2 && complaintType === "emergency" && !titleIsEmergency &&
+            renderEmergencyAlert()}
+          {/* [CITIZEN SUBMIT UI] Chat: contact number prompt & reply */}
+          {chatStep >= 2 &&
             renderBotMessage(
-              profileContactForUpdates
-                ? `We'll use your contact number from your profile for updates: ${profileContactForUpdates}.`
-                : "Add a contact number in your profile so we can reach you for updates.",
+              "Please enter your contact number (11 digits, starting with 09) so we can reach you for updates.",
               formatTime(new Date())
             )}
 
+          {renderUserMessage(contactMessage)}
+
+          {/* [CITIZEN SUBMIT UI] Chat: photo prompt */}
           {chatStep >= 3 &&
             renderBotMessage(
               "Kindly upload a photo as evidence.",
               formatTime(new Date())
             )}
 
+          {/* [CITIZEN SUBMIT UI] Photo evidence upload card */}
           {chatStep >= 3 && (
             <View style={styles.uploadCard}>
               <View style={styles.uploadInner}>
                 <View style={styles.uploadIconCircle}>
-                  <Ionicons name="camera" size={38} color={GREEN} />
+                  <Ionicons name="camera" size={38} color="rgba(8, 122, 13, 1)" />
                 </View>
 
                 <Text style={styles.uploadTitle}>Upload Photo</Text>
@@ -2320,11 +2587,19 @@ export default function CitizenSubmit() {
                           </TouchableOpacity>
 
                           <TouchableOpacity
+                            style={styles.blurPhotoButton}
+                            activeOpacity={0.8}
+                            onPress={() => openPrivacyEditorForPhoto(photo)}
+                          >
+                            <Ionicons name="eye-off-outline" size={12} color="rgba(255, 255, 255, 1)" />
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
                             style={styles.removePhotoButton}
                             activeOpacity={0.8}
                             onPress={() => removePhoto(photo.id)}
                           >
-                            <Ionicons name="close" size={13} color={WHITE} />
+                            <Ionicons name="close" size={13} color="rgba(255, 255, 255, 1)" />
                           </TouchableOpacity>
                         </View>
                       ))}
@@ -2344,7 +2619,7 @@ export default function CitizenSubmit() {
                   >
                     {isPreparingPhotos ? (
                       <View style={styles.preparingPhotoRow}>
-                        <ActivityIndicator size="small" color={WHITE} />
+                        <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                         <Text style={styles.chooseButtonText}>Preparing photo...</Text>
                       </View>
                     ) : (
@@ -2359,7 +2634,8 @@ export default function CitizenSubmit() {
 
                 <Text style={styles.uploadFormats}>
                   Take a photo or choose from your gallery.{"\n"}
-                  You can upload up to {MAX_PHOTOS} photos.{"\n\n"}
+                  You can upload up to {MAX_PHOTOS} photos.{"\n"}
+                  Blur is applied by the app for faces, IDs, plates, and other private details.{"\n\n"}
                   Accepted Format: JPG, JPEG, PNG, HEIC, HEIF{"\n"}
                   Max size: 10MB per photo
                 </Text>
@@ -2367,6 +2643,7 @@ export default function CitizenSubmit() {
             </View>
           )}
 
+          {/* [CITIZEN SUBMIT UI] Review card */}
           {hasSelectedPhotos &&
             renderBotMessage(
               "Please review your complaint details before submitting.",
@@ -2399,14 +2676,12 @@ export default function CitizenSubmit() {
                 { multiline: true }
               )}
 
-              <View style={styles.reviewItem}>
-                <View style={styles.reviewTextBox}>
-                  <Text style={styles.reviewLabel}>Contact Number</Text>
-                  <Text style={styles.reviewValue}>
-                    {contactNumber || "From your profile"}
-                  </Text>
-                </View>
-              </View>
+              {renderReviewEditableField(
+                "contact",
+                "Contact Number",
+                contactNumber,
+                { keyboardType: "number-pad", maxLength: 11 }
+              )}
 
               <View style={styles.reviewItem}>
                 <View style={styles.reviewTextBox}>
@@ -2430,10 +2705,18 @@ export default function CitizenSubmit() {
 
                         <TouchableOpacity
                           activeOpacity={0.8}
+                          style={styles.reviewPhotoBlurButton}
+                          onPress={() => openPrivacyEditorForPhoto(photo)}
+                        >
+                          <Ionicons name="eye-off-outline" size={11} color="rgba(255, 255, 255, 1)" />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          activeOpacity={0.8}
                           style={styles.reviewPhotoRemoveButton}
                           onPress={() => removePhoto(photo.id)}
                         >
-                          <Ionicons name="close" size={12} color={WHITE} />
+                          <Ionicons name="close" size={12} color="rgba(255, 255, 255, 1)" />
                         </TouchableOpacity>
                       </View>
                     ))}
@@ -2446,7 +2729,7 @@ export default function CitizenSubmit() {
                       onPress={pickPhotos}
                       disabled={isPreparingPhotos}
                     >
-                      <Ionicons name="add-circle-outline" size={16} color={GREEN} />
+                      <Ionicons name="add-circle-outline" size={16} color="rgba(8, 122, 13, 1)" />
                       <Text style={styles.reviewAddPhotoText}>
                         Add photo ({selectedPhotos.length}/{MAX_PHOTOS})
                       </Text>
@@ -2455,7 +2738,7 @@ export default function CitizenSubmit() {
                 </View>
 
                 <TouchableOpacity activeOpacity={0.7} onPress={pickPhotos}>
-                  <Feather name="edit-2" size={15} color={GREEN} />
+                  <Feather name="edit-2" size={15} color="rgba(8, 122, 13, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -2482,6 +2765,7 @@ export default function CitizenSubmit() {
             </View>
           )}
 
+          {/* [CITIZEN SUBMIT UI] Submit button */}
           {hasSelectedPhotos &&
             renderBotMessage(
               "If everything looks correct, tap Submit Complaint.",
@@ -2508,9 +2792,9 @@ export default function CitizenSubmit() {
               }
             >
               {isSubmitting || isAnalyzing ? (
-                <ActivityIndicator size="small" color={WHITE} />
+                <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
               ) : (
-                <Ionicons name="send" size={24} color={WHITE} />
+                <Ionicons name="send" size={24} color="rgba(255, 255, 255, 1)" />
               )}
 
               <Text style={styles.inlineSubmitButtonText}>
@@ -2530,10 +2814,12 @@ export default function CitizenSubmit() {
     </>
   );
 
+  // --- [CITIZEN SUBMIT] Render ---
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(255, 255, 255, 1)" />
 
+      {/* [CITIZEN SUBMIT UI] Pinned header: back button, title, assistant bar */}
       <View style={styles.pinnedHeader}>
         <View style={styles.header}>
           <TouchableOpacity
@@ -2541,7 +2827,7 @@ export default function CitizenSubmit() {
             style={styles.backButton}
             onPress={handleBackPress}
           >
-            <Feather name="chevron-left" size={26} color={TEXT} />
+            <Feather name="chevron-left" size={26} color="rgba(23, 23, 23, 1)" />
           </TouchableOpacity>
 
           <View style={styles.headerTitleBox}>
@@ -2566,6 +2852,7 @@ export default function CitizenSubmit() {
         </View>
       </View>
 
+      {/* [CITIZEN SUBMIT UI] Chat pane (keyboard-aware scroll) */}
       <View style={[styles.chatPane, { paddingBottom: mainBottomInset }]}>
         <KeyboardAwareScrollView
           ref={scrollViewRef}
@@ -2599,8 +2886,10 @@ export default function CitizenSubmit() {
             scrollToBottom(false);
           }}
         >
+          {/* [CITIZEN SUBMIT UI] Chat messages */}
           {renderChatScrollContent()}
 
+          {/* [CITIZEN SUBMIT UI] Composer / input dock */}
           {shouldShowInput ? (
             <>
               <View style={styles.composerSpacer} />
@@ -2618,12 +2907,32 @@ export default function CitizenSubmit() {
         </KeyboardAwareScrollView>
       </View>
 
+      {/* [CITIZEN SUBMIT UI] Quick capture camera modal */}
       <QuickCaptureCamera
         visible={quickCameraVisible}
         onClose={closeQuickCamera}
         onCaptured={handleQuickCameraCaptured}
       />
 
+      {/* [CITIZEN SUBMIT UI] Privacy blur editor modal */}
+      <EvidencePrivacyEditor
+        visible={Boolean(privacyPhoto?.uri)}
+        uri={privacyPhoto?.uri}
+        onCancel={closePrivacyEditor}
+        onKeepOriginal={() => {
+          if (privacyPhoto) finishPrivacyPhoto(privacyPhoto);
+        }}
+        onSaved={(uri) => {
+          if (!privacyPhoto) return;
+          finishPrivacyPhoto({
+            ...privacyPhoto,
+            uri,
+            id: `${uri}-${Date.now()}`,
+          });
+        }}
+      />
+
+      {/* [CITIZEN SUBMIT UI] Fullscreen photo viewer */}
       <FullscreenPhotoViewer
         visible={photoViewerVisible}
         uri={reviewPhotoUri}
@@ -2633,36 +2942,38 @@ export default function CitizenSubmit() {
   );
 }
 
+// ===== [CITIZEN SUBMIT] Styles =====
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Header & chat pane ---
   pinnedHeader: {
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     zIndex: 5,
     elevation: 4,
   },
 
   chatPane: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     minHeight: 0,
   },
 
   loader: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
 
   header: {
     minHeight: 62,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderBottomWidth: 1,
-    borderBottomColor: "#EEEEEE",
+    borderBottomColor: "rgba(238, 238, 238, 1)",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: H_PADDING,
@@ -2687,14 +2998,14 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 20,
-    color: "#15651E",
+    color: "rgba(21, 101, 30, 1)",
     lineHeight: 24,
   },
 
   headerDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
     lineHeight: 14,
   },
@@ -2705,8 +3016,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: H_PADDING,
     borderBottomWidth: 1,
-    borderBottomColor: "#E5EDE1",
-    backgroundColor: WHITE,
+    borderBottomColor: "rgba(229, 237, 225, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     zIndex: 5,
   },
 
@@ -2715,10 +3026,10 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 21,
     borderWidth: 3,
-    borderColor: "#B4E37C",
+    borderColor: "rgba(180, 227, 124, 1)",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     marginRight: 10,
     overflow: "hidden",
   },
@@ -2736,13 +3047,13 @@ const styles = StyleSheet.create({
   assistantTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15.8,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   assistantSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: -2,
   },
 
@@ -2757,6 +3068,7 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
   },
 
+  // --- Composer dock ---
   composerSection: {
     width: "100%",
   },
@@ -2764,9 +3076,9 @@ const styles = StyleSheet.create({
   messageInputDock: {
     paddingTop: 6,
     paddingHorizontal: 13,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderTopWidth: 1,
-    borderTopColor: "#E8EBE7",
+    borderTopColor: "rgba(232, 235, 231, 1)",
   },
 
   messageInputDockInScroll: {
@@ -2780,19 +3092,20 @@ const styles = StyleSheet.create({
     minHeight: 12,
   },
 
+  // --- Chat messages ---
   chatDatePill: {
     alignSelf: "center",
     paddingHorizontal: 13,
     paddingVertical: 5,
     borderRadius: 14,
-    backgroundColor: "#E8F2E4",
+    backgroundColor: "rgba(232, 242, 228, 1)",
     marginBottom: 14,
   },
 
   chatDateText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 13,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     letterSpacing: 0.4,
   },
 
@@ -2807,12 +3120,12 @@ const styles = StyleSheet.create({
     height: 30,
     borderRadius: 15,
     borderWidth: 2,
-    borderColor: "#B4E37C",
+    borderColor: "rgba(180, 227, 124, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 9,
     marginBottom: 4,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     overflow: "hidden",
   },
 
@@ -2825,20 +3138,20 @@ const styles = StyleSheet.create({
   botBubble: {
     maxWidth: SCREEN_WIDTH * 0.72,
     minWidth: 185,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderRadius: 15,
     borderTopLeftRadius: 5,
     paddingHorizontal: 15,
     paddingTop: 13,
     paddingBottom: 9,
     borderWidth: 1,
-    borderColor: "#EEF0EE",
+    borderColor: "rgba(238, 240, 238, 1)",
   },
 
   botText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 13.3,
-    color: "#222222",
+    color: "rgba(34, 34, 34, 1)",
     lineHeight: 20,
     flexShrink: 1,
   },
@@ -2847,7 +3160,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
     fontFamily: "Poppins_400Regular",
     fontSize: 8,
-    color: "#555555",
+    color: "rgba(85, 85, 85, 1)",
     marginTop: 5,
   },
 
@@ -2860,7 +3173,7 @@ const styles = StyleSheet.create({
   userBubble: {
     maxWidth: SCREEN_WIDTH * 0.72,
     minWidth: 96,
-    backgroundColor: SOFT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderRadius: 15,
     borderTopRightRadius: 5,
     paddingHorizontal: 16,
@@ -2868,13 +3181,13 @@ const styles = StyleSheet.create({
     paddingBottom: 9,
     alignItems: "flex-end",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
   },
 
   userText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 13.3,
-    color: "#222222",
+    color: "rgba(34, 34, 34, 1)",
     lineHeight: 20,
     textAlign: "right",
     alignSelf: "stretch",
@@ -2885,7 +3198,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
     fontFamily: "Poppins_400Regular",
     fontSize: 8,
-    color: "#555555",
+    color: "rgba(85, 85, 85, 1)",
     marginTop: 5,
   },
 
@@ -2895,7 +3208,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
-    backgroundColor: "#F5FBF2",
+    backgroundColor: "rgba(245, 251, 242, 1)",
     flexDirection: "row",
     alignItems: "center",
   },
@@ -2903,16 +3216,17 @@ const styles = StyleSheet.create({
   voiceBubbleText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 9,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginLeft: 4,
   },
 
+  // --- Emergency card & hotlines ---
   emergencyCard: {
     minHeight: 76,
     borderRadius: 13,
     borderWidth: 1.2,
-    borderColor: RED,
-    backgroundColor: "#FFF4F4",
+    borderColor: "rgba(215, 25, 32, 1)",
+    backgroundColor: "rgba(255, 244, 244, 1)",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 14,
@@ -2923,7 +3237,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 8,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 13,
@@ -2936,13 +3250,13 @@ const styles = StyleSheet.create({
   emergencyTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13.6,
-    color: DARK_RED,
+    color: "rgba(183, 28, 28, 1)",
   },
 
   emergencySubtitle: {
     fontFamily: "Poppins_500Medium",
     fontSize: 12.5,
-    color: DARK_RED,
+    color: "rgba(183, 28, 28, 1)",
     marginTop: 3,
   },
 
@@ -2950,8 +3264,8 @@ const styles = StyleSheet.create({
     height: 56,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#F0B3B7",
-    backgroundColor: WHITE,
+    borderColor: "rgba(240, 179, 183, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 14,
@@ -2962,7 +3276,7 @@ const styles = StyleSheet.create({
     width: 35,
     height: 35,
     borderRadius: 18,
-    backgroundColor: "#FFEDEF",
+    backgroundColor: "rgba(255, 237, 239, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 14,
@@ -2975,24 +3289,25 @@ const styles = StyleSheet.create({
   hotlineTitle: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 13.2,
-    color: "#222222",
+    color: "rgba(34, 34, 34, 1)",
   },
 
   hotlineSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: "#222222",
+    color: "rgba(34, 34, 34, 1)",
     marginTop: -1,
   },
 
+  // --- Photo upload card ---
   uploadCard: {
     width: "100%",
     minHeight: 335,
     borderWidth: 1.2,
-    borderColor: "#D7DED5",
+    borderColor: "rgba(215, 222, 213, 1)",
     borderStyle: "dashed",
     borderRadius: 26,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18,
@@ -3010,7 +3325,7 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: "#EEF8EE",
+    backgroundColor: "rgba(238, 248, 238, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 13,
@@ -3019,13 +3334,13 @@ const styles = StyleSheet.create({
   uploadTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 17,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   uploadDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: "#222222",
+    color: "rgba(34, 34, 34, 1)",
     textAlign: "center",
     lineHeight: 17,
     marginTop: 7,
@@ -3041,7 +3356,7 @@ const styles = StyleSheet.create({
   selectedCountText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 10,
   },
 
@@ -3057,7 +3372,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: "hidden",
     position: "relative",
-    backgroundColor: "#EEF1ED",
+    backgroundColor: "rgba(238, 241, 237, 1)",
   },
 
   photoPreview: {
@@ -3078,12 +3393,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
+  blurPhotoButton: {
+    position: "absolute",
+    top: 4,
+    left: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(8, 122, 13, 0.92)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
   chooseButton: {
     minWidth: SCREEN_WIDTH * 0.52,
     height: 44,
     paddingHorizontal: 16,
     borderRadius: 8,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 13,
@@ -3102,22 +3429,23 @@ const styles = StyleSheet.create({
   chooseButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   uploadFormats: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10,
-    color: "#222222",
+    color: "rgba(34, 34, 34, 1)",
     textAlign: "center",
     lineHeight: 15,
   },
 
+  // --- Review card ---
   reviewCard: {
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     paddingHorizontal: 18,
     paddingVertical: 17,
     marginBottom: 18,
@@ -3142,28 +3470,28 @@ const styles = StyleSheet.create({
   reviewLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 3,
   },
 
   reviewValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 17,
   },
 
   reviewInput: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 17,
     borderWidth: 1,
-    borderColor: "#CFE8C8",
+    borderColor: "rgba(207, 232, 200, 1)",
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    backgroundColor: "#FAFDF9",
+    backgroundColor: "rgba(250, 253, 249, 1)",
     minHeight: 38,
   },
 
@@ -3182,7 +3510,7 @@ const styles = StyleSheet.create({
   reviewAddPhotoText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   reviewPhotoRow: {
@@ -3199,13 +3527,25 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     overflow: "hidden",
     position: "relative",
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
   },
 
   reviewPhoto: {
     width: "100%",
     height: "100%",
     resizeMode: "cover",
+  },
+
+  reviewPhotoBlurButton: {
+    position: "absolute",
+    top: 3,
+    left: 3,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "rgba(8, 122, 13, 0.92)",
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   reviewPhotoRemoveButton: {
@@ -3220,6 +3560,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
+  // --- Location map preview ---
   reviewMapBox: {
     width: "100%",
     height: 180,
@@ -3227,7 +3568,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     marginTop: 4,
     marginBottom: 8,
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
     position: "relative",
   },
 
@@ -3254,14 +3595,14 @@ const styles = StyleSheet.create({
   exactAddressLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 2,
   },
 
   exactAddressText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 18,
   },
 
@@ -3269,13 +3610,13 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F3F5F3",
+    backgroundColor: "rgba(243, 245, 243, 1)",
   },
 
   reviewMapFallbackText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
   },
 
@@ -3295,7 +3636,7 @@ const styles = StyleSheet.create({
   mapAddressOverlayText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 15,
   },
 
@@ -3315,7 +3656,7 @@ const styles = StyleSheet.create({
   mapEditOverlayText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 10.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   mapPreviewLoading: {
@@ -3329,7 +3670,7 @@ const styles = StyleSheet.create({
   mapPreviewLoadingText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   addressOnlyBox: {
@@ -3343,15 +3684,15 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 17,
   },
 
   locationCard: {
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     padding: 14,
     marginBottom: 14,
   },
@@ -3366,13 +3707,13 @@ const styles = StyleSheet.create({
   locationCardTitle: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 13.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   locationCardAddress: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     lineHeight: 18,
     marginBottom: 4,
   },
@@ -3381,9 +3722,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     columnGap: 8,
-    backgroundColor: "#FFF1F1",
+    backgroundColor: "rgba(255, 241, 241, 1)",
     borderWidth: 1,
-    borderColor: "#F5C2C2",
+    borderColor: "rgba(245, 194, 194, 1)",
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -3394,21 +3735,21 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: DARK_RED,
+    color: "rgba(183, 28, 28, 1)",
     lineHeight: 16,
   },
 
   locationCardCoordinates: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 8,
   },
 
   locationCapturedTime: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginTop: 6,
   },
 
@@ -3417,8 +3758,8 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#CFE8C8",
-    backgroundColor: SOFT_GREEN,
+    borderColor: "rgba(207, 232, 200, 1)",
+    backgroundColor: "rgba(234, 246, 228, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3428,34 +3769,35 @@ const styles = StyleSheet.create({
   locationEditButtonText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   mapLoadingState: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F3F5F3",
+    backgroundColor: "rgba(243, 245, 243, 1)",
   },
 
   mapLoadingText: {
     marginTop: 10,
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   reviewCoordinates: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 6,
   },
 
+  // --- Submit button ---
   inlineSubmitButton: {
     height: 54,
     borderRadius: 8,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3470,11 +3812,12 @@ const styles = StyleSheet.create({
   inlineSubmitButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     marginLeft: 10,
     letterSpacing: 0.3,
   },
 
+  // --- Message input row & mic ---
   messageRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3484,9 +3827,9 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 43,
     borderWidth: 1,
-    borderColor: "#CFCFCF",
+    borderColor: "rgba(207, 207, 207, 1)",
     borderRadius: 23,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     flexDirection: "row",
     alignItems: "center",
     paddingLeft: 14,
@@ -3495,8 +3838,8 @@ const styles = StyleSheet.create({
   },
 
   inputBoxRecording: {
-    borderColor: GREEN,
-    backgroundColor: "#F7FFF5",
+    borderColor: "rgba(8, 122, 13, 1)",
+    backgroundColor: "rgba(247, 255, 245, 1)",
   },
 
   textInput: {
@@ -3504,7 +3847,7 @@ const styles = StyleSheet.create({
     height: 43,
     fontFamily: "Poppins_400Regular",
     fontSize: 13.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     paddingVertical: 0,
   },
 
@@ -3521,13 +3864,14 @@ const styles = StyleSheet.create({
   },
 
   micButtonActive: {
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
   },
 
   micButtonDisabled: {
     opacity: 0.45,
   },
 
+  // --- Recording banner ---
   recordingBanner: {
     alignSelf: "flex-start",
     marginBottom: 7,
@@ -3535,9 +3879,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 18,
-    backgroundColor: "#FFF4F4",
+    backgroundColor: "rgba(255, 244, 244, 1)",
     borderWidth: 1,
-    borderColor: "#F2B7B9",
+    borderColor: "rgba(242, 183, 185, 1)",
     flexDirection: "row",
     alignItems: "center",
   },
@@ -3546,20 +3890,20 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     marginRight: 7,
   },
 
   recordingText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 10.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   recordingHint: {
     fontFamily: "Poppins_400Regular",
     fontSize: 9.2,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginLeft: 8,
   },
 
@@ -3570,9 +3914,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 18,
-    backgroundColor: "#F5FBF2",
+    backgroundColor: "rgba(245, 251, 242, 1)",
     borderWidth: 1,
-    borderColor: "#CFE8C8",
+    borderColor: "rgba(207, 232, 200, 1)",
     flexDirection: "row",
     alignItems: "center",
     columnGap: 7,
@@ -3581,27 +3925,28 @@ const styles = StyleSheet.create({
   voiceReadyText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   sendButton: {
     width: 45,
     height: 45,
     borderRadius: 23,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
 
+  // --- Bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: "#E5E5E5",
+    borderTopColor: "rgba(229, 229, 229, 1)",
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "center",
@@ -3627,14 +3972,14 @@ const styles = StyleSheet.create({
 
   modalSafeArea: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   mapEditorOverlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 300,
     elevation: 300,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   mapModalHeader: {
@@ -3644,15 +3989,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#E8EDE8",
-    backgroundColor: WHITE,
+    borderBottomColor: "rgba(232, 237, 232, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   modalCloseButton: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: "#F1F4F0",
+    backgroundColor: "rgba(241, 244, 240, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -3667,13 +4012,13 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   modalSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: -1,
   },
 
@@ -3681,7 +4026,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: "#EAF6E4",
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 4,
@@ -3710,8 +4055,8 @@ const styles = StyleSheet.create({
     marginTop: -7,
     borderRadius: 7,
     borderWidth: 2,
-    borderColor: WHITE,
-    backgroundColor: RED,
+    borderColor: "rgba(255, 255, 255, 1)",
+    backgroundColor: "rgba(215, 25, 32, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -3720,7 +4065,7 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   modalAttributionBox: {
@@ -3736,31 +4081,31 @@ const styles = StyleSheet.create({
   mapAttributionText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 7,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
   },
 
   modalBottomSheet: {
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 18,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 28 : 18,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderTopWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
   },
 
   modalHandle: {
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
 
   coordinatesBox: {
-    backgroundColor: "#F5FBF2",
+    backgroundColor: "rgba(245, 251, 242, 1)",
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -3770,20 +4115,20 @@ const styles = StyleSheet.create({
   coordinatesLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   coordinatesText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 3,
   },
 
   modalConfirmButton: {
     height: 52,
     borderRadius: 14,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3792,7 +4137,7 @@ const styles = StyleSheet.create({
   modalConfirmText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     marginLeft: 8,
   },
 });

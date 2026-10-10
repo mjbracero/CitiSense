@@ -58,42 +58,74 @@ const MODERATION_PROMPT_RULES = `Content moderation rules (must enforce before a
 
 const DEPARTMENT_BY_CATEGORY: Record<string, string> = {
   "Water Concerns": "Bogo Water District",
-  "Electricity Concerns": "CEBECO II",
   "Streetlight Concerns": "City Engineering Office",
   "Road and Infrastructure Concerns": "City Engineering Office",
-  "Drainage and Flooding Concerns": "City Engineering Office & CDRRMO",
+  "Drainage and Flooding Concerns": "City Engineering Office",
   "Waste and Environmental Concerns": "CENRO",
-  "Traffic and Road Safety Concerns":
-    "BTMO & Bogo City Police Station / PNP",
+  "Traffic and Road Safety Concerns": "BTMO",
   "Transport Terminal Concerns": "Bogo City Central Bus Terminal Office",
   "Port Concerns": "Polambato Port Office",
-  "Health and Sanitation Concerns": "City Health Office & CENRO",
+  "Health and Sanitation Concerns": "City Health Office",
   "Animal Concerns": "City Veterinary Office",
-  "Building and Construction Concerns":
-    "Office of the Building Official & City Engineering Office",
-  "Planning and Zoning Concerns":
-    "City Planning and Development Office / Zoning Office",
+  "Building and Construction Concerns": "Office of the Building Official",
+  "Planning and Zoning Concerns": "City Planning and Development Office",
   "Public Market Concerns": "Bogo Public Market Office",
   "Public Plaza Concerns": "Bogo Public Plaza Office",
   "Public Library Concerns": "Bogo Public Library Office",
   "City Facility Concerns": "General Services Office",
-  "Tourism Site / Public Attraction Concerns": "City Tourism Office",
-  "Disaster and Emergency Concerns": "CDRRMO & BFP Bogo City Fire Station",
-  "Fire Safety Concerns": "BFP Bogo City Fire Station & CDRRMO",
+  "Disaster and Emergency Concerns": "CDRRMO",
+  "Fire Safety Concerns": "BFP Bogo City Fire Station",
   "Peace and Order Concerns": "Bogo City Police Station / PNP",
-  "Coastal and Marine Protection Concerns": "Bantay Dagat & CENRO",
+  "Coastal and Marine Protection Concerns": "Bantay Dagat",
   "PWD Accessibility Concerns": "PDAO",
   "Tax and Treasury Concerns": "City Treasurer's Office",
   "Property Assessment Concerns": "City Assessor's Office",
   "Civil Registry Concerns": "City Civil Registrar's Office",
-  "Business Permit and Licensing Concerns":
-    "City Business Permit and Licensing Office",
 };
+
+const RELATED_OFFICES_BY_CATEGORY: Record<string, string[]> = {
+  "Drainage and Flooding Concerns": ["CDRRMO"],
+  "Traffic and Road Safety Concerns": [
+    "Bogo City Police Station / PNP",
+    "CDRRMO",
+  ],
+  "Peace and Order Concerns": ["CDRRMO"],
+  "Building and Construction Concerns": ["City Engineering Office"],
+  "Disaster and Emergency Concerns": [
+    "Bogo City Police Station / PNP",
+    "BFP Bogo City Fire Station",
+  ],
+  "Fire Safety Concerns": ["CDRRMO"],
+  "Coastal and Marine Protection Concerns": ["CENRO"],
+};
+
+const ROAD_ACCIDENT_DUAL_OFFICE =
+  "Bogo City Police Station / PNP & CDRRMO";
+
+const ROAD_ACCIDENT_KEYWORDS = [
+  "aksidente",
+  "accident",
+  "disgrasya",
+  "desgrasya",
+  "bangga",
+  "banggaan",
+  "nabangga",
+  "nakabangga",
+  "collision",
+  "vehicular accident",
+  "car accident",
+  "motorcycle accident",
+  "road accident",
+];
+
+function isRoadAccidentComplaint(title = "", description = "") {
+  const text = `${title} ${description}`.toLowerCase();
+  return ROAD_ACCIDENT_KEYWORDS.some((keyword) => text.includes(keyword));
+}
 
 const COMPLAINT_CATEGORY_NAMES = Object.keys(DEPARTMENT_BY_CATEGORY);
 
 const KEYWORD_HARD_OVERRIDE_CATEGORIES = new Set([
-  "Business Permit and Licensing Concerns",
   "Civil Registry Concerns",
   "Tax and Treasury Concerns",
   "Property Assessment Concerns",
@@ -120,8 +152,8 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
     keywords: ["water", "tubig", "no water", "dirty water", "broken pipe"],
   },
   {
-    category: "Electricity Concerns",
-    keywords: ["electricity", "brownout", "power outage", "kuryente", "live wire"],
+    category: "Disaster and Emergency Concerns",
+    keywords: ["live wire", "fallen wire", "electrocution"],
   },
   {
     category: "Streetlight Concerns",
@@ -130,16 +162,6 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
   {
     category: "Traffic and Road Safety Concerns",
     keywords: ["traffic", "road safety", "accident", "illegal parking", "crosswalk", "btmo"],
-  },
-  {
-    category: "Business Permit and Licensing Concerns",
-    keywords: [
-      "business permit",
-      "mayor's permit",
-      "bplo",
-      "business license",
-      "permit application",
-    ],
   },
   {
     category: "Civil Registry Concerns",
@@ -164,6 +186,11 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
       "treasury",
       "cedula",
       "tax",
+      "business permit",
+      "mayor's permit",
+      "bplo",
+      "business license",
+      "permit application",
     ],
   },
   {
@@ -195,10 +222,6 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
     ],
   },
   {
-    category: "Tourism Site / Public Attraction Concerns",
-    keywords: ["tourism", "tourist", "tourist spot", "tourism site"],
-  },
-  {
     category: "Drainage and Flooding Concerns",
     keywords: ["drainage", "flooding", "flooded", "baha", "canal"],
   },
@@ -216,7 +239,7 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
   },
   {
     category: "Health and Sanitation Concerns",
-    keywords: ["dengue", "food poisoning", "unsanitary", "clinic", "hospital"],
+    keywords: ["fever", "dengue", "illness", "food poisoning", "unsanitary", "clinic", "hospital"],
   },
   {
     category: "Animal Concerns",
@@ -232,7 +255,17 @@ const CATEGORY_KEYWORDS: Array<{ category: string; keywords: string[] }> = [
   },
   {
     category: "City Facility Concerns",
-    keywords: ["city hall", "waiting area", "covered court", "public restroom", "gso"],
+    keywords: [
+      "city hall",
+      "waiting area",
+      "covered court",
+      "public restroom",
+      "gso",
+      "tourism",
+      "tourist",
+      "tourist spot",
+      "tourism site",
+    ],
   },
 ];
 
@@ -319,7 +352,8 @@ function resolveComplaintRouting(
   title = "",
   description = "",
   aiCategory = "",
-  confidence?: number
+  confidence?: number,
+  aiAssignedOffice: string | null = null
 ) {
   const category = reconcileComplaintCategory(
     title,
@@ -327,7 +361,37 @@ function resolveComplaintRouting(
     aiCategory,
     confidence
   );
-  const assignedOffice = DEPARTMENT_BY_CATEGORY[category] || "Unassigned";
+
+  const cleanAiOffice = String(aiAssignedOffice || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Keep AI dual-route ("A & B") when recommended; otherwise primary only.
+  let assignedOffice =
+    cleanAiOffice.includes(" & ")
+      ? cleanAiOffice
+      : DEPARTMENT_BY_CATEGORY[category] || "Unassigned";
+
+  if (!assignedOffice || assignedOffice === "Unassigned") {
+    assignedOffice = DEPARTMENT_BY_CATEGORY[category] || "Unassigned";
+  }
+
+  if (isRoadAccidentComplaint(title, description)) {
+    const accidentCategories = new Set([
+      "Disaster and Emergency Concerns",
+      "Traffic and Road Safety Concerns",
+      "Peace and Order Concerns",
+    ]);
+
+    if (!accidentCategories.has(category)) {
+      return {
+        category: "Disaster and Emergency Concerns",
+        assignedOffice: ROAD_ACCIDENT_DUAL_OFFICE,
+      };
+    }
+
+    assignedOffice = ROAD_ACCIDENT_DUAL_OFFICE;
+  }
 
   return { category, assignedOffice };
 }
@@ -339,11 +403,18 @@ function applyRoutingToAnalysis(
 ) {
   const aiCategory = String(analysis?.category || "Unclassified");
   const confidence = Number(analysis?.confidence);
+  const aiAssignedOffice =
+    typeof analysis?.assigned_office === "string"
+      ? analysis.assigned_office
+      : typeof analysis?.assignedOffice === "string"
+        ? analysis.assignedOffice
+        : null;
   const { category, assignedOffice } = resolveComplaintRouting(
     title,
     description,
     aiCategory,
-    Number.isFinite(confidence) ? confidence : undefined
+    Number.isFinite(confidence) ? confidence : undefined,
+    aiAssignedOffice
   );
 
   return {
@@ -423,6 +494,7 @@ IMPORTANT:
 Return ONLY valid JSON with this exact shape:
 {
   "category": "one exact category from the allowed list",
+  "assigned_office": "exactly one primary office from the routing map, OR dual-route with ' & ' only when this complaint clearly needs two offices",
   "priority": "Critical | High | Normal | Low",
   "is_emergency": boolean,
   "confidence": number between 0 and 1,
@@ -463,22 +535,37 @@ Return ONLY valid JSON with this exact shape:
 Allowed categories (use exact spelling):
 ${COMPLAINT_CATEGORY_NAMES.join("\n")}
 
-Department routing map (assign category to these offices only):
+Primary office routing map (ONE office per concern):
 ${Object.entries(DEPARTMENT_BY_CATEGORY)
   .map(([category, office]) => `- ${category} -> ${office}`)
   .join("\n")}
 
+Dual-route candidates (use ONLY when complaint content clearly involves both offices; otherwise keep one office):
+${Object.entries(RELATED_OFFICES_BY_CATEGORY)
+  .map(
+    ([category, offices]) =>
+      `- ${category}: default ${DEPARTMENT_BY_CATEGORY[category]}; add with " & " only if needed: ${offices.join(", ")}`
+  )
+  .join("\n")}
+
 Classification rules (AI is the primary classifier for office routing):
 - Read the full meaning in any Philippine language — do not rely on English keywords alone.
-- Classify into the most specific LGU category and follow the department routing map.
+- Classify into the most specific LGU category and follow the primary office routing map.
+- Rule: ONE concern -> ONE office by default.
+- Dual-route with " & " ONLY when this specific complaint clearly aligns to two offices.
+- Road / vehicular accidents (Cebuano examples: "naay aksidente", "disgrasya", "nabangga", "banggaan") -> dual-route "Bogo City Police Station / PNP & CDRRMO".
+- Do NOT dual-route just because a category has a candidate partner.
+- Fever/illness/health -> City Health Office only. Never CENRO for medical complaints.
+- Garbage/pollution/environmental waste -> CENRO via Waste and Environmental Concerns.
 - Prefer a specific service category over City Facility Concerns whenever the complaint is about permits, certificates, taxes, utilities, roads, traffic, health, waste, ports, terminals, or similar LGU services.
-- Business permit / mayor's permit / BPLO -> Business Permit and Licensing Concerns.
+- Business permit / mayor's permit / BPLO / business license -> Tax and Treasury Concerns.
 - Birth/marriage/death certificates / civil registry -> Civil Registry Concerns.
 - Treasurer / tax payment / cedula -> Tax and Treasury Concerns.
 - Port / Polambato / ferry -> Port Concerns.
 - Bus/jeepney terminal -> Transport Terminal Concerns.
 - PWD / wheelchair / accessibility -> PWD Accessibility Concerns.
-- City Facility Concerns is ONLY for physical city-owned buildings and facilities (city hall, gym, waiting areas, covered courts, public restrooms).
+- City Facility Concerns is ONLY for physical city-owned buildings and facilities (city hall, gym, waiting areas, covered courts, public restrooms, tourist spots, heritage sites, public attractions).
+- Power outages, brownouts, and electric bills are handled by the electric cooperative, not CitiSense. Reject them via moderation (outside LGU scope). Exceptions: broken streetlights -> Streetlight Concerns; fallen or dangerous live wires -> Disaster and Emergency Concerns.
 - Public Library Concerns -> Bogo Public Library Office.
 - Set confidence higher when the category is clear from meaning.
 

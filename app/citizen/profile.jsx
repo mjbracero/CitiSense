@@ -32,6 +32,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import AuditLogsModal from "../../components/AuditLogsModal";
+import PrivacySecurityModal from "../../components/PrivacySecurityModal";
 import { PageSkeleton } from "../../components/skeletons";
 import { writeAuditLog } from "../../lib/auditLogService";
 import { clearPageCache, getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
@@ -51,16 +52,7 @@ import {
 } from "../../lib/pushNotifications";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const ACCENT_GREEN = "#6DBB3F";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
+// ===== [CITIZEN PROFILE] Constants: colors, layout, cache keys =====
 
 const H_PADDING = 20;
 const PROFILE_SHEET_MAX_HEIGHT = Math.round(Dimensions.get("screen").height * 0.9);
@@ -71,6 +63,7 @@ const MAIN_LOGO = require("../../assets/images/mainlogo.png");
 
 let cachedLocationEnabled = false;
 
+// ===== [CITIZEN PROFILE] Fallback barangay list =====
 const fallbackBarangays = [
   "Anonang Norte",
   "Anonang Sur",
@@ -99,6 +92,7 @@ const fallbackBarangays = [
   "Taytayan",
 ];
 
+// ===== [CITIZEN PROFILE] Bottom tab config =====
 const bottomTabs = [
   {
     label: "Home",
@@ -134,6 +128,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [CITIZEN PROFILE] Helpers: barangay name, image extension =====
 function getBarangayName(row) {
   return (
     row?.name ||
@@ -165,7 +160,9 @@ function getImageExtension(asset) {
   return "jpeg";
 }
 
+// ===== [CITIZEN PROFILE] Screen component =====
 export default function CitizenProfile() {
+  // --- [CITIZEN PROFILE] State, modals & navigation ---
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
@@ -182,9 +179,13 @@ export default function CitizenProfile() {
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
   const [auditLogsVisible, setAuditLogsVisible] = useState(false);
   const [barangayModalVisible, setBarangayModalVisible] = useState(false);
+  const [privacyVisible, setPrivacyVisible] = useState(false);
 
   useHideBottomNav(
-    editModalVisible || passwordModalVisible || barangayModalVisible
+    editModalVisible ||
+      passwordModalVisible ||
+      barangayModalVisible ||
+      privacyVisible
   );
 
   const [barangays, setBarangays] = useState(fallbackBarangays);
@@ -211,6 +212,7 @@ export default function CitizenProfile() {
     Poppins_700Bold,
   });
 
+  // --- [CITIZEN PROFILE] Load barangays list ---
   const loadBarangays = async () => {
     try {
       const { data, error } = await supabase
@@ -236,6 +238,7 @@ export default function CitizenProfile() {
     }
   };
 
+  // --- [CITIZEN PROFILE] Load profile (auth user + push preference) ---
   const loadUser = async () => {
     try {
       if (shouldShowPageLoader(CITIZEN_PROFILE_CACHE_KEY)) {
@@ -284,6 +287,7 @@ export default function CitizenProfile() {
     }
   };
 
+  // --- [CITIZEN PROFILE] Location permission check ---
   const checkLocationPermission = async () => {
     try {
       if (!user?.id) {
@@ -304,6 +308,7 @@ export default function CitizenProfile() {
     }
   };
 
+  // --- [CITIZEN PROFILE] Reload on screen focus ---
   useFocusEffect(
     useCallback(() => {
       loadUser();
@@ -319,6 +324,7 @@ export default function CitizenProfile() {
     }, [user?.id])
   );
 
+  // --- [CITIZEN PROFILE] Derived display values ---
   const metadata = user?.user_metadata || {};
 
   const displayName = useMemo(() => {
@@ -337,6 +343,7 @@ export default function CitizenProfile() {
   const displayBarangay = metadata.barangay || "Not set";
   const avatarUrl = metadata.avatar_url || null;
 
+  // --- [CITIZEN PROFILE] Edit/password modal open & close ---
   const openEditProfile = () => {
     setFullNameDraft(displayName === "Citizen User" ? "" : displayName);
     setEmailDraft(displayEmail === "citizen@example.com" ? "" : displayEmail);
@@ -357,6 +364,7 @@ export default function CitizenProfile() {
     setConfirmPassword("");
   };
 
+  // --- [CITIZEN PROFILE] Location services toggle ---
   const handleLocationToggle = async (value) => {
     if (value) {
       try {
@@ -441,6 +449,7 @@ export default function CitizenProfile() {
     });
   };
 
+  // --- [CITIZEN PROFILE] Profile photo upload ---
   const pickProfilePhoto = async () => {
     try {
       if (!user?.id) {
@@ -564,6 +573,7 @@ export default function CitizenProfile() {
     }
   };
 
+  // --- [CITIZEN PROFILE] Edit profile save ---
   const saveProfileChanges = async () => {
     const cleanName = fullNameDraft.trim();
     const cleanEmail = emailDraft.trim();
@@ -671,6 +681,7 @@ export default function CitizenProfile() {
     }
   };
 
+  // --- [CITIZEN PROFILE] Change password ---
   const handleChangePassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
       notify("Password Required", "Please enter and confirm your password.");
@@ -722,6 +733,7 @@ export default function CitizenProfile() {
     }
   };
 
+  // --- [CITIZEN PROFILE] Push notifications toggle ---
   const handlePushToggle = async (value) => {
     if (!user?.id) {
       setPushEnabled(value);
@@ -754,15 +766,9 @@ export default function CitizenProfile() {
     }
   };
 
+  // --- [CITIZEN PROFILE] Settings handlers: privacy, logout ---
   const handlePrivacy = () => {
-    notify(
-      "Privacy & Security",
-      "CitiSense protects your account and complaint records by allowing only authorized users to access submitted reports.\n\n" +
-        "Your account information such as name, email, contact number, barangay, and profile photo is used only for identification, complaint updates, and LGU communication.\n\n" +
-        "Your uploaded complaint photos and location details are used as evidence to help the LGU verify, classify, and process your complaint properly.\n\n" +
-        "Location services are used to help attach accurate complaint location details when submitting reports.\n\n" +
-        "For security, keep your password private, use a strong password, and always log out when using a shared device."
-    );
+    setPrivacyVisible(true);
   };
 
   const handleLogout = () => {
@@ -799,15 +805,18 @@ export default function CitizenProfile() {
     ]);
   };
 
+  // --- [CITIZEN PROFILE] Loading skeleton ---
   if ((!fontsLoaded && !cachedProfile) || (loadingUser && !user)) {
     return <PageSkeleton variant="profile" />;
   }
 
+  // --- [CITIZEN PROFILE] Render ---
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [CITIZEN PROFILE UI] Fixed header: logo */}
         <View style={styles.fixedHeader}>
           <View style={styles.logoRow}>
             <Image source={MAIN_LOGO} style={styles.mainLogoImage} />
@@ -818,17 +827,19 @@ export default function CitizenProfile() {
           </View>
         </View>
 
+        {/* [CITIZEN PROFILE UI] Scrollable content */}
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+          {/* [CITIZEN PROFILE UI] Profile card: avatar, name, edit button */}
           <View style={styles.profileHeroCard}>
             <View style={styles.avatarOuter}>
               <View style={styles.avatarCircle}>
                 {avatarUrl ? (
                   <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
                 ) : (
-                  <Ionicons name="person" size={42} color={GREEN} />
+                  <Ionicons name="person" size={42} color="rgba(8, 122, 13, 1)" />
                 )}
               </View>
 
@@ -839,9 +850,9 @@ export default function CitizenProfile() {
                 disabled={uploadingAvatar}
               >
                 {uploadingAvatar ? (
-                  <ActivityIndicator size="small" color={WHITE} />
+                  <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                 ) : (
-                  <Ionicons name="camera" size={15} color={WHITE} />
+                  <Ionicons name="camera" size={15} color="rgba(255, 255, 255, 1)" />
                 )}
               </TouchableOpacity>
             </View>
@@ -858,11 +869,12 @@ export default function CitizenProfile() {
               style={styles.editButton}
               onPress={openEditProfile}
             >
-              <Feather name="edit-2" size={15} color={GREEN} />
+              <Feather name="edit-2" size={15} color="rgba(8, 122, 13, 1)" />
               <Text style={styles.editButtonText}>Edit</Text>
             </TouchableOpacity>
           </View>
 
+          {/* [CITIZEN PROFILE UI] Account information rows */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Account Information</Text>
 
@@ -884,6 +896,7 @@ export default function CitizenProfile() {
             </View>
           </View>
 
+          {/* [CITIZEN PROFILE UI] Notifications setting */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Notifications</Text>
 
@@ -899,6 +912,7 @@ export default function CitizenProfile() {
             </View>
           </View>
 
+          {/* [CITIZEN PROFILE UI] Location services setting */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Location Services</Text>
 
@@ -914,13 +928,14 @@ export default function CitizenProfile() {
             </View>
           </View>
 
+          {/* [CITIZEN PROFILE UI] Settings list: password, audit logs, privacy */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Settings</Text>
 
             <View style={styles.settingsCard}>
               <ActionRow
                 icon="lock"
-                iconColor={BLUE}
+                iconColor="rgba(49, 90, 154, 1)"
                 title="Change Password"
                 subtitle="Update your account password."
                 onPress={() => setPasswordModalVisible(true)}
@@ -928,7 +943,7 @@ export default function CitizenProfile() {
 
               <ActionRow
                 icon="activity"
-                iconColor={BLUE}
+                iconColor="rgba(49, 90, 154, 1)"
                 title="Audit Logs"
                 subtitle="View your recent account activity."
                 onPress={() => setAuditLogsVisible(true)}
@@ -936,7 +951,7 @@ export default function CitizenProfile() {
 
               <ActionRow
                 icon="shield"
-                iconColor={GREEN}
+                iconColor="rgba(8, 122, 13, 1)"
                 title="Privacy & Security"
                 subtitle="Manage your account protection."
                 onPress={handlePrivacy}
@@ -945,16 +960,18 @@ export default function CitizenProfile() {
             </View>
           </View>
 
+          {/* [CITIZEN PROFILE UI] Logout button */}
           <TouchableOpacity
             activeOpacity={0.8}
             style={styles.logoutButton}
             onPress={handleLogout}
           >
-            <Ionicons name="log-out-outline" size={22} color={RED} />
+            <Ionicons name="log-out-outline" size={22} color="rgba(215, 25, 32, 1)" />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
         </ScrollView>
 
+        {/* [CITIZEN PROFILE UI] Edit profile modal */}
         <Modal
           visible={editModalVisible}
           animationType="slide"
@@ -979,7 +996,7 @@ export default function CitizenProfile() {
                   style={styles.modalCloseButton}
                   onPress={closeEditProfile}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -999,7 +1016,7 @@ export default function CitizenProfile() {
                       value={fullNameDraft}
                       onChangeText={setFullNameDraft}
                       placeholder="Enter full name"
-                      placeholderTextColor="#9A9A9A"
+                      placeholderTextColor="rgba(154, 154, 154, 1)"
                     />
 
                     <Text style={styles.inputLabel}>Email Address</Text>
@@ -1008,7 +1025,7 @@ export default function CitizenProfile() {
                       value={emailDraft}
                       onChangeText={setEmailDraft}
                       placeholder="Enter email address"
-                      placeholderTextColor="#9A9A9A"
+                      placeholderTextColor="rgba(154, 154, 154, 1)"
                       keyboardType="email-address"
                       autoCapitalize="none"
                     />
@@ -1019,7 +1036,7 @@ export default function CitizenProfile() {
                       value={contactDraft}
                       onChangeText={setContactDraft}
                       placeholder="Enter contact number"
-                      placeholderTextColor="#9A9A9A"
+                      placeholderTextColor="rgba(154, 154, 154, 1)"
                       keyboardType="phone-pad"
                     />
 
@@ -1038,7 +1055,7 @@ export default function CitizenProfile() {
                         {barangayDraft || "Select barangay"}
                       </Text>
 
-                      <Feather name="chevron-down" size={19} color={MUTED} />
+                      <Feather name="chevron-down" size={19} color="rgba(111, 119, 111, 1)" />
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -1048,7 +1065,7 @@ export default function CitizenProfile() {
                       disabled={savingProfile}
                     >
                       {savingProfile ? (
-                        <ActivityIndicator size="small" color={WHITE} />
+                        <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                       ) : (
                         <Text style={styles.saveButtonText}>Save Changes</Text>
                       )}
@@ -1058,6 +1075,7 @@ export default function CitizenProfile() {
           </View>
         </Modal>
 
+        {/* [CITIZEN PROFILE UI] Change password modal */}
         <Modal
           visible={passwordModalVisible}
           animationType="slide"
@@ -1082,7 +1100,7 @@ export default function CitizenProfile() {
                   style={styles.modalCloseButton}
                   onPress={closePasswordModal}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -1102,7 +1120,10 @@ export default function CitizenProfile() {
                     value={newPassword}
                     onChangeText={setNewPassword}
                     placeholder="Enter new password"
-                    placeholderTextColor="#9A9A9A"
+                    placeholderTextColor="rgba(154, 154, 154, 1)"
+                    keyboardType="default"
+                    autoCapitalize="none"
+                    autoCorrect={false}
                     secureTextEntry
                   />
 
@@ -1112,7 +1133,10 @@ export default function CitizenProfile() {
                     value={confirmPassword}
                     onChangeText={setConfirmPassword}
                     placeholder="Confirm new password"
-                    placeholderTextColor="#9A9A9A"
+                    placeholderTextColor="rgba(154, 154, 154, 1)"
+                    keyboardType="default"
+                    autoCapitalize="none"
+                    autoCorrect={false}
                     secureTextEntry
                   />
 
@@ -1123,7 +1147,7 @@ export default function CitizenProfile() {
                     disabled={changingPassword}
                   >
                     {changingPassword ? (
-                      <ActivityIndicator size="small" color={WHITE} />
+                      <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                     ) : (
                       <Text style={styles.saveButtonText}>Update Password</Text>
                     )}
@@ -1133,6 +1157,7 @@ export default function CitizenProfile() {
           </View>
         </Modal>
 
+        {/* [CITIZEN PROFILE UI] Barangay picker modal */}
         <Modal
           visible={barangayModalVisible}
           animationType="fade"
@@ -1149,7 +1174,7 @@ export default function CitizenProfile() {
                   style={styles.modalCloseButton}
                   onPress={() => setBarangayModalVisible(false)}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -1179,7 +1204,7 @@ export default function CitizenProfile() {
                     </Text>
 
                     {barangayDraft === barangay && (
-                      <Feather name="check" size={18} color={GREEN} />
+                      <Feather name="check" size={18} color="rgba(8, 122, 13, 1)" />
                     )}
                   </TouchableOpacity>
                 ))}
@@ -1188,20 +1213,29 @@ export default function CitizenProfile() {
           </View>
         </Modal>
 
+        {/* [CITIZEN PROFILE UI] Audit logs modal */}
         <AuditLogsModal
           visible={auditLogsVisible}
           onClose={() => setAuditLogsVisible(false)}
+        />
+
+        {/* [CITIZEN PROFILE UI] Privacy & security modal */}
+        <PrivacySecurityModal
+          visible={privacyVisible}
+          onClose={() => setPrivacyVisible(false)}
+          role="citizen"
         />
       </View>
     </SafeAreaView>
   );
 }
 
+// ===== [CITIZEN PROFILE] Subcomponents: InfoRow, SwitchRow, ActionRow =====
 function InfoRow({ icon, label, value, last }) {
   return (
     <View style={[styles.infoRow, last && styles.noBorder]}>
       <View style={styles.infoIconCircle}>
-        <Feather name={icon} size={15} color={GREEN} />
+        <Feather name={icon} size={15} color="rgba(8, 122, 13, 1)" />
       </View>
 
       <View style={styles.infoTextBox}>
@@ -1218,7 +1252,7 @@ function SwitchRow({ icon, label, description, value, onValueChange, last }) {
   return (
     <View style={[styles.settingRow, last && styles.noBorder]}>
       <View style={styles.settingIconCircle}>
-        <Feather name={icon} size={15} color={GREEN} />
+        <Feather name={icon} size={15} color="rgba(8, 122, 13, 1)" />
       </View>
 
       <View style={styles.settingTextBox}>
@@ -1229,9 +1263,9 @@ function SwitchRow({ icon, label, description, value, onValueChange, last }) {
       <Switch
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: "#D5DAD3", true: "#BFE3B5" }}
-        thumbColor={value ? GREEN : "#F4F4F4"}
-        ios_backgroundColor="#D5DAD3"
+        trackColor={{ false: "rgba(213, 218, 211, 1)", true: "rgba(191, 227, 181, 1)" }}
+        thumbColor={value ? "rgba(8, 122, 13, 1)" : "rgba(244, 244, 244, 1)"}
+        ios_backgroundColor="rgba(213, 218, 211, 1)"
       />
     </View>
   );
@@ -1244,7 +1278,7 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, last }) {
       style={[styles.settingRow, last && styles.noBorder]}
       onPress={onPress}
     >
-      <View style={[styles.settingIconCircle, { backgroundColor: "#F7FAF6" }]}>
+      <View style={[styles.settingIconCircle, { backgroundColor: "rgba(247, 250, 246, 1)" }]}>
         <Feather name={icon} size={15} color={iconColor} />
       </View>
 
@@ -1253,27 +1287,29 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, last }) {
         <Text style={styles.settingSubtitle}>{subtitle}</Text>
       </View>
 
-      <Feather name="chevron-right" size={20} color={MUTED} />
+      <Feather name="chevron-right" size={20} color="rgba(111, 119, 111, 1)" />
     </TouchableOpacity>
   );
 }
 
+// ===== [CITIZEN PROFILE] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   loader: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   fixedHeader: {
@@ -1304,12 +1340,12 @@ const styles = StyleSheet.create({
   logoText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 25,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.1,
   },
 
   logoTextLight: {
-    color: ACCENT_GREEN,
+    color: "rgba(109, 187, 63, 1)",
   },
 
   scrollContent: {
@@ -1318,16 +1354,17 @@ const styles = StyleSheet.create({
     paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
+  // --- Profile card ---
   profileHeroCard: {
     borderRadius: 20,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     paddingHorizontal: 16,
     paddingVertical: 18,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 14,
     position: "relative",
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.12,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 3 },
@@ -1349,7 +1386,7 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -1368,9 +1405,9 @@ const styles = StyleSheet.create({
     width: 25,
     height: 25,
     borderRadius: 13,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 2,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1383,7 +1420,7 @@ const styles = StyleSheet.create({
   profileName: {
     fontFamily: "Poppins_700Bold",
     fontSize: 17,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     lineHeight: 22,
   },
 
@@ -1401,7 +1438,7 @@ const styles = StyleSheet.create({
     minWidth: 58,
     height: 31,
     borderRadius: 16,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1412,10 +1449,11 @@ const styles = StyleSheet.create({
   editButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginLeft: 4,
   },
 
+  // --- Sections, info rows & setting rows ---
   sectionBlock: {
     marginBottom: 15,
   },
@@ -1423,15 +1461,15 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 9,
   },
 
   infoCard: {
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 3,
   },
@@ -1441,14 +1479,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "#EDF1EB",
+    borderBottomColor: "rgba(237, 241, 235, 1)",
   },
 
   infoIconCircle: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -1461,21 +1499,21 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   infoValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 1,
   },
 
   settingsCard: {
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 3,
   },
@@ -1485,14 +1523,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "#EDF1EB",
+    borderBottomColor: "rgba(237, 241, 235, 1)",
   },
 
   settingIconCircle: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -1506,13 +1544,13 @@ const styles = StyleSheet.create({
   settingTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   settingSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.3,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
@@ -1520,12 +1558,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
   },
 
+  // --- Logout button ---
   logoutButton: {
     height: 50,
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#F2C4C4",
-    backgroundColor: "#FFF4F4",
+    borderColor: "rgba(242, 196, 196, 1)",
+    backgroundColor: "rgba(255, 244, 244, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1535,20 +1574,21 @@ const styles = StyleSheet.create({
   logoutText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
     marginLeft: 8,
   },
 
+  // --- Bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -1576,6 +1616,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Modals: sheets, inputs, save button ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -1587,7 +1628,7 @@ const styles = StyleSheet.create({
     width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     overflow: "hidden",
@@ -1598,7 +1639,7 @@ const styles = StyleSheet.create({
     width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     overflow: "hidden",
@@ -1613,7 +1654,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -1628,14 +1669,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1647,7 +1688,7 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 7,
   },
 
@@ -1655,13 +1696,13 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 10,
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 13,
   },
 
@@ -1669,8 +1710,8 @@ const styles = StyleSheet.create({
     height: 46,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     marginBottom: 13,
     flexDirection: "row",
@@ -1682,17 +1723,17 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   placeholderText: {
-    color: "#9A9A9A",
+    color: "rgba(154, 154, 154, 1)",
   },
 
   saveButton: {
     height: 50,
     borderRadius: 14,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 4,
@@ -1701,9 +1742,10 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Barangay picker modal ---
   centerModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -1716,7 +1758,7 @@ const styles = StyleSheet.create({
     width: "100%",
     maxHeight: "72%",
     borderRadius: 22,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 12,
@@ -1727,27 +1769,27 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     paddingHorizontal: 12,
     marginBottom: 7,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
 
   barangayOptionActive: {
-    backgroundColor: LIGHT_GREEN,
-    borderColor: "#BFE3B5",
+    backgroundColor: "rgba(234, 246, 228, 1)",
+    borderColor: "rgba(191, 227, 181, 1)",
   },
 
   barangayOptionText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   barangayOptionTextActive: {
     fontFamily: "Poppins_700Bold",
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 });

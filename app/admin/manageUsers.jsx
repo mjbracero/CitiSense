@@ -42,15 +42,7 @@ import { notify } from "../../lib/toast";
 import { writeAuditLog } from "../../lib/auditLogService";
 import { DEPARTMENT_OFFICES } from "../../lib/complaintCategories";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const SOFT_RED = "#FFF0F0";
+// ===== [ADMIN USERS] Constants: colors, layout, cache key, role options =====
 
 const H_PADDING = 20;
 const ADMIN_USERS_CACHE_KEY = "admin.manageUsers";
@@ -61,6 +53,7 @@ const ROLE_OPTIONS = [
   { id: "admin", label: "Admin" },
 ];
 
+// ===== [ADMIN USERS] Helpers: role badge/label, ban status, date formatting =====
 function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -70,23 +63,23 @@ function getRoleColor(role) {
 
   if (cleanRole === "admin") {
     return {
-      bg: "#E8EEFF",
-      color: "#315A9A",
+      bg: "rgba(232, 238, 255, 1)",
+      color: "rgba(49, 90, 154, 1)",
       label: "Admin",
     };
   }
 
   if (cleanRole === "moderator" || cleanRole === "departmenthead") {
     return {
-      bg: LIGHT_GREEN,
-      color: GREEN,
+      bg: "rgba(234, 246, 228, 1)",
+      color: "rgba(8, 122, 13, 1)",
       label: "Department Head",
     };
   }
 
   return {
-    bg: "#F1F4F1",
-    color: MUTED,
+    bg: "rgba(241, 244, 241, 1)",
+    color: "rgba(111, 119, 111, 1)",
     label: "Citizen",
   };
 }
@@ -124,7 +117,9 @@ function formatDate(value) {
   });
 }
 
+// ===== [ADMIN USERS] Screen component =====
 export default function AdminManageUsers() {
+  // --- [ADMIN USERS] State & refs ---
   const router = useRouter();
 
   const cachedUsers = getPageCache(ADMIN_USERS_CACHE_KEY);
@@ -167,6 +162,7 @@ export default function AdminManageUsers() {
     router.replace("/admin/dashboard");
   };
 
+  // --- [ADMIN USERS] Load users from Supabase (cached + paginated + search) ---
   const loadUsers = useCallback(async (showLoader = true, append = false) => {
     const search = String(searchRef.current || "").trim();
     const requestId = ++loadRequestIdRef.current;
@@ -284,6 +280,7 @@ export default function AdminManageUsers() {
     }
   }, []);
 
+  // --- [ADMIN USERS] Debounced search & reload on focus ---
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(String(searchText || "").trim());
@@ -303,6 +300,7 @@ export default function AdminManageUsers() {
     }, [loadUsers])
   );
 
+  // --- [ADMIN USERS] Realtime: reload when profiles table changes ---
   useEffect(() => {
     const channel = supabase
       .channel(`admin-manage-users-profiles-${Date.now()}`)
@@ -326,6 +324,7 @@ export default function AdminManageUsers() {
     };
   }, [loadUsers]);
 
+  // --- [ADMIN USERS] Pull-to-refresh & local user updates ---
   const onRefresh = () => {
     setRefreshing(true);
     loadUsers(false);
@@ -345,6 +344,7 @@ export default function AdminManageUsers() {
     });
   };
 
+  // --- [ADMIN USERS] Role edit: open/close modal & save role ---
   const closeRoleModal = () => {
     if (savingRole) return;
 
@@ -426,6 +426,7 @@ export default function AdminManageUsers() {
     }
   };
 
+  // --- [ADMIN USERS] Ban / unban user ---
   const setUserBanned = async (targetUser, banned) => {
     if (!targetUser?.id) return;
 
@@ -507,6 +508,7 @@ export default function AdminManageUsers() {
     );
   };
 
+  // --- [ADMIN USERS] Delete user account ---
   const deleteUserAccount = async (targetUser) => {
     if (!targetUser?.id) return;
 
@@ -588,6 +590,7 @@ export default function AdminManageUsers() {
     );
   };
 
+  // --- [ADMIN USERS] Render a single user card ---
   const renderUser = ({ item }) => {
     const roleStyle = getRoleColor(item.role);
     const isDeleting = deletingUserId === item.id;
@@ -598,6 +601,7 @@ export default function AdminManageUsers() {
 
     return (
       <View style={styles.userCard}>
+        {/* [ADMIN USERS UI] Card top: avatar, name/email, role & banned badges */}
         <View style={styles.userTopRow}>
           <View style={styles.avatarBox}>
             {item.avatar_url ? (
@@ -606,7 +610,7 @@ export default function AdminManageUsers() {
                 style={styles.avatarImage}
               />
             ) : (
-              <Ionicons name="person" size={28} color={GREEN} />
+              <Ionicons name="person" size={28} color="rgba(8, 122, 13, 1)" />
             )}
           </View>
 
@@ -634,29 +638,31 @@ export default function AdminManageUsers() {
           </View>
         </View>
 
+        {/* [ADMIN USERS UI] Card details: contact, department, joined date */}
         <View style={styles.userDetailsBox}>
           <View style={styles.detailRow}>
-            <Feather name="phone" size={14} color={MUTED} />
+            <Feather name="phone" size={14} color="rgba(111, 119, 111, 1)" />
             <Text style={styles.detailText}>
               {item.contact_number || "No contact number"}
             </Text>
           </View>
 
           <View style={styles.detailRow}>
-            <Feather name="briefcase" size={14} color={MUTED} />
+            <Feather name="briefcase" size={14} color="rgba(111, 119, 111, 1)" />
             <Text style={styles.detailText} numberOfLines={1}>
               {item.department || "No department assigned"}
             </Text>
           </View>
 
           <View style={styles.detailRow}>
-            <Feather name="calendar" size={14} color={MUTED} />
+            <Feather name="calendar" size={14} color="rgba(111, 119, 111, 1)" />
             <Text style={styles.detailText}>
               Joined {formatDate(item.created_at)}
             </Text>
           </View>
         </View>
 
+        {/* [ADMIN USERS UI] Card actions: Edit Role & Ban/Unban */}
         <View style={styles.actionRow}>
           <TouchableOpacity
             activeOpacity={0.75}
@@ -670,7 +676,7 @@ export default function AdminManageUsers() {
             <Feather
               name="edit-3"
               size={16}
-              color={isCurrentAdmin ? MUTED : GREEN}
+              color={isCurrentAdmin ? "rgba(111, 119, 111, 1)" : "rgba(8, 122, 13, 1)"}
             />
             <Text
               style={[
@@ -692,13 +698,13 @@ export default function AdminManageUsers() {
             onPress={() => confirmBanUser(item)}
           >
             {isBanning ? (
-              <ActivityIndicator size="small" color={banned ? GREEN : RED} />
+              <ActivityIndicator size="small" color={banned ? "rgba(8, 122, 13, 1)" : "rgba(215, 25, 32, 1)"} />
             ) : (
               <>
                 <Feather
                   name={banned ? "check-circle" : "slash"}
                   size={16}
-                  color={isCurrentAdmin ? MUTED : banned ? GREEN : RED}
+                  color={isCurrentAdmin ? "rgba(111, 119, 111, 1)" : banned ? "rgba(8, 122, 13, 1)" : "rgba(215, 25, 32, 1)"}
                 />
                 <Text
                   style={[
@@ -713,6 +719,7 @@ export default function AdminManageUsers() {
           </TouchableOpacity>
         </View>
 
+        {/* [ADMIN USERS UI] Card action: Delete User */}
         <TouchableOpacity
           activeOpacity={0.75}
           disabled={isDeleting || isCurrentAdmin}
@@ -723,13 +730,13 @@ export default function AdminManageUsers() {
           onPress={() => confirmDeleteUser(item)}
         >
           {isDeleting ? (
-            <ActivityIndicator size="small" color={WHITE} />
+            <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
           ) : (
             <>
               <Feather
                 name="trash-2"
                 size={17}
-                color={isCurrentAdmin ? MUTED : WHITE}
+                color={isCurrentAdmin ? "rgba(111, 119, 111, 1)" : "rgba(255, 255, 255, 1)"}
               />
               <Text
                 style={[
@@ -746,22 +753,24 @@ export default function AdminManageUsers() {
     );
   };
 
+  // --- [ADMIN USERS] Render ---
   if (!fontsLoaded) {
     return <PageSkeleton variant="users" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(255, 255, 255, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [ADMIN USERS UI] Header: back button & title */}
         <View style={styles.header}>
           <TouchableOpacity
             activeOpacity={0.75}
             style={styles.backButton}
             onPress={handleBack}
           >
-            <Feather name="chevron-left" size={28} color={TEXT} />
+            <Feather name="chevron-left" size={28} color="rgba(23, 23, 23, 1)" />
           </TouchableOpacity>
 
           <View style={styles.headerTextBox}>
@@ -772,14 +781,15 @@ export default function AdminManageUsers() {
           </View>
         </View>
 
+        {/* [ADMIN USERS UI] Search bar */}
         <View style={styles.searchWrapper}>
           <View style={styles.searchBox}>
-            <Feather name="search" size={18} color={MUTED} />
+            <Feather name="search" size={18} color="rgba(111, 119, 111, 1)" />
             <TextInput
               value={searchText}
               onChangeText={setSearchText}
               placeholder="Search name, email, role, department..."
-              placeholderTextColor="#9A9A9A"
+              placeholderTextColor="rgba(154, 154, 154, 1)"
               style={styles.searchInput}
               autoCapitalize="none"
               returnKeyType="search"
@@ -791,12 +801,13 @@ export default function AdminManageUsers() {
                 activeOpacity={0.75}
                 onPress={() => setSearchText("")}
               >
-                <Feather name="x" size={18} color={MUTED} />
+                <Feather name="x" size={18} color="rgba(111, 119, 111, 1)" />
               </TouchableOpacity>
             )}
           </View>
         </View>
 
+        {/* [ADMIN USERS UI] Section title & user count */}
         <View style={styles.summaryRow}>
           <Text style={styles.sectionTitle}>User Accounts</Text>
           <Text style={styles.userCount}>
@@ -806,6 +817,7 @@ export default function AdminManageUsers() {
           </Text>
         </View>
 
+        {/* [ADMIN USERS UI] User list: skeleton, or FlatList with empty state & load-more */}
         {loadingUsers ? (
           <KeyboardAwareScrollView
             showsVerticalScrollIndicator={false}
@@ -826,13 +838,13 @@ export default function AdminManageUsers() {
               <RefreshControl
                 refreshing={refreshing}
                 onRefresh={onRefresh}
-                tintColor={GREEN}
-                colors={[GREEN]}
+                tintColor="rgba(8, 122, 13, 1)"
+                colors={["rgba(8, 122, 13, 1)"]}
               />
             }
             ListEmptyComponent={
               <View style={styles.emptyBox}>
-                <Ionicons name="people-outline" size={40} color={MUTED} />
+                <Ionicons name="people-outline" size={40} color="rgba(111, 119, 111, 1)" />
                 <Text style={styles.emptyTitle}>No users found</Text>
                 <Text style={styles.emptyText}>
                   Try searching another name, email, role, or department.
@@ -854,6 +866,7 @@ export default function AdminManageUsers() {
         )}
       </View>
 
+      {/* [ADMIN USERS UI] Edit Role modal */}
       <Modal
         visible={Boolean(roleModalUser)}
         animationType="slide"
@@ -869,6 +882,7 @@ export default function AdminManageUsers() {
               {roleModalUser?.full_name || roleModalUser?.email || "User"}
             </Text>
 
+            {/* [ADMIN USERS UI] Role options list */}
             <Text style={styles.modalSectionLabel}>Account role</Text>
             <View style={styles.roleOptionList}>
               {ROLE_OPTIONS.map((option) => {
@@ -893,13 +907,14 @@ export default function AdminManageUsers() {
                       {option.label}
                     </Text>
                     {selected ? (
-                      <Feather name="check" size={16} color={GREEN} />
+                      <Feather name="check" size={16} color="rgba(8, 122, 13, 1)" />
                     ) : null}
                   </TouchableOpacity>
                 );
               })}
             </View>
 
+            {/* [ADMIN USERS UI] Office picker (department heads only) */}
             {selectedRole === "moderator" ? (
               <>
                 <Text style={styles.modalSectionLabel}>Assigned office</Text>
@@ -929,7 +944,7 @@ export default function AdminManageUsers() {
                           {office}
                         </Text>
                         {selected ? (
-                          <Feather name="check" size={16} color={GREEN} />
+                          <Feather name="check" size={16} color="rgba(8, 122, 13, 1)" />
                         ) : null}
                       </TouchableOpacity>
                     );
@@ -938,6 +953,7 @@ export default function AdminManageUsers() {
               </>
             ) : null}
 
+            {/* [ADMIN USERS UI] Modal actions: Cancel & Save Role */}
             <View style={styles.modalActions}>
               <TouchableOpacity
                 activeOpacity={0.75}
@@ -955,7 +971,7 @@ export default function AdminManageUsers() {
                 onPress={saveUserRole}
               >
                 {savingRole ? (
-                  <ActivityIndicator size="small" color={WHITE} />
+                  <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                 ) : (
                   <Text style={styles.modalSaveText}>Save Role</Text>
                 )}
@@ -968,22 +984,24 @@ export default function AdminManageUsers() {
   );
 }
 
+// ===== [ADMIN USERS] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   header: {
     minHeight: 70,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderBottomWidth: 1,
-    borderBottomColor: "#EEEEEE",
+    borderBottomColor: "rgba(238, 238, 238, 1)",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: H_PADDING,
@@ -1008,17 +1026,18 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 23,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     lineHeight: 29,
   },
 
   headerDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
+  // --- Search & summary ---
   searchWrapper: {
     paddingHorizontal: H_PADDING,
     paddingTop: 16,
@@ -1028,9 +1047,9 @@ const styles = StyleSheet.create({
   searchBox: {
     height: 48,
     borderRadius: 16,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     paddingHorizontal: 14,
     flexDirection: "row",
     alignItems: "center",
@@ -1040,7 +1059,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_400Regular",
     fontSize: 12.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginLeft: 9,
     paddingVertical: 0,
   },
@@ -1056,13 +1075,13 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 20,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   userCount: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   listContent: {
@@ -1070,14 +1089,15 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === "ios" ? 32 : 24,
   },
 
+  // --- User card ---
   userCard: {
     borderRadius: 18,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     padding: 14,
     marginBottom: 12,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.04,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
@@ -1093,9 +1113,9 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -1116,13 +1136,13 @@ const styles = StyleSheet.create({
   userName: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   userEmail: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
@@ -1149,7 +1169,7 @@ const styles = StyleSheet.create({
     minWidth: 72,
     height: 22,
     borderRadius: 11,
-    backgroundColor: SOFT_RED,
+    backgroundColor: "rgba(255, 240, 240, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 9,
@@ -1158,14 +1178,14 @@ const styles = StyleSheet.create({
   bannedBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10,
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
   },
 
   userDetailsBox: {
     borderRadius: 14,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: "#EDF1EC",
+    borderColor: "rgba(237, 241, 236, 1)",
     paddingHorizontal: 12,
     paddingVertical: 9,
     marginTop: 12,
@@ -1181,14 +1201,15 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 11.5,
-    color: "#444444",
+    color: "rgba(68, 68, 68, 1)",
     marginLeft: 8,
   },
 
+  // --- Card action buttons ---
   deleteButton: {
     height: 42,
     borderRadius: 21,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -1197,19 +1218,19 @@ const styles = StyleSheet.create({
   },
 
   deleteButtonDisabled: {
-    backgroundColor: "#F1F1F1",
+    backgroundColor: "rgba(241, 241, 241, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
   },
 
   deleteButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   deleteButtonTextDisabled: {
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   actionRow: {
@@ -1222,9 +1243,9 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 42,
     borderRadius: 21,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: GREEN,
+    borderColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -1235,16 +1256,16 @@ const styles = StyleSheet.create({
   roleButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   banButton: {
     flex: 1,
     height: 42,
     borderRadius: 21,
-    backgroundColor: SOFT_RED,
+    backgroundColor: "rgba(255, 240, 240, 1)",
     borderWidth: 1,
-    borderColor: "#F3C7C7",
+    borderColor: "rgba(243, 199, 199, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -1255,16 +1276,16 @@ const styles = StyleSheet.create({
   banButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
   },
 
   unbanButton: {
     flex: 1,
     height: 42,
     borderRadius: 21,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -1275,18 +1296,19 @@ const styles = StyleSheet.create({
   unbanButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   actionButtonDisabled: {
-    backgroundColor: "#F1F1F1",
-    borderColor: BORDER,
+    backgroundColor: "rgba(241, 241, 241, 1)",
+    borderColor: "rgba(226, 231, 224, 1)",
   },
 
   actionButtonTextDisabled: {
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
+  // --- Edit Role modal ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -1297,7 +1319,7 @@ const styles = StyleSheet.create({
     maxHeight: "88%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 24,
@@ -1307,7 +1329,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 5,
     borderRadius: 3,
-    backgroundColor: BORDER,
+    backgroundColor: "rgba(226, 231, 224, 1)",
     alignSelf: "center",
     marginBottom: 12,
   },
@@ -1315,13 +1337,13 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   modalSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 3,
     marginBottom: 14,
   },
@@ -1329,7 +1351,7 @@ const styles = StyleSheet.create({
   modalSectionLabel: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 8,
   },
 
@@ -1342,8 +1364,8 @@ const styles = StyleSheet.create({
     minHeight: 44,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 14,
     flexDirection: "row",
     alignItems: "center",
@@ -1351,19 +1373,19 @@ const styles = StyleSheet.create({
   },
 
   roleOptionSelected: {
-    backgroundColor: LIGHT_GREEN,
-    borderColor: GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
+    borderColor: "rgba(8, 122, 13, 1)",
   },
 
   roleOptionText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   roleOptionTextSelected: {
     fontFamily: "Poppins_700Bold",
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   departmentList: {
@@ -1375,8 +1397,8 @@ const styles = StyleSheet.create({
     minHeight: 42,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 12,
     marginBottom: 8,
     flexDirection: "row",
@@ -1385,21 +1407,21 @@ const styles = StyleSheet.create({
   },
 
   departmentOptionSelected: {
-    backgroundColor: LIGHT_GREEN,
-    borderColor: GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
+    borderColor: "rgba(8, 122, 13, 1)",
   },
 
   departmentOptionText: {
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     paddingRight: 8,
   },
 
   departmentOptionTextSelected: {
     fontFamily: "Poppins_600SemiBold",
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalActions: {
@@ -1412,7 +1434,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 46,
     borderRadius: 23,
-    backgroundColor: "#F1F4F1",
+    backgroundColor: "rgba(241, 244, 241, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1420,14 +1442,14 @@ const styles = StyleSheet.create({
   modalCancelText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   modalSaveButton: {
     flex: 1,
     height: 46,
     borderRadius: 23,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1435,15 +1457,16 @@ const styles = StyleSheet.create({
   modalSaveText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Empty state ---
   emptyBox: {
     minHeight: 250,
     borderRadius: 18,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 24,
@@ -1453,14 +1476,14 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 10,
   },
 
   emptyText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     marginTop: 4,
     lineHeight: 18,

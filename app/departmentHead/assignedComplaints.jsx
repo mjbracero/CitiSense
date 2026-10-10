@@ -18,6 +18,7 @@ import {
   Keyboard,
   Modal,
   Platform,
+  Pressable,
   ScrollView,
   Share,
   StatusBar,
@@ -25,7 +26,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -33,10 +33,14 @@ import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import { ComplaintListSkeleton, PageSkeleton } from "../../components/skeletons";
 import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
 import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
-import { WebView } from "react-native-webview";
+import WebView from "../../components/AppWebView";
 import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
 import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { loadCitizenProfiles } from "../../lib/citizenProfileCache";
+import {
+  resolveComplaintEvidencePhotoUrls,
+} from "../../lib/complaintPhotoCache";
 import { createCitizenNotificationAndPush } from "../../lib/citizenNotificationService";
 import {
   notifyAdminsReassignment,
@@ -59,27 +63,28 @@ import {
   complaintAppliesToDepartment,
   CONCERN_DEPARTMENT_OPTIONS,
   getAssignedOffice,
+  getPrimaryAssignedOffice,
   getCategoriesForDepartment,
   resolveDepartmentHeadOffice,
 } from "../../lib/complaintCategories";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
+// ===== [DEPT ASSIGNED] Constants: colors, layout, cache keys, map config =====
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
-const ORANGE = "#F4A24C";
 
 const H_PADDING = 20;
 const DEFAULT_DEPARTMENT_HEAD_DEPARTMENT = "";
 const DEPT_ASSIGNED_LAST_FILTER_KEY = "departmentHead.assigned.lastFilter";
+
+// expo-location's web subscriptions throw on remove() (missing removeSubscription).
+function stopLocationSubscription(ref) {
+  const subscription = ref.current;
+  ref.current = null;
+  if (!subscription) return;
+  try {
+    subscription.remove();
+  } catch {}
+}
 
 function assignedComplaintsCacheKey({ category, status, priority }) {
   return `departmentHead.assigned:${category}:${status}:${priority}`;
@@ -91,16 +96,33 @@ const MAPTILER_API_KEY =
 const PHOTO_PLACEHOLDER =
   "https://placehold.co/900x600/eaf6e4/087a0d?text=CitiSense+Complaint";
 
-const AVATAR_BUCKET = "avatars";
-
+// ===== [DEPT ASSIGNED] Filter options, status sanitizing, bottom tabs =====
 const statusFilters = [
   "All Status",
-  "Assigned",
   "Pending",
   "In Progress",
   "For Validation",
-  "Completed",
 ];
+
+const REMOVED_STATUS_FILTERS = new Set(["Assigned", "Completed"]);
+
+function sanitizeStatusFilter(status) {
+  const next = String(status || "").trim();
+  if (!next || REMOVED_STATUS_FILTERS.has(next) || !statusFilters.includes(next)) {
+    return "All Status";
+  }
+  return next;
+}
+
+function applyStatusOverrides(list = [], overrides = new Map()) {
+  if (!overrides?.size) return list;
+
+  return list.map((item) => {
+    const override = overrides.get(item.rawId);
+    if (!override) return item;
+    return { ...item, status: override };
+  });
+}
 
 const statusOptions = ["In Progress", "For Validation"];
 
@@ -148,6 +170,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [DEPT ASSIGNED] Helpers: normalize text/status/priority, badge styles, dates =====
 function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -190,28 +213,28 @@ function normalizePriority(priority, isEmergency = false) {
 function getStatusStyle(status) {
   const normalizedStatus = normalizeStatus(status);
 
-  if (normalizedStatus === "Assigned") return { bg: "#E8EEFF", color: BLUE };
+  if (normalizedStatus === "Assigned") return { bg: "rgba(232, 238, 255, 1)", color: "rgba(49, 90, 154, 1)" };
   if (normalizedStatus === "Pending" || normalizedStatus === "Assigned") {
-    return { bg: "#E8EEFF", color: BLUE };
+    return { bg: "rgba(232, 238, 255, 1)", color: "rgba(49, 90, 154, 1)" };
   }
-  if (normalizedStatus === "In Progress") return { bg: "#FFF8D6", color: "#C9A000" };
-  if (normalizedStatus === "For Validation") return { bg: "#F3EAFF", color: "#7A3EA8" };
-  if (normalizedStatus === "Completed") return { bg: "#DFF0DF", color: GREEN };
-  if (normalizedStatus === "Returned") return { bg: "#FFF0F0", color: RED };
+  if (normalizedStatus === "In Progress") return { bg: "rgba(255, 248, 214, 1)", color: "rgba(201, 160, 0, 1)" };
+  if (normalizedStatus === "For Validation") return { bg: "rgba(243, 234, 255, 1)", color: "rgba(122, 62, 168, 1)" };
+  if (normalizedStatus === "Completed") return { bg: "rgba(223, 240, 223, 1)", color: "rgba(8, 122, 13, 1)" };
+  if (normalizedStatus === "Returned") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
 
-  return { bg: "#F1F1F1", color: MUTED };
+  return { bg: "rgba(241, 241, 241, 1)", color: "rgba(111, 119, 111, 1)" };
 }
 
 function getPriorityStyle(priority) {
   const normalizedPriority = normalizePriority(priority);
 
-  if (normalizedPriority === "Critical") return { bg: "#FFF0F0", color: RED };
-  if (normalizedPriority === "Urgent") return { bg: "#FFF0F0", color: RED };
-  if (normalizedPriority === "High") return { bg: "#FFF2E8", color: ORANGE };
-  if (normalizedPriority === "Normal") return { bg: LIGHT_GREEN, color: GREEN };
-  if (normalizedPriority === "Low") return { bg: "#F1F4F1", color: MUTED };
+  if (normalizedPriority === "Critical") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
+  if (normalizedPriority === "Urgent") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
+  if (normalizedPriority === "High") return { bg: "rgba(255, 242, 232, 1)", color: "rgba(244, 162, 76, 1)" };
+  if (normalizedPriority === "Normal") return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
+  if (normalizedPriority === "Low") return { bg: "rgba(241, 244, 241, 1)", color: "rgba(111, 119, 111, 1)" };
 
-  return { bg: LIGHT_GREEN, color: GREEN };
+  return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
 }
 
 function formatDbDate(value) {
@@ -281,187 +304,9 @@ function parseComplaintDateTime(date, time) {
   return new Date(year, month, day, hour, minute).getTime();
 }
 
-function normalizePhotoUrls(value) {
-  if (!value) return [];
-
-  if (Array.isArray(value)) return value.filter(Boolean);
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-
-      if (Array.isArray(parsed)) return parsed.filter(Boolean);
-    } catch {
-      return value ? [value] : [];
-    }
-  }
-
-  return [];
-}
-
-function extractComplaintPhotoPath(value) {
-  if (!value) return null;
-
-  const text = decodeURIComponent(String(value));
-  const publicMarker = "/storage/v1/object/public/complaint-photos/";
-  const signMarker = "/storage/v1/object/sign/complaint-photos/";
-
-  if (text.includes(publicMarker)) {
-    return text.split(publicMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (text.includes(signMarker)) {
-    return text.split(signMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (!/^https?:\/\//i.test(text)) {
-    return text.replace(/^complaint-photos\//, "").replace(/^\/+/, "");
-  }
-
-  return null;
-}
-
-async function createReadableComplaintPhotoUrl(value) {
-  if (!value) return null;
-
-  try {
-    const path = extractComplaintPhotoPath(value);
-
-    if (path) {
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from("complaint-photos")
-        .createSignedUrl(path, 60 * 60);
-
-      if (!signedError && signedData?.signedUrl) {
-        return signedData.signedUrl;
-      }
-
-      const { data: publicData } = supabase.storage
-        .from("complaint-photos")
-        .getPublicUrl(path);
-
-      if (publicData?.publicUrl) {
-        return publicData.publicUrl;
-      }
-    }
-
-    if (/^https?:\/\//i.test(String(value))) {
-      return String(value);
-    }
-  } catch (error) {
-    console.log("Resolve complaint photo error:", error);
-  }
-
-  return null;
-}
-
-function extractAvatarPath(value) {
-  if (!value) return null;
-
-  const text = decodeURIComponent(String(value));
-  const publicMarker = `/storage/v1/object/public/${AVATAR_BUCKET}/`;
-  const signMarker = `/storage/v1/object/sign/${AVATAR_BUCKET}/`;
-
-  if (text.includes(publicMarker)) {
-    return text.split(publicMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (text.includes(signMarker)) {
-    return text.split(signMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (!/^https?:\/\//i.test(text)) {
-    return text.replace(/^avatars\//, "").replace(/^\/+/, "");
-  }
-
-  return null;
-}
-
-async function createReadableAvatarUrl(value) {
-  if (!value) return null;
-
-  try {
-    const rawValue = String(value);
-
-    if (/^https?:\/\//i.test(rawValue)) {
-      return rawValue;
-    }
-
-    const path = extractAvatarPath(rawValue);
-
-    if (!path) return null;
-
-    const { data: signedData, error: signedError } = await supabase.storage
-      .from(AVATAR_BUCKET)
-      .createSignedUrl(path, 60 * 60);
-
-    if (!signedError && signedData?.signedUrl) {
-      return signedData.signedUrl;
-    }
-
-    const { data: publicData } = supabase.storage
-      .from(AVATAR_BUCKET)
-      .getPublicUrl(path);
-
-    return publicData?.publicUrl || null;
-  } catch (error) {
-    console.log("Resolve avatar error:", error);
-    return null;
-  }
-}
-
+// ===== [DEPT ASSIGNED] Map DB complaint row -> UI complaint object =====
 async function resolveComplaintPhotoUrls(row) {
-  const rawUrls = normalizePhotoUrls(row?.photo_urls);
-  const resolvedUrls = [];
-
-  for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
-
-    if (resolvedUrl) {
-      resolvedUrls.push(resolvedUrl);
-    }
-  }
-
-  if (resolvedUrls.length > 0) return resolvedUrls;
-
-  if (!row?.id) return [];
-
-  try {
-    const { data: files, error } = await supabase.storage
-      .from("complaint-photos")
-      .list(String(row.id), {
-        limit: 10,
-        sortBy: { column: "name", order: "asc" },
-      });
-
-    if (error || !files?.length) return [];
-
-    const imageFiles = files.filter((file) => {
-      const name = String(file.name || "").toLowerCase();
-
-      return (
-        name.endsWith(".jpg") ||
-        name.endsWith(".jpeg") ||
-        name.endsWith(".png") ||
-        name.endsWith(".heic") ||
-        name.endsWith(".heif")
-      );
-    });
-
-    const listedUrls = [];
-
-    for (const file of imageFiles) {
-      const storagePath = `${row.id}/${file.name}`;
-      const resolvedUrl = await createReadableComplaintPhotoUrl(storagePath);
-
-      if (resolvedUrl) listedUrls.push(resolvedUrl);
-    }
-
-    return listedUrls;
-  } catch (error) {
-    console.log("List complaint photos error:", error);
-    return [];
-  }
+  return resolveComplaintEvidencePhotoUrls(row);
 }
 
 async function mapComplaintRow(row, profileMap = {}) {
@@ -514,6 +359,7 @@ async function mapComplaintRow(row, profileMap = {}) {
   };
 }
 
+// ===== [DEPT ASSIGNED] CSV export builders =====
 function escapeCsvCell(value) {
   const text = String(value ?? "")
     .replace(/\r\n/g, "\n")
@@ -574,6 +420,7 @@ function buildComplaintsCsv(rows = []) {
   return `\uFEFF${lines.join("\n")}`;
 }
 
+// ===== [DEPT ASSIGNED] Department check and string escaping helpers =====
 function isCenroDepartment(department = "") {
   return String(department || "")
     .replace(/\s+/g, " ")
@@ -600,6 +447,7 @@ function escapeJsString(value = "") {
     .replace(/\r/g, "\\r");
 }
 
+// ===== [DEPT ASSIGNED] Map HTML builder (MapTiler WebView) =====
 function createMapHtml({
   latitude,
   longitude,
@@ -613,7 +461,7 @@ function createMapHtml({
     return `
       <!DOCTYPE html>
       <html>
-        <body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#f7faf6;color:#6f776f;font-family:Arial;">
+        <body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:rgba(247, 250, 246, 1);color:rgba(111, 119, 111, 1);font-family:Arial;">
           No valid pinned location.
         </body>
       </html>
@@ -643,7 +491,7 @@ function createMapHtml({
         <style>
           html, body, #map {
             margin: 0; padding: 0; width: 100%; height: 100%;
-            background: #f7faf6; overflow: hidden; font-family: Arial, sans-serif;
+            background: rgba(247, 250, 246, 1); overflow: hidden; font-family: Arial, sans-serif;
           }
           .complaint-marker {
             width: 28px; height: 40px; display: block; background: transparent;
@@ -662,13 +510,13 @@ function createMapHtml({
           }
           .moderator-dot {
             position: absolute; width: 22px; height: 22px; left: 0; top: 0;
-            border-radius: 50%; background: #315a9a; border: 3px solid #ffffff;
+            border-radius: 50%; background: rgba(49, 90, 154, 1); border: 3px solid rgba(255, 255, 255, 1);
             box-shadow: 0 2px 8px rgba(0,0,0,0.28);
           }
           .moderator-arrow {
             position: absolute; left: 5px; top: -16px; width: 0; height: 0;
             border-left: 6px solid transparent; border-right: 6px solid transparent;
-            border-bottom: 14px solid #315a9a; transform-origin: 6px 27px;
+            border-bottom: 14px solid rgba(49, 90, 154, 1); transform-origin: 6px 27px;
             filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
             pointer-events: none;
           }
@@ -682,21 +530,21 @@ function createMapHtml({
           }
           .control-btn {
             width: 42px; min-height: 39px; border-radius: 12px;
-            border: 1px solid rgba(0,0,0,0.12); background: white; color: #171717;
+            border: 1px solid rgba(0,0,0,0.12); background: white; color: rgba(23, 23, 23, 1);
             font-size: 20px; font-weight: 800; box-shadow: 0 2px 7px rgba(0,0,0,0.18); padding: 4px;
           }
           .maplibregl-popup-content {
             border-radius: 12px; padding: 10px 12px; max-width: 240px;
             box-shadow: 0 8px 24px rgba(0,0,0,0.18);
           }
-          .popup-card .popup-title { font-size: 12px; font-weight: 800; color: #171717; margin-bottom: 6px; }
-          .popup-card .popup-label { font-size: 10px; font-weight: 700; color: #087A0D; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 2px; }
-          .popup-card .popup-address { font-size: 12px; color: #333; line-height: 1.35; margin-bottom: 6px; }
-          .popup-card .popup-coords { font-size: 10px; color: #6f776f; margin-bottom: 4px; }
-          .popup-card .popup-hint { font-size: 10px; color: #087A0D; font-weight: 700; }
+          .popup-card .popup-title { font-size: 12px; font-weight: 800; color: rgba(23, 23, 23, 1); margin-bottom: 6px; }
+          .popup-card .popup-label { font-size: 10px; font-weight: 700; color: rgba(8, 122, 13, 1); text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 2px; }
+          .popup-card .popup-address { font-size: 12px; color: rgba(51, 51, 51, 1); line-height: 1.35; margin-bottom: 6px; }
+          .popup-card .popup-coords { font-size: 10px; color: rgba(111, 119, 111, 1); margin-bottom: 4px; }
+          .popup-card .popup-hint { font-size: 10px; color: rgba(8, 122, 13, 1); font-weight: 700; }
           #streetPanel {
             position: absolute; left: 0; right: 0; bottom: 0; height: 48%; z-index: 1100;
-            display: none; background: #000; border-top-left-radius: 16px; border-top-right-radius: 16px;
+            display: none; background: rgba(0, 0, 0, 1); border-top-left-radius: 16px; border-top-right-radius: 16px;
             overflow: hidden; box-shadow: 0 -6px 18px rgba(0,0,0,0.25);
           }
           #streetPanel.visible { display: block; }
@@ -706,11 +554,11 @@ function createMapHtml({
             display: flex; justify-content: space-between; align-items: center; gap: 8px;
           }
           .street-chip {
-            background: rgba(255,255,255,0.92); color: #171717; font-size: 11px; font-weight: 700;
+            background: rgba(255,255,255,0.92); color: rgba(23, 23, 23, 1); font-size: 11px; font-weight: 700;
             padding: 6px 10px; border-radius: 999px;
           }
           .street-close {
-            background: #d71920; color: white; border: 0; border-radius: 999px;
+            background: rgba(215, 25, 32, 1); color: white; border: 0; border-radius: 999px;
             padding: 6px 12px; font-size: 11px; font-weight: 800;
           }
         </style>
@@ -824,8 +672,8 @@ function createMapHtml({
             element.className = "complaint-marker";
             element.innerHTML =
               '<svg viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-              '<path d="M14 1.5C7.65 1.5 2.5 6.65 2.5 13c0 8.75 11.5 25.5 11.5 25.5S25.5 21.75 25.5 13C25.5 6.65 20.35 1.5 14 1.5z" fill="#d71920" stroke="#ffffff" stroke-width="2.5" stroke-linejoin="round"/>' +
-              '<circle cx="14" cy="13" r="4.2" fill="#ffffff"/>' +
+              '<path d="M14 1.5C7.65 1.5 2.5 6.65 2.5 13c0 8.75 11.5 25.5 11.5 25.5S25.5 21.75 25.5 13C25.5 6.65 20.35 1.5 14 1.5z" fill="rgba(215, 25, 32, 1)" stroke="rgba(255, 255, 255, 1)" stroke-width="2.5" stroke-linejoin="round"/>' +
+              '<circle cx="14" cy="13" r="4.2" fill="rgba(255, 255, 255, 1)"/>' +
               "</svg>";
             return element;
           }
@@ -1014,7 +862,7 @@ function createMapHtml({
                   type: "line",
                   source: "route-to-complaint",
                   layout: { "line-join": "round", "line-cap": "round" },
-                  paint: { "line-color": "#087A0D", "line-width": 5, "line-opacity": 0.88 },
+                  paint: { "line-color": "rgba(8, 122, 13, 1)", "line-width": 5, "line-opacity": 0.88 },
                 });
               }
 
@@ -1036,16 +884,31 @@ function createMapHtml({
   `;
 }
 
+// ===== [DEPT ASSIGNED] Screen component =====
 export default function DepartmentHeadAssignedComplaints() {
   const router = useRouter();
   const pathname = usePathname();
-  const { complaintId: routeComplaintId, openDetails: routeOpenDetails } =
-    useLocalSearchParams();
+  const {
+    complaintId: routeComplaintId,
+    openDetails: routeOpenDetails,
+    filter: routeFilterParam,
+  } = useLocalSearchParams();
   const { unreadNotificationCount } = useDepartmentHeadUnreadNotifications();
+
+  // --- [DEPT ASSIGNED] Initial filters from route params and page cache ---
+  const routeStatusFilter = Array.isArray(routeFilterParam)
+    ? routeFilterParam[0]
+    : routeFilterParam;
 
   const lastAssignedFilter = getPageCache(DEPT_ASSIGNED_LAST_FILTER_KEY) || {};
   const selectedCategoryInit = lastAssignedFilter.category || "All Category";
-  const selectedStatusInit = lastAssignedFilter.status || "All Status";
+  const selectedStatusInit = sanitizeStatusFilter(
+    (routeStatusFilter && statusFilters.includes(String(routeStatusFilter))
+      ? String(routeStatusFilter)
+      : null) ||
+      lastAssignedFilter.status ||
+      "All Status"
+  );
   const selectedPriorityInit = lastAssignedFilter.priority || "All Priority";
   const cachedAssigned = getPageCache(
     assignedComplaintsCacheKey({
@@ -1055,6 +918,7 @@ export default function DepartmentHeadAssignedComplaints() {
     })
   );
 
+  // --- [DEPT ASSIGNED] State: complaints, filters, modals, location ---
   const [complaints, setComplaints] = useState(cachedAssigned?.complaints ?? []);
   const [complaintsTotal, setComplaintsTotal] = useState(cachedAssigned?.total ?? 0);
   const [loadingComplaints, setLoadingComplaints] = useState(!cachedAssigned);
@@ -1104,6 +968,7 @@ export default function DepartmentHeadAssignedComplaints() {
   const [departmentHeadHeading, setDepartmentHeadHeading] = useState(0);
   const [locationLoading, setLocationLoading] = useState(false);
 
+  // --- [DEPT ASSIGNED] Refs: maps, watchers, pagination, status guards ---
   const inlineMapRef = useRef(null);
   const fullMapRef = useRef(null);
   const locationWatcherRef = useRef(null);
@@ -1113,8 +978,17 @@ export default function DepartmentHeadAssignedComplaints() {
   const hasMoreRef = useRef(cachedAssigned?.hasMore !== false);
   const listViewportHeightRef = useRef(0);
   const assignedMatchModeRef = useRef("exact");
+  const statusOverridesRef = useRef(new Map());
+  const localStatusUpdateGuardUntilRef = useRef(0);
+  const updatingStatusIdRef = useRef(null);
+  const appliedQueryFilterRef = useRef(
+    routeStatusFilter && statusFilters.includes(String(routeStatusFilter))
+      ? String(routeStatusFilter)
+      : null
+  );
   const routedComplaintOpenedRef = useRef(false);
 
+  // --- [DEPT ASSIGNED] Fonts and category filter options ---
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
@@ -1136,6 +1010,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }
   }, [categoryFilters, selectedCategory]);
 
+  // --- [DEPT ASSIGNED] Navigation helper ---
   const smoothNavigate = useCallback(
     (route, isActive = false) => {
       if (isActive) return;
@@ -1144,6 +1019,7 @@ export default function DepartmentHeadAssignedComplaints() {
     [router]
   );
 
+  // --- [DEPT ASSIGNED] Load department head's department from profile ---
   const loadDepartmentHeadDepartment = useCallback(async () => {
     try {
       const {
@@ -1241,48 +1117,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }
   }, []);
 
-  const loadCitizenProfiles = useCallback(async (citizenIds = []) => {
-    const uniqueIds = Array.from(new Set((citizenIds || []).filter(Boolean)));
-
-    if (uniqueIds.length === 0) return {};
-
-    try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id,email,full_name,contact_number,avatar_url")
-        .in("id", uniqueIds);
-
-      if (error) {
-        console.log("Load citizen profiles error:", error);
-        return {};
-      }
-
-      const profileEntries = await Promise.all(
-        (data || []).map(async (profile) => {
-          const readableAvatarUrl = await createReadableAvatarUrl(
-            profile.avatar_url
-          );
-
-          return [
-            profile.id,
-            {
-              id: profile.id,
-              email: profile.email || "",
-              full_name: profile.full_name || "Citizen",
-              contact_number: profile.contact_number || "No contact number",
-              avatar_url: readableAvatarUrl,
-            },
-          ];
-        })
-      );
-
-      return Object.fromEntries(profileEntries);
-    } catch (error) {
-      console.log("Load citizen profiles catch error:", error);
-      return {};
-    }
-  }, []);
-
+  // --- [DEPT ASSIGNED] Load assigned complaints from Supabase (cached + paginated) ---
   const loadAssignedComplaints = useCallback(
     async (showLoader = true, append = false) => {
       const cacheKey = assignedComplaintsCacheKey({
@@ -1292,9 +1127,12 @@ export default function DepartmentHeadAssignedComplaints() {
       });
       const cached = !append ? getPageCache(cacheKey) : null;
 
-      if (!append && cached?.complaints) {
-        complaintsRef.current = cached.complaints;
-        setComplaints(cached.complaints);
+      // Only hydrate from cache on user-facing loads. Silent realtime refreshes
+      // must not re-apply a stale Pending status over an optimistic update.
+      if (!append && showLoader && cached?.complaints) {
+        const hydrated = applyStatusOverrides(cached.complaints);
+        complaintsRef.current = hydrated;
+        setComplaints(hydrated);
         setComplaintsTotal(cached.total ?? cached.complaints.length);
         hasMoreRef.current = cached.hasMore !== false;
         setHasMoreComplaints(cached.hasMore !== false);
@@ -1470,9 +1308,22 @@ export default function DepartmentHeadAssignedComplaints() {
           (complaintsRows || []).map((row) => mapComplaintRow(row, profileMap))
         );
 
-        const nextComplaints = append
-          ? mergeComplaintPages(complaintsRef.current, mappedComplaints)
-          : mappedComplaints;
+        const nextComplaints = applyStatusOverrides(
+          append
+            ? mergeComplaintPages(complaintsRef.current, mappedComplaints)
+            : mappedComplaints,
+          statusOverridesRef.current
+        );
+
+        mappedComplaints.forEach((item) => {
+          const override = statusOverridesRef.current.get(item.rawId);
+          if (
+            override &&
+            normalizeStatus(item.status) === normalizeStatus(override)
+          ) {
+            statusOverridesRef.current.delete(item.rawId);
+          }
+        });
 
         complaintsRef.current = nextComplaints;
         setComplaints(nextComplaints);
@@ -1515,7 +1366,6 @@ export default function DepartmentHeadAssignedComplaints() {
       }
     },
     [
-      loadCitizenProfiles,
       loadDepartmentHeadDepartment,
       selectedCategory,
       selectedPriority,
@@ -1523,6 +1373,7 @@ export default function DepartmentHeadAssignedComplaints() {
     ]
   );
 
+  // --- [DEPT ASSIGNED] Pagination: load more and infinite scroll ---
   const loadAssignedComplaintsRef = useRef(loadAssignedComplaints);
   loadAssignedComplaintsRef.current = loadAssignedComplaints;
 
@@ -1547,9 +1398,27 @@ export default function DepartmentHeadAssignedComplaints() {
     }
   };
 
+  // --- [DEPT ASSIGNED] Sync refs, apply route filter, reload on focus ---
   useEffect(() => {
     complaintsRef.current = complaints;
   }, [complaints]);
+
+  useEffect(() => {
+    const next = routeStatusFilter
+      ? sanitizeStatusFilter(String(routeStatusFilter))
+      : "";
+
+    if (!next || !statusFilters.includes(next)) return;
+    if (appliedQueryFilterRef.current === next) return;
+
+    appliedQueryFilterRef.current = next;
+    setSelectedStatus(next);
+    setPageCache(DEPT_ASSIGNED_LAST_FILTER_KEY, {
+      category: selectedCategory,
+      status: next,
+      priority: selectedPriority,
+    });
+  }, [routeStatusFilter, selectedCategory, selectedPriority]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1557,6 +1426,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }, [loadAssignedComplaints])
   );
 
+  // --- [DEPT ASSIGNED] Realtime: complaints and profile changes ---
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -1570,6 +1440,12 @@ export default function DepartmentHeadAssignedComplaints() {
           table: "complaints",
         },
         () => {
+          if (
+            updatingStatusIdRef.current ||
+            Date.now() < localStatusUpdateGuardUntilRef.current
+          ) {
+            return;
+          }
           loadAssignedComplaintsRef.current?.(false);
         }
       )
@@ -1614,6 +1490,7 @@ export default function DepartmentHeadAssignedComplaints() {
     };
   }, [currentUserId, currentUserEmail]);
 
+  // --- [DEPT ASSIGNED] Location tracking (GPS + heading) ---
   const startDepartmentHeadTracking = useCallback(async () => {
     try {
       setLocationLoading(true);
@@ -1623,17 +1500,8 @@ export default function DepartmentHeadAssignedComplaints() {
         !(await isLocationUsageAllowed(currentUserId))
       ) {
         setDepartmentHeadLocation(null);
-
-        if (locationWatcherRef.current) {
-          locationWatcherRef.current.remove();
-          locationWatcherRef.current = null;
-        }
-
-        if (headingWatcherRef.current) {
-          headingWatcherRef.current.remove();
-          headingWatcherRef.current = null;
-        }
-
+        stopLocationSubscription(locationWatcherRef);
+        stopLocationSubscription(headingWatcherRef);
         return;
       }
 
@@ -1660,15 +1528,8 @@ export default function DepartmentHeadAssignedComplaints() {
         setDepartmentHeadHeading(currentLocation.coords.heading);
       }
 
-      if (locationWatcherRef.current) {
-        locationWatcherRef.current.remove();
-        locationWatcherRef.current = null;
-      }
-
-      if (headingWatcherRef.current) {
-        headingWatcherRef.current.remove();
-        headingWatcherRef.current = null;
-      }
+      stopLocationSubscription(locationWatcherRef);
+      stopLocationSubscription(headingWatcherRef);
 
       locationWatcherRef.current = await Location.watchPositionAsync(
         {
@@ -1691,19 +1552,21 @@ export default function DepartmentHeadAssignedComplaints() {
         }
       );
 
-      headingWatcherRef.current = await Location.watchHeadingAsync(
-        (headingData) => {
-          const nextHeading =
-            typeof headingData.trueHeading === "number" &&
-            headingData.trueHeading >= 0
-              ? headingData.trueHeading
-              : headingData.magHeading;
+      if (Platform.OS !== "web") {
+        headingWatcherRef.current = await Location.watchHeadingAsync(
+          (headingData) => {
+            const nextHeading =
+              typeof headingData.trueHeading === "number" &&
+              headingData.trueHeading >= 0
+                ? headingData.trueHeading
+                : headingData.magHeading;
 
-          if (typeof nextHeading === "number" && nextHeading >= 0) {
-            setDepartmentHeadHeading(nextHeading);
+            if (typeof nextHeading === "number" && nextHeading >= 0) {
+              setDepartmentHeadHeading(nextHeading);
+            }
           }
-        }
-      );
+        );
+      }
     } catch {
       notify(
         "Location Error",
@@ -1718,15 +1581,8 @@ export default function DepartmentHeadAssignedComplaints() {
     startDepartmentHeadTracking();
 
     return () => {
-      if (locationWatcherRef.current) {
-        locationWatcherRef.current.remove();
-        locationWatcherRef.current = null;
-      }
-
-      if (headingWatcherRef.current) {
-        headingWatcherRef.current.remove();
-        headingWatcherRef.current = null;
-      }
+      stopLocationSubscription(locationWatcherRef);
+      stopLocationSubscription(headingWatcherRef);
     };
   }, [startDepartmentHeadTracking]);
 
@@ -1736,6 +1592,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }, [startDepartmentHeadTracking])
   );
 
+  // --- [DEPT ASSIGNED] Derived: filtered complaints ---
   const filteredComplaints = useMemo(() => {
     const filtered = complaints.filter((item) => {
       const departmentMatch = complaintAppliesToDepartment(
@@ -1767,6 +1624,7 @@ export default function DepartmentHeadAssignedComplaints() {
 
   const canExportCsv = isCenroDepartment(departmentHeadDepartment);
 
+  // --- [DEPT ASSIGNED] Export complaints to CSV ---
   const exportComplaintsToCsv = async () => {
     if (!canExportCsv) {
       return;
@@ -1857,6 +1715,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }
   };
 
+  // --- [DEPT ASSIGNED] Map HTML and live position injection ---
   const selectedMapHtml = useMemo(() => {
     if (!selectedComplaint) return "";
 
@@ -1901,6 +1760,7 @@ export default function DepartmentHeadAssignedComplaints() {
     injectDepartmentHeadMapUpdate(0);
   }, [injectDepartmentHeadMapUpdate, selectedComplaint, fullMapVisible]);
 
+  // --- [DEPT ASSIGNED] Keep selected complaint in sync with list ---
   useEffect(() => {
     if (!selectedComplaint) return;
 
@@ -1913,6 +1773,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }
   }, [complaints]);
 
+  // --- [DEPT ASSIGNED] Open details modal ---
   const openDetails = (complaint) => {
     setSelectedComplaint(complaint);
     setDetailsVisible(true);
@@ -1920,6 +1781,7 @@ export default function DepartmentHeadAssignedComplaints() {
     setSelectedPhoto(null);
   };
 
+  // --- [DEPT ASSIGNED] Open complaint from route params (e.g. notification tap) ---
   useEffect(() => {
     if (routeOpenDetails !== "true" || !routeComplaintId || routedComplaintOpenedRef.current) {
       return;
@@ -2002,9 +1864,9 @@ export default function DepartmentHeadAssignedComplaints() {
     routeOpenDetails,
     loadingComplaints,
     loadDepartmentHeadDepartment,
-    loadCitizenProfiles,
   ]);
 
+  // --- [DEPT ASSIGNED] Details, full map, routing, and photo viewer handlers ---
   const closeDetails = () => {
     setDetailsVisible(false);
     setSelectedComplaint(null);
@@ -2087,6 +1949,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }, 160);
   };
 
+  // --- [DEPT ASSIGNED] Status update handlers ---
   const openUpdateStatusModal = (complaint) => {
     if (normalizeStatus(complaint.status) === "Completed") {
       notify(
@@ -2135,18 +1998,37 @@ export default function DepartmentHeadAssignedComplaints() {
     }
 
     setUpdatingStatusId(complaint.rawId);
+    updatingStatusIdRef.current = complaint.rawId;
+    localStatusUpdateGuardUntilRef.current = Date.now() + 4000;
+    statusOverridesRef.current.set(complaint.rawId, nextStatus);
 
-    // Optimistic UI — badge updates right away.
-    setComplaints((prev) =>
-      prev.map((item) =>
+    // Optimistic UI — badge updates right away and stays until server confirms.
+    const applyLocalStatus = (list) =>
+      list.map((item) =>
         item.rawId === complaint.rawId ? { ...item, status: nextStatus } : item
-      )
-    );
+      );
+
+    const optimisticList = applyLocalStatus(complaintsRef.current);
+    complaintsRef.current = optimisticList;
+    setComplaints(optimisticList);
 
     if (selectedComplaint?.rawId === complaint.rawId) {
       setSelectedComplaint((prev) =>
         prev ? { ...prev, status: nextStatus } : prev
       );
+    }
+
+    const cacheKey = assignedComplaintsCacheKey({
+      category: selectedCategory,
+      status: selectedStatus,
+      priority: selectedPriority,
+    });
+    const cached = getPageCache(cacheKey);
+    if (cached?.complaints) {
+      setPageCache(cacheKey, {
+        ...cached,
+        complaints: applyLocalStatus(cached.complaints),
+      });
     }
 
     try {
@@ -2169,32 +2051,57 @@ export default function DepartmentHeadAssignedComplaints() {
         );
       }
 
+      const confirmedStatus = normalizeStatus(updatedComplaint.status) || nextStatus;
+      statusOverridesRef.current.set(complaint.rawId, confirmedStatus);
+
+      const confirmList = complaintsRef.current.map((item) =>
+        item.rawId === complaint.rawId
+          ? { ...item, status: confirmedStatus }
+          : item
+      );
+      complaintsRef.current = confirmList;
+      setComplaints(confirmList);
+
+      if (selectedComplaint?.rawId === complaint.rawId) {
+        setSelectedComplaint((prev) =>
+          prev ? { ...prev, status: confirmedStatus } : prev
+        );
+      }
+
       setUpdatingStatusId(null);
+      updatingStatusIdRef.current = null;
 
       // Confirm right after the DB write — don't wait for push/notifications.
       notify(
         "Status Updated",
-        `Complaint status changed to ${nextStatus}.`
+        `Complaint status changed to ${confirmedStatus}.`
       );
 
       writeAuditLog({
         action: "status_update",
         title: "Complaint Status Updated",
-        description: `Complaint #${complaint.id} changed from ${oldStatus} to ${nextStatus}.`,
+        description: `Complaint #${complaint.id} changed from ${oldStatus} to ${confirmedStatus}.`,
         entityType: "complaint",
         entityId: complaint.rawId,
         actorRole: "moderator",
         metadata: {
           old_status: oldStatus,
-          new_status: nextStatus,
+          new_status: confirmedStatus,
           assigned_office: complaint.department,
+          analysis_type: "processing_time",
+          milestone:
+            confirmedStatus === "In Progress"
+              ? "in_progress"
+              : confirmedStatus === "For Validation"
+                ? "for_validation"
+                : "status_change",
         },
       });
 
       // Notify citizen/admins in the background.
       const notificationType =
         (oldStatus === "In Progress" || oldStatus === "Returned") &&
-        nextStatus === "For Validation"
+        confirmedStatus === "For Validation"
           ? "validation"
           : "status";
 
@@ -2206,7 +2113,7 @@ export default function DepartmentHeadAssignedComplaints() {
       const notificationMessage =
         notificationType === "validation"
           ? `Your complaint #${complaint.id} is now for validation. Please review it and provide feedback.`
-          : `Your complaint #${complaint.id} status changed from ${oldStatus} to ${nextStatus}.`;
+          : `Your complaint #${complaint.id} status changed from ${oldStatus} to ${confirmedStatus}.`;
 
       Promise.resolve()
         .then(async () => {
@@ -2217,10 +2124,10 @@ export default function DepartmentHeadAssignedComplaints() {
             type: notificationType,
             title: notificationTitle,
             message: notificationMessage,
-            status: nextStatus,
+            status: confirmedStatus,
             metadata: {
               old_status: oldStatus,
-              new_status: nextStatus,
+              new_status: confirmedStatus,
               updated_by: currentUserId,
               assigned_office: complaint.department,
               title: complaint.title,
@@ -2228,7 +2135,7 @@ export default function DepartmentHeadAssignedComplaints() {
             },
           });
 
-          if (nextStatus === "For Validation") {
+          if (confirmedStatus === "For Validation") {
             await notifyAdminsValidationRequired({
               complaint: {
                 id: complaint.rawId,
@@ -2238,19 +2145,26 @@ export default function DepartmentHeadAssignedComplaints() {
                 assigned_office: complaint.department,
                 location_text:
                   complaint.geotaggedLocation || complaint.location,
-                status: nextStatus,
+                status: confirmedStatus,
               },
             });
           }
 
-          loadAssignedComplaints(false);
+          // Keep local status; delayed soft sync after notifications.
+          localStatusUpdateGuardUntilRef.current = Date.now() + 2500;
+          statusOverridesRef.current.delete(complaint.rawId);
         })
         .catch((notifyError) => {
           console.log("Status update notification error:", notifyError);
-          loadAssignedComplaints(false);
+          localStatusUpdateGuardUntilRef.current = Date.now() + 2500;
+          statusOverridesRef.current.delete(complaint.rawId);
         });
     } catch (error) {
       console.log("Update status error:", error);
+
+      statusOverridesRef.current.delete(complaint.rawId);
+      updatingStatusIdRef.current = null;
+      localStatusUpdateGuardUntilRef.current = 0;
 
       setComplaints((prev) =>
         prev.map((item) =>
@@ -2274,6 +2188,7 @@ export default function DepartmentHeadAssignedComplaints() {
     }
   };
 
+  // --- [DEPT ASSIGNED] Reassignment handlers ---
   const openReassignModal = (complaint) => {
     if (complaint.status === "Completed") {
       notify(
@@ -2310,7 +2225,9 @@ export default function DepartmentHeadAssignedComplaints() {
     }
 
     const nextDepartment =
-      selectedItem.department || getAssignedOffice(selectedItem.category);
+      selectedItem.department ||
+      getPrimaryAssignedOffice(selectedItem.category) ||
+      getAssignedOffice(selectedItem.category);
 
     if (
       selectedItem.category === actionComplaint.category &&
@@ -2326,7 +2243,21 @@ export default function DepartmentHeadAssignedComplaints() {
     try {
       setSubmittingReassignment(true);
 
-      const { data: reassignedComplaint, error } = await supabase.rpc(
+      const reassignmentPayload = {
+        category: selectedItem.category,
+        assigned_office: nextDepartment,
+        reassignment_reason: reason,
+        reassigned_from_category: actionComplaint.category,
+        reassigned_from_office: actionComplaint.department,
+        reassigned_to_category: selectedItem.category,
+        reassigned_to_office: nextDepartment,
+        reassigned_at: new Date().toISOString(),
+      };
+
+      let reassignedComplaint = null;
+      let reassignError = null;
+
+      const { data: rpcComplaint, error: rpcError } = await supabase.rpc(
         "reassign_complaint_by_moderator",
         {
           p_complaint_id: actionComplaint.rawId,
@@ -2336,33 +2267,82 @@ export default function DepartmentHeadAssignedComplaints() {
         }
       );
 
-      if (error) {
-        notify("Reassign Failed", error.message);
-        return;
-      }
-
-      if (!reassignedComplaint) {
-        notify(
-          "Reassign Failed",
-          "No complaint row was updated. Please check if the reassignment RPC function exists in Supabase."
+      if (!rpcError && rpcComplaint) {
+        reassignedComplaint = rpcComplaint;
+      } else {
+        reassignError = rpcError;
+        console.log(
+          "Reassign RPC failed, falling back to direct update:",
+          rpcError
         );
-        return;
+
+        // Direct update uses the same fuzzy office RLS that lets them view/update status.
+        const { data: updatedComplaint, error: updateError } = await supabase
+          .from("complaints")
+          .update(reassignmentPayload)
+          .eq("id", actionComplaint.rawId)
+          .select("*")
+          .maybeSingle();
+
+        if (updateError) {
+          notify(
+            "Reassign Failed",
+            updateError.message ||
+              reassignError?.message ||
+              "Unable to reassign complaint."
+          );
+          return;
+        }
+
+        if (!updatedComplaint) {
+          notify(
+            "Reassign Failed",
+            reassignError?.message ||
+              "You cannot reassign a complaint that was not in your assigned complaints."
+          );
+          return;
+        }
+
+        reassignedComplaint = updatedComplaint;
       }
 
       const reassignedAt =
-        reassignedComplaint.reassigned_at || new Date().toISOString();
+        reassignedComplaint.reassigned_at || reassignmentPayload.reassigned_at;
+      const savedDepartment =
+        reassignedComplaint.assigned_office || nextDepartment;
+      const savedCategory =
+        reassignedComplaint.category || selectedItem.category;
+
+      if (actionComplaint.citizenId) {
+        await createCitizenNotificationAndPush({
+          citizenId: actionComplaint.citizenId,
+          complaintId: actionComplaint.rawId,
+          shortId: actionComplaint.id,
+          type: "reassigned",
+          title: "Complaint Reassigned",
+          message: `Your complaint #${actionComplaint.id} was reassigned to ${savedDepartment}.`,
+          status: actionComplaint.status,
+          metadata: {
+            old_assigned_office: actionComplaint.department,
+            new_assigned_office: savedDepartment,
+            reassignment_reason: reason,
+            title: actionComplaint.title,
+            category: savedCategory,
+          },
+        });
+      }
 
       await notifyDepartmentHeadsReassigned({
         complaint: {
           id: actionComplaint.rawId,
           short_id: actionComplaint.id,
           title: actionComplaint.title,
-          category: selectedItem.category,
+          category: savedCategory,
           location_text:
             actionComplaint.geotaggedLocation || actionComplaint.location,
           status: actionComplaint.status,
         },
-        newDepartment: nextDepartment,
+        newDepartment: savedDepartment,
         oldDepartment: actionComplaint.department,
         reason,
         excludeDepartmentHeadId: currentUserId,
@@ -2373,13 +2353,13 @@ export default function DepartmentHeadAssignedComplaints() {
           id: actionComplaint.rawId,
           short_id: actionComplaint.id,
           title: actionComplaint.title,
-          category: selectedItem.category,
+          category: savedCategory,
           location_text:
             actionComplaint.geotaggedLocation || actionComplaint.location,
           status: actionComplaint.status,
         },
         oldDepartment: actionComplaint.department,
-        newDepartment: nextDepartment,
+        newDepartment: savedDepartment,
         reason,
       });
 
@@ -2389,33 +2369,45 @@ export default function DepartmentHeadAssignedComplaints() {
             item.rawId === actionComplaint.rawId
               ? {
                   ...item,
-                  category: selectedItem.category,
-                  department: nextDepartment,
+                  category: savedCategory,
+                  department: savedDepartment,
                   reassignmentReason: reason,
                   reassignedFromCategory: actionComplaint.category,
                   reassignedFromOffice: actionComplaint.department,
-                  reassignedToCategory: selectedItem.category,
-                  reassignedToOffice: nextDepartment,
+                  reassignedToCategory: savedCategory,
+                  reassignedToOffice: savedDepartment,
                   reassignedAt,
                 }
               : item
           )
-          .filter((item) => item.department === departmentHeadDepartment)
+          .filter((item) =>
+            complaintAppliesToDepartment(
+              item.department,
+              item.category,
+              departmentHeadDepartment
+            )
+          )
       );
 
       if (selectedComplaint?.rawId === actionComplaint.rawId) {
-        if (nextDepartment === departmentHeadDepartment) {
+        if (
+          complaintAppliesToDepartment(
+            savedDepartment,
+            savedCategory,
+            departmentHeadDepartment
+          )
+        ) {
           setSelectedComplaint((prev) =>
             prev
               ? {
                   ...prev,
-                  category: selectedItem.category,
-                  department: nextDepartment,
+                  category: savedCategory,
+                  department: savedDepartment,
                   reassignmentReason: reason,
                   reassignedFromCategory: actionComplaint.category,
                   reassignedFromOffice: actionComplaint.department,
-                  reassignedToCategory: selectedItem.category,
-                  reassignedToOffice: nextDepartment,
+                  reassignedToCategory: savedCategory,
+                  reassignedToOffice: savedDepartment,
                   reassignedAt,
                 }
               : prev
@@ -2432,20 +2424,41 @@ export default function DepartmentHeadAssignedComplaints() {
 
       notify(
         "Complaint Reassigned",
-        `This complaint was reassigned to ${nextDepartment}. The citizen has been notified.`
+        `This complaint was reassigned to ${savedDepartment}. The citizen has been notified.`
       );
 
       writeAuditLog({
         action: "complaint_reassign",
         title: "Complaint Reassigned",
-        description: `Complaint #${actionComplaint.id} was reassigned from ${actionComplaint.department} to ${nextDepartment}.`,
+        description: `Complaint #${actionComplaint.id} was reassigned from ${actionComplaint.department} to ${savedDepartment}.`,
         entityType: "complaint",
         entityId: actionComplaint.rawId,
         actorRole: "moderator",
         metadata: {
           old_department: actionComplaint.department,
-          new_department: nextDepartment,
+          new_department: savedDepartment,
+          old_category: actionComplaint.category,
+          new_category: savedCategory,
           reason,
+          ai_routing_override: true,
+          analysis_type: "ai_accuracy",
+        },
+      });
+
+      writeAuditLog({
+        action: "ai_routing_override",
+        title: "AI Routing Override Logged",
+        description: `Department head overrode the AI/original route for complaint #${actionComplaint.id}.`,
+        entityType: "complaint",
+        entityId: actionComplaint.rawId,
+        actorRole: "moderator",
+        metadata: {
+          from_office: actionComplaint.department,
+          to_office: savedDepartment,
+          from_category: actionComplaint.category,
+          to_category: savedCategory,
+          reason,
+          analysis_type: "ai_accuracy",
         },
       });
 
@@ -2458,15 +2471,17 @@ export default function DepartmentHeadAssignedComplaints() {
     }
   };
 
+  // --- [DEPT ASSIGNED] Render ---
   if (!fontsLoaded && !cachedAssigned) {
     return <PageSkeleton variant="list" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [DEPT ASSIGNED UI] Sticky header: title, department, CSV export */}
         <View style={styles.stickyHeader}>
           <View style={styles.headerContainer}>
             <View style={styles.headerTitleRow}>
@@ -2483,13 +2498,14 @@ export default function DepartmentHeadAssignedComplaints() {
                   style={styles.exportCsvButton}
                   onPress={exportComplaintsToCsv}
                 >
-                  <Ionicons name="download-outline" size={16} color={WHITE} />
+                  <Ionicons name="download-outline" size={16} color="rgba(255, 255, 255, 1)" />
                   <Text style={styles.exportCsvButtonText}>CSV</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
           </View>
 
+          {/* [DEPT ASSIGNED UI] Filters: category, status, priority dropdowns */}
           <View style={styles.filterGrid}>
             <TouchableOpacity
               activeOpacity={0.75}
@@ -2499,7 +2515,7 @@ export default function DepartmentHeadAssignedComplaints() {
               <Text style={styles.filterText} numberOfLines={1}>
                 {selectedCategory}
               </Text>
-              <Ionicons name="chevron-down" size={14} color={MUTED} />
+              <Ionicons name="chevron-down" size={14} color="rgba(111, 119, 111, 1)" />
             </TouchableOpacity>
 
             <View style={styles.filterHalfRow}>
@@ -2511,7 +2527,7 @@ export default function DepartmentHeadAssignedComplaints() {
                 <Text style={styles.filterText} numberOfLines={1}>
                   {selectedStatus}
                 </Text>
-                <Ionicons name="chevron-down" size={14} color={MUTED} />
+                <Ionicons name="chevron-down" size={14} color="rgba(111, 119, 111, 1)" />
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -2522,12 +2538,13 @@ export default function DepartmentHeadAssignedComplaints() {
                 <Text style={styles.filterText} numberOfLines={1}>
                   {selectedPriority}
                 </Text>
-                <Ionicons name="chevron-down" size={14} color={MUTED} />
+                <Ionicons name="chevron-down" size={14} color="rgba(111, 119, 111, 1)" />
               </TouchableOpacity>
             </View>
           </View>
         </View>
 
+        {/* [DEPT ASSIGNED UI] Complaints list (infinite scroll) */}
         <ScrollView
           style={styles.listScroll}
           showsVerticalScrollIndicator={false}
@@ -2540,11 +2557,12 @@ export default function DepartmentHeadAssignedComplaints() {
           onContentSizeChange={(_, height) => maybeFillViewport(height)}
         >
           <View style={styles.complaintsList}>
+            {/* [DEPT ASSIGNED UI] Loading skeleton, empty state, or complaint cards */}
             {loadingComplaints && complaints.length === 0 ? (
               <ComplaintListSkeleton count={COMPLAINTS_PAGE_SIZE} />
             ) : filteredComplaints.length === 0 ? (
               <View style={styles.emptyCard}>
-                <Ionicons name="document-text-outline" size={30} color={MUTED} />
+                <Ionicons name="document-text-outline" size={30} color="rgba(111, 119, 111, 1)" />
                 <Text style={styles.emptyTitle}>No complaints found</Text>
                 <Text style={styles.emptyText}>
                   Complaints will appear here when their assigned office matches your department in the database.
@@ -2561,6 +2579,7 @@ export default function DepartmentHeadAssignedComplaints() {
                       activeOpacity={0.8}
                       onPress={() => openDetails(item)}
                     >
+                      {/* [DEPT ASSIGNED UI] Card: title and location */}
                       <View style={styles.complaintHeaderRow}>
                         <View style={styles.complaintTitleBox}>
                           <Text style={styles.complaintTitle} numberOfLines={1}>
@@ -2573,6 +2592,7 @@ export default function DepartmentHeadAssignedComplaints() {
                         </View>
                       </View>
 
+                      {/* [DEPT ASSIGNED UI] Card: citizen avatar and contact */}
                       <View style={styles.complaintCitizenRow}>
                         <View style={styles.cardCitizenAvatar}>
                           {item.userPhoto ? (
@@ -2584,7 +2604,7 @@ export default function DepartmentHeadAssignedComplaints() {
                             <Ionicons
                               name="person-circle-outline"
                               size={30}
-                              color={GREEN}
+                              color="rgba(8, 122, 13, 1)"
                             />
                           )}
                         </View>
@@ -2599,15 +2619,16 @@ export default function DepartmentHeadAssignedComplaints() {
                         </View>
                       </View>
 
+                      {/* [DEPT ASSIGNED UI] Card: date/time and status/priority badges */}
                       <View style={styles.metaAndBadgeRow}>
                         <View style={styles.dateTimeColumn}>
                           <View style={styles.metaItem}>
-                            <Feather name="calendar" size={12} color={MUTED} />
+                            <Feather name="calendar" size={12} color="rgba(111, 119, 111, 1)" />
                             <Text style={styles.metaText}>{item.date}</Text>
                           </View>
 
                           <View style={styles.metaItem}>
-                            <Feather name="clock" size={12} color={MUTED} />
+                            <Feather name="clock" size={12} color="rgba(111, 119, 111, 1)" />
                             <Text style={styles.metaText}>{item.time}</Text>
                           </View>
                         </View>
@@ -2650,6 +2671,7 @@ export default function DepartmentHeadAssignedComplaints() {
                       </View>
                     </TouchableOpacity>
 
+                    {/* [DEPT ASSIGNED UI] Card actions: Update Status / Reassign */}
                     <View style={styles.cardActionRow}>
                       <TouchableOpacity
                         activeOpacity={0.85}
@@ -2666,12 +2688,12 @@ export default function DepartmentHeadAssignedComplaints() {
                         onPress={() => openUpdateStatusModal(item)}
                       >
                         {updatingStatusId === item.rawId ? (
-                          <ActivityIndicator size="small" color={WHITE} />
+                          <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                         ) : (
                           <MaterialCommunityIcons
                             name="progress-check"
                             size={15}
-                            color={WHITE}
+                            color="rgba(255, 255, 255, 1)"
                           />
                         )}
                         <Text style={styles.updateStatusButtonText}>
@@ -2689,7 +2711,7 @@ export default function DepartmentHeadAssignedComplaints() {
                         <MaterialCommunityIcons
                           name="swap-horizontal"
                           size={16}
-                          color={GREEN}
+                          color="rgba(8, 122, 13, 1)"
                         />
                         <Text style={styles.reassignButtonText}>Reassign</Text>
                       </TouchableOpacity>
@@ -2700,9 +2722,11 @@ export default function DepartmentHeadAssignedComplaints() {
             )}
           </View>
 
+          {/* [DEPT ASSIGNED UI] Load-more footer */}
           <ComplaintsLoadMoreFooter loading={loadingMoreComplaints} />
         </ScrollView>
 
+        {/* [DEPT ASSIGNED UI] Filter dropdown modals (category, status, priority) */}
         <DropdownModal
           visible={categoryDropdownVisible}
           title="Select Category"
@@ -2739,6 +2763,7 @@ export default function DepartmentHeadAssignedComplaints() {
           }}
         />
 
+        {/* [DEPT ASSIGNED UI] Complaint details modal */}
         <Modal
           visible={detailsVisible}
           transparent
@@ -2757,7 +2782,7 @@ export default function DepartmentHeadAssignedComplaints() {
                   style={styles.modalCloseButton}
                   onPress={closeDetails}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -2771,6 +2796,7 @@ export default function DepartmentHeadAssignedComplaints() {
                     {selectedComplaint.description}
                   </Text>
 
+                  {/* [DEPT ASSIGNED UI] Details: citizen information */}
                   <View style={styles.citizenDetailCard}>
                     <Text style={styles.sectionTitle}>Citizen Information</Text>
 
@@ -2792,7 +2818,7 @@ export default function DepartmentHeadAssignedComplaints() {
                             <Ionicons
                               name="person-circle-outline"
                               size={48}
-                              color={GREEN}
+                              color="rgba(8, 122, 13, 1)"
                             />
                           )}
                         </View>
@@ -2809,6 +2835,7 @@ export default function DepartmentHeadAssignedComplaints() {
                     </View>
                   </View>
 
+                  {/* [DEPT ASSIGNED UI] Details: location, inline map, route buttons */}
                   <View style={styles.locationSection}>
                     <View style={styles.sectionHeaderRow}>
                       <Text style={styles.sectionTitle}>Location</Text>
@@ -2853,10 +2880,10 @@ export default function DepartmentHeadAssignedComplaints() {
                       onPress={startDepartmentHeadTracking}
                     >
                       {locationLoading ? (
-                        <ActivityIndicator size="small" color={GREEN} />
+                        <ActivityIndicator size="small" color="rgba(8, 122, 13, 1)" />
                       ) : (
                         <>
-                          <Feather name="crosshair" size={15} color={GREEN} />
+                          <Feather name="crosshair" size={15} color="rgba(8, 122, 13, 1)" />
                           <Text style={styles.refreshLocationText}>
                             Update My Location
                           </Text>
@@ -2869,13 +2896,14 @@ export default function DepartmentHeadAssignedComplaints() {
                       style={styles.routeButton}
                       onPress={routeToPinnedLocation}
                     >
-                      <Feather name="navigation" size={15} color={WHITE} />
+                      <Feather name="navigation" size={15} color="rgba(255, 255, 255, 1)" />
                       <Text style={styles.routeButtonText}>
                         Route to Pinned Location
                       </Text>
                     </TouchableOpacity>
                   </View>
 
+                  {/* [DEPT ASSIGNED UI] Details: photo evidence */}
                   <View style={styles.photoSection}>
                     <Text style={styles.sectionTitle}>Photo Evidence</Text>
 
@@ -2900,7 +2928,7 @@ export default function DepartmentHeadAssignedComplaints() {
                       </ScrollView>
                     ) : (
                       <View style={styles.noPhotoBox}>
-                        <Ionicons name="image-outline" size={34} color={MUTED} />
+                        <Ionicons name="image-outline" size={34} color="rgba(111, 119, 111, 1)" />
                         <Text style={styles.noPhotoText}>
                           No photo evidence available
                         </Text>
@@ -2908,6 +2936,7 @@ export default function DepartmentHeadAssignedComplaints() {
                     )}
                   </View>
 
+                  {/* [DEPT ASSIGNED UI] Details: complaint information rows */}
                   <View style={styles.modalInfoCard}>
                     <Text style={styles.sectionTitle}>Complaint Information</Text>
 
@@ -2937,6 +2966,7 @@ export default function DepartmentHeadAssignedComplaints() {
               )}
             </View>
 
+            {/* [DEPT ASSIGNED UI] Full-screen map overlay */}
             {fullMapVisible && selectedComplaint && (
               <View style={styles.fullMapOverlay}>
                 <View style={styles.fullMapHeader}>
@@ -2947,7 +2977,7 @@ export default function DepartmentHeadAssignedComplaints() {
                     style={styles.fullMapCloseButton}
                     onPress={closeFullMap}
                   >
-                    <Feather name="x" size={23} color={TEXT} />
+                    <Feather name="x" size={23} color="rgba(23, 23, 23, 1)" />
                   </TouchableOpacity>
                 </View>
 
@@ -2969,7 +2999,7 @@ export default function DepartmentHeadAssignedComplaints() {
                   style={styles.fullMapRouteButton}
                   onPress={routeToPinnedLocation}
                 >
-                  <Feather name="navigation" size={16} color={WHITE} />
+                  <Feather name="navigation" size={16} color="rgba(255, 255, 255, 1)" />
                   <Text style={styles.fullMapRouteButtonText}>
                     Route to Pinned Location
                   </Text>
@@ -2977,6 +3007,7 @@ export default function DepartmentHeadAssignedComplaints() {
               </View>
             )}
 
+            {/* [DEPT ASSIGNED UI] Photo viewer (inside details modal) */}
             <FullscreenPhotoViewer
               variant="overlay"
               visible={photoViewerVisible && detailsVisible}
@@ -2986,12 +3017,14 @@ export default function DepartmentHeadAssignedComplaints() {
           </View>
         </Modal>
 
+        {/* [DEPT ASSIGNED UI] Photo viewer (outside details modal) */}
         <FullscreenPhotoViewer
           visible={photoViewerVisible && !detailsVisible}
           uri={selectedPhoto}
           onClose={closePhotoViewer}
         />
 
+        {/* [DEPT ASSIGNED UI] Update status modal */}
         <OptionModal
           visible={statusModalVisible}
           title="Update Status"
@@ -3009,6 +3042,7 @@ export default function DepartmentHeadAssignedComplaints() {
           onSelect={(item) => selectStatus(item.value)}
         />
 
+        {/* [DEPT ASSIGNED UI] Reassign complaint modal */}
         <ReassignComplaintModal
           visible={reassignModalVisible}
           complaint={actionComplaint}
@@ -3032,6 +3066,7 @@ export default function DepartmentHeadAssignedComplaints() {
   );
 }
 
+// ===== [DEPT ASSIGNED] Subcomponent: DropdownModal (filter picker) =====
 function DropdownModal({
   visible,
   title,
@@ -3057,7 +3092,7 @@ function DropdownModal({
               style={styles.modalCloseButton}
               onPress={onClose}
             >
-              <Feather name="x" size={21} color={TEXT} />
+              <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
             </TouchableOpacity>
           </View>
 
@@ -3082,7 +3117,7 @@ function DropdownModal({
                 </Text>
 
                 {selectedValue === item && (
-                  <Feather name="check" size={18} color={GREEN} />
+                  <Feather name="check" size={18} color="rgba(8, 122, 13, 1)" />
                 )}
               </TouchableOpacity>
             ))}
@@ -3093,6 +3128,7 @@ function DropdownModal({
   );
 }
 
+// ===== [DEPT ASSIGNED] Subcomponent: OptionModal (status picker) =====
 function OptionModal({
   visible,
   title,
@@ -3127,7 +3163,7 @@ function OptionModal({
               style={styles.modalCloseButton}
               onPress={onClose}
             >
-              <Feather name="x" size={21} color={TEXT} />
+              <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
             </TouchableOpacity>
           </View>
 
@@ -3165,7 +3201,7 @@ function OptionModal({
                   </View>
 
                   {isSelected && (
-                    <Feather name="check" size={18} color={GREEN} />
+                    <Feather name="check" size={18} color="rgba(8, 122, 13, 1)" />
                   )}
                 </TouchableOpacity>
               );
@@ -3177,6 +3213,7 @@ function OptionModal({
   );
 }
 
+// ===== [DEPT ASSIGNED] Subcomponent: ReassignComplaintModal =====
 function ReassignComplaintModal({
   visible,
   complaint,
@@ -3189,14 +3226,6 @@ function ReassignComplaintModal({
   onSubmit,
   onClose,
 }) {
-  const reassignScrollRef = useRef(null);
-
-  const liftReasonInput = () => {
-    setTimeout(() => {
-      reassignScrollRef.current?.scrollToEnd({ animated: true });
-    }, 280);
-  };
-
   return (
     <Modal
       visible={visible}
@@ -3204,143 +3233,150 @@ function ReassignComplaintModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-          <View style={styles.centerModalOverlay}>
-            <View style={styles.reassignModalBox}>
-              <View style={styles.dropdownHeader}>
-                <View style={styles.optionModalTitleBox}>
-                  <Text style={styles.dropdownTitle}>Reassign Complaint</Text>
-                  <Text style={styles.optionModalSubtitle} numberOfLines={1}>
-                    {complaint?.title ||
-                      "Choose a new category and provide a reason"}
-                  </Text>
-                </View>
+      <View style={styles.centerModalOverlay}>
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={Keyboard.dismiss}
+        />
+        <View style={styles.reassignModalBox}>
+          <View style={styles.dropdownHeader}>
+            <View style={styles.optionModalTitleBox}>
+              <Text style={styles.dropdownTitle}>Reassign Complaint</Text>
+              <Text style={styles.optionModalSubtitle} numberOfLines={1}>
+                {complaint?.title ||
+                  "Choose a new category and provide a reason"}
+              </Text>
+            </View>
 
+            <TouchableOpacity
+              activeOpacity={0.75}
+              style={styles.modalCloseButton}
+              onPress={() => {
+                Keyboard.dismiss();
+                onClose();
+              }}
+              disabled={submitting}
+            >
+              <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
+            </TouchableOpacity>
+          </View>
+
+          <KeyboardAwareScrollView
+            modal
+            bottomOffset={88}
+            style={styles.reassignModalScroll}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={
+              Platform.OS === "ios" ? "interactive" : "on-drag"
+            }
+            contentContainerStyle={styles.reassignModalScrollContent}
+          >
+            <View style={styles.currentAssignmentBox}>
+              <Text style={styles.currentAssignmentLabel}>
+                Current Assignment
+              </Text>
+              <Text style={styles.currentAssignmentValue} numberOfLines={2}>
+                {complaint?.category || "Unclassified"}
+              </Text>
+              <Text style={styles.currentAssignmentOffice} numberOfLines={2}>
+                {complaint?.department || "Unassigned"}
+              </Text>
+            </View>
+
+            <Text style={styles.reassignFieldLabel}>New Category</Text>
+
+            {options.map((item) => {
+              const isSelected =
+                selectedTarget?.category === item.category &&
+                selectedTarget?.department === item.department;
+
+              return (
                 <TouchableOpacity
+                  key={item.category}
                   activeOpacity={0.75}
-                  style={styles.modalCloseButton}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    onClose();
-                  }}
+                  style={[
+                    styles.reassignOption,
+                    isSelected && styles.dropdownOptionActive,
+                  ]}
+                  onPress={() => onSelectTarget(item)}
                   disabled={submitting}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
-                </TouchableOpacity>
-              </View>
-
-              <KeyboardAwareScrollView
-                modal
-                innerRef={reassignScrollRef}
-                showsVerticalScrollIndicator={false}
-                onScrollBeginDrag={Keyboard.dismiss}
-                contentContainerStyle={styles.reassignModalScrollContent}
-              >
-                <View style={styles.currentAssignmentBox}>
-                  <Text style={styles.currentAssignmentLabel}>
-                    Current Assignment
-                  </Text>
-                  <Text style={styles.currentAssignmentValue} numberOfLines={2}>
-                    {complaint?.category || "Unclassified"}
-                  </Text>
-                  <Text style={styles.currentAssignmentOffice} numberOfLines={2}>
-                    {complaint?.department || "Unassigned"}
-                  </Text>
-                </View>
-
-                <Text style={styles.reassignFieldLabel}>New Category</Text>
-
-                {options.map((item) => {
-                  const isSelected =
-                    selectedTarget?.category === item.category &&
-                    selectedTarget?.department === item.department;
-
-                  return (
-                    <TouchableOpacity
-                      key={item.category}
-                      activeOpacity={0.75}
+                  <View style={styles.reassignOptionTextBox}>
+                    <Text
                       style={[
-                        styles.reassignOption,
-                        isSelected && styles.dropdownOptionActive,
+                        styles.reassignCategoryText,
+                        isSelected && styles.dropdownOptionTextActive,
                       ]}
-                      onPress={() => onSelectTarget(item)}
-                      disabled={submitting}
                     >
-                      <View style={styles.reassignOptionTextBox}>
-                        <Text
-                          style={[
-                            styles.reassignCategoryText,
-                            isSelected && styles.dropdownOptionTextActive,
-                          ]}
-                        >
-                          {item.category}
-                        </Text>
-                        <Text style={styles.reassignDepartmentText}>
-                          {item.department}
-                        </Text>
-                      </View>
-
-                      {isSelected && (
-                        <Feather name="check" size={18} color={GREEN} />
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-
-                <Text style={styles.reassignFieldLabel}>
-                  Reason for Reassignment
-                </Text>
-
-                <TextInput
-                  style={styles.reassignmentReasonInput}
-                  value={reason}
-                  onChangeText={onChangeReason}
-                  onFocus={liftReasonInput}
-                  placeholder="Explain why this complaint should be transferred to another category or office..."
-                  placeholderTextColor={MUTED}
-                  multiline
-                  textAlignVertical="top"
-                  editable={!submitting}
-                  maxLength={500}
-                  returnKeyType="default"
-                  blurOnSubmit={false}
-                />
-
-                <Text style={styles.reassignmentReasonCounter}>
-                  {String(reason || "").trim().length}/500 characters
-                </Text>
-              </KeyboardAwareScrollView>
-
-              <TouchableOpacity
-                activeOpacity={0.82}
-                style={[
-                  styles.submitReassignmentButton,
-                  submitting && styles.submitReassignmentButtonDisabled,
-                ]}
-                onPress={() => {
-                  Keyboard.dismiss();
-                  onSubmit();
-                }}
-                disabled={submitting}
-              >
-                {submitting ? (
-                  <ActivityIndicator size="small" color={WHITE} />
-                ) : (
-                  <>
-                    <Feather name="send" size={15} color={WHITE} />
-                    <Text style={styles.submitReassignmentText}>
-                      Submit Reassignment
+                      {item.category}
                     </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </TouchableWithoutFeedback>
+                    <Text style={styles.reassignDepartmentText}>
+                      {item.department}
+                    </Text>
+                  </View>
+
+                  {isSelected && (
+                    <Feather name="check" size={18} color="rgba(8, 122, 13, 1)" />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+
+            <Text style={styles.reassignFieldLabel}>
+              Reason for Reassignment
+            </Text>
+
+            <TextInput
+              style={styles.reassignmentReasonInput}
+              value={reason}
+              onChangeText={onChangeReason}
+              placeholder="Explain why this complaint should be transferred to another category or office..."
+              placeholderTextColor="rgba(111, 119, 111, 1)"
+              multiline
+              textAlignVertical="top"
+              editable={!submitting}
+              maxLength={500}
+              returnKeyType="default"
+              blurOnSubmit={false}
+            />
+
+            <Text style={styles.reassignmentReasonCounter}>
+              {String(reason || "").trim().length}/500 characters
+            </Text>
+
+            <TouchableOpacity
+              activeOpacity={0.82}
+              style={[
+                styles.submitReassignmentButton,
+                styles.submitReassignmentButtonInScroll,
+                submitting && styles.submitReassignmentButtonDisabled,
+              ]}
+              onPress={() => {
+                Keyboard.dismiss();
+                onSubmit();
+              }}
+              disabled={submitting}
+            >
+              {submitting ? (
+                <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
+              ) : (
+                <>
+                  <Feather name="send" size={15} color="rgba(255, 255, 255, 1)" />
+                  <Text style={styles.submitReassignmentText}>
+                    Submit Reassignment
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </KeyboardAwareScrollView>
+        </View>
+      </View>
     </Modal>
   );
 }
 
+// ===== [DEPT ASSIGNED] Subcomponent: InfoRow =====
 function InfoRow({ label, value, last }) {
   return (
     <View style={[styles.infoRow, last && styles.infoRowLast]}>
@@ -3350,24 +3386,26 @@ function InfoRow({ label, value, last }) {
   );
 }
 
+// ===== [DEPT ASSIGNED] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout and scroll ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   stickyHeader: {
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 4,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    borderBottomColor: "rgba(226, 231, 224, 1)",
     zIndex: 2,
   },
 
@@ -3377,7 +3415,7 @@ const styles = StyleSheet.create({
 
   loader: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -3388,6 +3426,7 @@ const styles = StyleSheet.create({
     paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
+  // --- Header and CSV button ---
   headerContainer: {
     marginBottom: 10,
   },
@@ -3406,7 +3445,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 29,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     lineHeight: 35,
     letterSpacing: 0.3,
   },
@@ -3414,7 +3453,7 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
   },
 
@@ -3423,7 +3462,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -3432,9 +3471,10 @@ const styles = StyleSheet.create({
   exportCsvButtonText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Filters ---
   filterGrid: {
     gap: 8,
     marginBottom: 0,
@@ -3445,8 +3485,8 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
@@ -3466,8 +3506,8 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
@@ -3479,21 +3519,22 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 10.8,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
+  // --- Complaint cards ---
   complaintsList: {
     gap: 10,
   },
 
   complaintCard: {
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     borderRadius: 14,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 14,
     paddingVertical: 12,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.04,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
@@ -3512,13 +3553,13 @@ const styles = StyleSheet.create({
   complaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   complaintLocation: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     lineHeight: 15,
     marginTop: 3,
   },
@@ -3530,18 +3571,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 12,
-    backgroundColor: "#FCFFFB",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     borderWidth: 1,
-    borderColor: "#DDEFD8",
+    borderColor: "rgba(221, 239, 216, 1)",
   },
 
   cardCitizenAvatar: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 9,
@@ -3562,13 +3603,13 @@ const styles = StyleSheet.create({
   cardCitizenName: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.2,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   cardCitizenContact: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
@@ -3593,7 +3634,7 @@ const styles = StyleSheet.create({
   metaText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginLeft: 6,
   },
 
@@ -3630,6 +3671,7 @@ const styles = StyleSheet.create({
     fontSize: 9.2,
   },
 
+  // --- Card actions ---
   cardActionRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3641,7 +3683,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 35,
     borderRadius: 18,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3650,13 +3692,13 @@ const styles = StyleSheet.create({
   },
 
   updateStatusButtonDisabled: {
-    backgroundColor: "#9BB89C",
+    backgroundColor: "rgba(155, 184, 156, 1)",
   },
 
   updateStatusButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   reassignButton: {
@@ -3664,8 +3706,8 @@ const styles = StyleSheet.create({
     height: 35,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: GREEN,
-    backgroundColor: WHITE,
+    borderColor: "rgba(8, 122, 13, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3675,19 +3717,20 @@ const styles = StyleSheet.create({
   reassignButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -3722,9 +3765,9 @@ const styles = StyleSheet.create({
     minWidth: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 1.5,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -3733,7 +3776,7 @@ const styles = StyleSheet.create({
   notificationNavBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     lineHeight: 11,
     textAlign: "center",
   },
@@ -3746,12 +3789,13 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Empty state ---
   emptyCard: {
     minHeight: 130,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18,
@@ -3760,7 +3804,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 8,
     textAlign: "center",
   },
@@ -3768,11 +3812,12 @@ const styles = StyleSheet.create({
   emptyText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     marginTop: 3,
   },
 
+  // --- Dropdown, option, and reassign modals ---
   centerModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -3789,7 +3834,7 @@ const styles = StyleSheet.create({
     width: "100%",
     maxHeight: "72%",
     borderRadius: 22,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 12,
@@ -3799,7 +3844,7 @@ const styles = StyleSheet.create({
     width: "100%",
     maxHeight: "76%",
     borderRadius: 22,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 12,
@@ -3820,13 +3865,13 @@ const styles = StyleSheet.create({
   dropdownTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   optionModalSubtitle: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
@@ -3835,30 +3880,30 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     paddingHorizontal: 12,
     marginBottom: 7,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
 
   dropdownOptionActive: {
-    backgroundColor: LIGHT_GREEN,
-    borderColor: "#BFE3B5",
+    backgroundColor: "rgba(234, 246, 228, 1)",
+    borderColor: "rgba(191, 227, 181, 1)",
   },
 
   dropdownOptionText: {
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     paddingRight: 8,
   },
 
   dropdownOptionTextActive: {
     fontFamily: "Poppins_700Bold",
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   reassignOption: {
@@ -3867,9 +3912,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 9,
     marginBottom: 7,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -3887,13 +3932,13 @@ const styles = StyleSheet.create({
   reassignCategoryText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   reassignDepartmentText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
     lineHeight: 15,
   },
@@ -3902,21 +3947,27 @@ const styles = StyleSheet.create({
     width: "100%",
     maxHeight: "72%",
     borderRadius: 22,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 14,
   },
 
+  reassignModalScroll: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
+  },
+
   reassignModalScrollContent: {
-    paddingBottom: 12,
+    paddingBottom: 16,
   },
 
   currentAssignmentBox: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 12,
@@ -3925,27 +3976,27 @@ const styles = StyleSheet.create({
   currentAssignmentLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   currentAssignmentValue: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 2,
   },
 
   currentAssignmentOffice: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
   },
 
   reassignFieldLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 7,
     marginTop: 4,
   },
@@ -3954,13 +4005,13 @@ const styles = StyleSheet.create({
     minHeight: 104,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 12,
     paddingVertical: 11,
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 18,
   },
 
@@ -3968,7 +4019,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
     fontFamily: "Poppins_500Medium",
     fontSize: 10,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 5,
     marginBottom: 10,
   },
@@ -3976,12 +4027,17 @@ const styles = StyleSheet.create({
   submitReassignmentButton: {
     height: 43,
     borderRadius: 22,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 7,
     marginTop: 4,
+  },
+
+  submitReassignmentButtonInScroll: {
+    marginTop: 12,
+    marginBottom: 4,
   },
 
   submitReassignmentButtonDisabled: {
@@ -3991,9 +4047,10 @@ const styles = StyleSheet.create({
   submitReassignmentText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.2,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Details modal ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -4004,7 +4061,7 @@ const styles = StyleSheet.create({
     maxHeight: "90%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 30 : 20,
@@ -4014,7 +4071,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -4029,14 +4086,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -4044,13 +4101,13 @@ const styles = StyleSheet.create({
   modalComplaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 17,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   modalDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginTop: 4,
     marginBottom: 12,
@@ -4059,15 +4116,15 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 8,
   },
 
   citizenDetailCard: {
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     marginBottom: 12,
@@ -4082,9 +4139,9 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 31,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
@@ -4095,7 +4152,7 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 31,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   citizenTextBox: {
@@ -4105,16 +4162,17 @@ const styles = StyleSheet.create({
   citizenName: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   citizenContact: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 3,
   },
 
+  // --- Location and map ---
   locationSection: {
     marginBottom: 15,
   },
@@ -4131,7 +4189,7 @@ const styles = StyleSheet.create({
     height: 27,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: GREEN,
+    borderColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 8,
@@ -4140,14 +4198,14 @@ const styles = StyleSheet.create({
   smallTextButtonText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   locationBox: {
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     marginBottom: 10,
@@ -4156,14 +4214,14 @@ const styles = StyleSheet.create({
   locationLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   locationValue: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 13.2,
     lineHeight: 18,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 2,
   },
 
@@ -4172,21 +4230,21 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mapWebView: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   refreshLocationButton: {
     height: 36,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: GREEN,
-    backgroundColor: WHITE,
+    borderColor: "rgba(8, 122, 13, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -4197,13 +4255,13 @@ const styles = StyleSheet.create({
   refreshLocationText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   routeButton: {
     height: 36,
     borderRadius: 18,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -4214,9 +4272,10 @@ const styles = StyleSheet.create({
   routeButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Photo evidence ---
   photoSection: {
     marginBottom: 15,
   },
@@ -4225,8 +4284,8 @@ const styles = StyleSheet.create({
     height: 90,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -4234,7 +4293,7 @@ const styles = StyleSheet.create({
   noPhotoText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 3,
   },
 
@@ -4247,16 +4306,17 @@ const styles = StyleSheet.create({
     width: Math.min(185, SCREEN_WIDTH * 0.48),
     height: 125,
     borderRadius: 13,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
   },
 
+  // --- Info rows ---
   modalInfoCard: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 13,
@@ -4273,20 +4333,21 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   infoValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 16,
     marginTop: 1,
   },
 
+  // --- Full map overlay ---
   fullMapOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     zIndex: 30,
     elevation: 30,
   },
@@ -4295,9 +4356,9 @@ const styles = StyleSheet.create({
     height: Platform.OS === "ios" ? 92 : 84,
     paddingTop: Platform.OS === "ios" ? 34 : 26,
     paddingHorizontal: H_PADDING,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    borderBottomColor: "rgba(226, 231, 224, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -4308,21 +4369,21 @@ const styles = StyleSheet.create({
   fullMapTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   fullMapCloseButton: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
 
   fullMapWebView: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   fullMapRouteButton: {
@@ -4332,7 +4393,7 @@ const styles = StyleSheet.create({
     bottom: Platform.OS === "ios" ? 34 : 24,
     height: 44,
     borderRadius: 22,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -4344,9 +4405,10 @@ const styles = StyleSheet.create({
   fullMapRouteButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Photo viewer ---
   photoViewerOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.92)",

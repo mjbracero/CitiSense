@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Image,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -36,17 +37,12 @@ import {
   Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
 
+// ===== [AUTH RESET] Assets & colors =====
 const logo = require("../../assets/images/logowname.png");
 
-const GREEN = "#0A760A";
-const LIGHT_GREEN = "#E7F5DB";
-const TEXT = "#41493E";
-const MUTED = "#717A6D";
-const BORDER = "#B4B4B4";
-const RED = "#D71920";
-const WHITE = "#FFFFFF";
-
+// ===== [AUTH RESET] Reset password screen component =====
 export default function ResetPasswordScreen() {
+  // --- [AUTH RESET] State: passwords, toggles, link status ---
   const router = useRouter();
   const routeParams = useLocalSearchParams();
 
@@ -58,6 +54,7 @@ export default function ResetPasswordScreen() {
   const [checkingLink, setCheckingLink] = useState(true);
   const [linkReady, setLinkReady] = useState(false);
 
+  // --- [AUTH RESET] Fonts ---
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
@@ -65,6 +62,7 @@ export default function ResetPasswordScreen() {
     Poppins_700Bold,
   });
 
+  // --- [AUTH RESET] Activate recovery session from a deep link URL ---
   const activateResetSession = useCallback(async (url) => {
     if (!url) {
       return false;
@@ -81,6 +79,7 @@ export default function ResetPasswordScreen() {
     return false;
   }, []);
 
+  // --- [AUTH RESET] Deep link handling: route params, initial URL, auth events ---
   useEffect(() => {
     let active = true;
 
@@ -208,6 +207,7 @@ export default function ResetPasswordScreen() {
 
   if (!fontsLoaded) return <PageSkeleton variant="auth" />;
 
+  // --- [AUTH RESET] Update password handler ---
   const handleUpdatePassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
       notify(
@@ -279,16 +279,29 @@ export default function ResetPasswordScreen() {
     }
   };
 
+  // --- [AUTH RESET] Render: skeleton while checking link ---
   if (checkingLink) {
     return <PageSkeleton variant="auth" />;
   }
 
+  // --- [AUTH RESET] Render ---
   return (
     <SafeAreaView style={styles.safeArea}>
+      {/* [AUTH RESET UI] Keyboard-aware scroll container */}
       <KeyboardAwareScrollView
-          contentContainerStyle={styles.container}
-          showsVerticalScrollIndicator={false}
-        >
+        style={styles.scroll}
+        contentContainerStyle={styles.container}
+        enableOnAndroid
+        enableAutomaticScroll
+        enableResetScrollToCoords={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        extraScrollHeight={Platform.OS === "android" ? 8 : 12}
+        extraHeight={Platform.OS === "android" ? 10 : 12}
+        showsVerticalScrollIndicator={false}
+        bounces
+      >
+          {/* [AUTH RESET UI] Back button */}
           <TouchableOpacity
             style={styles.backButton}
             onPress={async () => {
@@ -297,13 +310,14 @@ export default function ResetPasswordScreen() {
             }}
             activeOpacity={0.7}
           >
-            <Ionicons name="chevron-back" size={24} color={GREEN} />
+            <Ionicons name="chevron-back" size={24} color="rgba(10, 118, 10, 1)" />
           </TouchableOpacity>
 
+          {/* [AUTH RESET UI] Logo, lock icon, title & subtitle */}
           <Image source={logo} style={styles.logo} resizeMode="contain" />
 
           <View style={styles.iconCircle}>
-            <Ionicons name="lock-closed" size={38} color={GREEN} />
+            <Ionicons name="lock-closed" size={38} color="rgba(10, 118, 10, 1)" />
           </View>
 
           <Text style={styles.title}>Reset Password</Text>
@@ -312,9 +326,10 @@ export default function ResetPasswordScreen() {
             Create a new password for your CitiSense account.
           </Text>
 
+          {/* [AUTH RESET UI] Warning when reset link not opened yet */}
           {!linkReady && (
             <View style={styles.warningBox}>
-              <Ionicons name="warning" size={20} color={RED} />
+              <Ionicons name="warning" size={20} color="rgba(215, 25, 32, 1)" />
 
               <Text style={styles.warningText}>
                 Open the reset link from your email on this phone first. After
@@ -323,18 +338,23 @@ export default function ResetPasswordScreen() {
             </View>
           )}
 
+          {/* [AUTH RESET UI] Form */}
           <View style={styles.form}>
+            {/* [AUTH RESET UI] New password field */}
             <Text style={styles.label}>New Password</Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="lock-closed" size={18} color={GREEN} />
+              <Ionicons name="lock-closed" size={18} color="rgba(10, 118, 10, 1)" />
 
               <TextInput
                 style={styles.input}
                 placeholder="Enter new password"
-                placeholderTextColor={MUTED}
+                placeholderTextColor="rgba(113, 122, 109, 1)"
                 value={newPassword}
                 onChangeText={setNewPassword}
+                keyboardType="default"
+                autoCapitalize="none"
+                autoCorrect={false}
                 secureTextEntry={!showNewPassword}
                 editable={linkReady && !loading}
               />
@@ -346,22 +366,26 @@ export default function ResetPasswordScreen() {
                 <Ionicons
                   name={showNewPassword ? "eye-off" : "eye"}
                   size={18}
-                  color={MUTED}
+                  color="rgba(113, 122, 109, 1)"
                 />
               </TouchableOpacity>
             </View>
 
+            {/* [AUTH RESET UI] Confirm password field */}
             <Text style={styles.label}>Confirm Password</Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="lock-closed" size={18} color={GREEN} />
+              <Ionicons name="lock-closed" size={18} color="rgba(10, 118, 10, 1)" />
 
               <TextInput
                 style={styles.input}
                 placeholder="Confirm new password"
-                placeholderTextColor={MUTED}
+                placeholderTextColor="rgba(113, 122, 109, 1)"
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
+                keyboardType="default"
+                autoCapitalize="none"
+                autoCorrect={false}
                 secureTextEntry={!showConfirmPassword}
                 editable={linkReady && !loading}
               />
@@ -373,11 +397,12 @@ export default function ResetPasswordScreen() {
                 <Ionicons
                   name={showConfirmPassword ? "eye-off" : "eye"}
                   size={18}
-                  color={MUTED}
+                  color="rgba(113, 122, 109, 1)"
                 />
               </TouchableOpacity>
             </View>
 
+            {/* [AUTH RESET UI] Update Password button */}
             <TouchableOpacity
               style={[
                 styles.resetButton,
@@ -388,12 +413,13 @@ export default function ResetPasswordScreen() {
               activeOpacity={0.8}
             >
               {loading ? (
-                <ActivityIndicator color={WHITE} />
+                <ActivityIndicator color="rgba(255, 255, 255, 1)" />
               ) : (
                 <Text style={styles.resetButtonText}>Update Password</Text>
               )}
             </TouchableOpacity>
 
+            {/* [AUTH RESET UI] Back to Log In link */}
             <TouchableOpacity
               style={styles.loginButton}
               onPress={async () => {
@@ -410,13 +436,15 @@ export default function ResetPasswordScreen() {
   );
 }
 
+// ===== [AUTH RESET] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & loading ---
   safeArea: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
-  keyboardView: {
+  scroll: {
     flex: 1,
   },
 
@@ -426,23 +454,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 31,
     paddingTop: 12,
     paddingBottom: 30,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   loadingContainer: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   loadingText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(65, 73, 62, 1)",
     marginTop: 12,
   },
 
+  // --- Header: back button, logo, title ---
   backButton: {
     alignSelf: "flex-start",
     width: 42,
@@ -450,7 +479,7 @@ const styles = StyleSheet.create({
     borderRadius: 21,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(231, 245, 219, 1)",
     marginBottom: 4,
   },
 
@@ -465,9 +494,9 @@ const styles = StyleSheet.create({
     width: 96,
     height: 96,
     borderRadius: 48,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(231, 245, 219, 1)",
     borderWidth: 1,
-    borderColor: GREEN,
+    borderColor: "rgba(10, 118, 10, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 10,
@@ -477,7 +506,7 @@ const styles = StyleSheet.create({
   title: {
     fontFamily: "Poppins_700Bold",
     fontSize: 30,
-    color: GREEN,
+    color: "rgba(10, 118, 10, 1)",
     textAlign: "center",
   },
 
@@ -486,18 +515,19 @@ const styles = StyleSheet.create({
     width: 300,
     textAlign: "center",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(65, 73, 62, 1)",
     lineHeight: 18,
     marginTop: 8,
   },
 
+  // --- Warning box ---
   warningBox: {
     width: "100%",
     flexDirection: "row",
     alignItems: "flex-start",
-    backgroundColor: "#FFF2F2",
+    backgroundColor: "rgba(255, 242, 242, 1)",
     borderWidth: 1,
-    borderColor: RED,
+    borderColor: "rgba(215, 25, 32, 1)",
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -508,11 +538,12 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins_400Regular",
     flex: 1,
     fontSize: 12,
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
     lineHeight: 17,
     marginLeft: 8,
   },
 
+  // --- Form, inputs & buttons ---
   form: {
     width: "100%",
     marginTop: 26,
@@ -521,7 +552,7 @@ const styles = StyleSheet.create({
   label: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(65, 73, 62, 1)",
     marginBottom: 6,
     marginTop: 8,
   },
@@ -530,11 +561,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(180, 180, 180, 1)",
     borderRadius: 7,
     paddingHorizontal: 12,
     height: 48,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     marginBottom: 12,
   },
 
@@ -543,12 +574,12 @@ const styles = StyleSheet.create({
     flex: 1,
     height: "100%",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(65, 73, 62, 1)",
     marginLeft: 8,
   },
 
   resetButton: {
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(10, 118, 10, 1)",
     borderRadius: 50,
     height: 50,
     justifyContent: "center",
@@ -562,7 +593,7 @@ const styles = StyleSheet.create({
 
   resetButtonText: {
     fontFamily: "Poppins_600SemiBold",
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     fontSize: 16,
   },
 
@@ -573,7 +604,7 @@ const styles = StyleSheet.create({
 
   loginText: {
     fontFamily: "Poppins_600SemiBold",
-    color: GREEN,
+    color: "rgba(10, 118, 10, 1)",
     fontSize: 14,
   },
 });

@@ -3,6 +3,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useKeyboardInset } from "../hooks/useKeyboardInset";
 import { getKeyboardAwarePadding } from "../lib/platformUi";
 
+// ===== [KEYBOARD VIEW] Keyboard-avoiding layout shell (iOS padding / Android manual inset) =====
 /** Layout shell with keyboard avoidance for full screens. */
 export default function KeyboardAwareView({ children, style, offset = 0 }) {
   const insets = useSafeAreaInsets();

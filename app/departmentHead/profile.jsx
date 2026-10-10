@@ -32,6 +32,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import AuditLogsModal from "../../components/AuditLogsModal";
+import PrivacySecurityModal from "../../components/PrivacySecurityModal";
 import { PageSkeleton } from "../../components/skeletons";
 import { writeAuditLog } from "../../lib/auditLogService";
 import { clearPageCache, getPageCache, setPageCache } from "../../lib/pageDataCache";
@@ -52,16 +53,7 @@ import {
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const ACCENT_GREEN = "#6DBB3F";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
+// ===== [DEPT PROFILE] Constants: colors, layout, storage, defaults =====
 
 const H_PADDING = 20;
 const PROFILE_SHEET_MAX_HEIGHT = Math.round(Dimensions.get("screen").height * 0.9);
@@ -81,10 +73,12 @@ const DEFAULT_PROFILE_INFO = {
   avatarUrl: null,
 };
 
+// ===== [DEPT PROFILE] Module-level caches (persist across remounts) =====
 let cachedDepartmentHeadProfile = DEFAULT_PROFILE_INFO;
 let cachedLocationEnabled = false;
 let hasCheckedLocationPermission = false;
 
+// ===== [DEPT PROFILE] Bottom tab config =====
 const bottomTabs = [
   {
     label: "Home",
@@ -120,6 +114,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [DEPT PROFILE] Helpers: image extension, build profile info =====
 function getImageExtension(asset) {
   const fileName = asset?.fileName?.toLowerCase() || "";
   const uri = asset?.uri?.toLowerCase() || "";
@@ -190,13 +185,16 @@ function buildDepartmentHeadProfileInfo(currentUser, databaseProfile = null) {
   };
 }
 
+// ===== [DEPT PROFILE] Screen component =====
 export default function DepartmentHeadProfile() {
+  // --- [DEPT PROFILE] Navigation, insets & unread count ---
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const sheetBottomPad = Math.max(insets.bottom, 8);
   const { unreadNotificationCount } = useDepartmentHeadUnreadNotifications();
 
+  // --- [DEPT PROFILE] State: profile, modals, drafts, toggles ---
   const cachedPage = getPageCache(DEPT_PROFILE_CACHE_KEY);
   const [user, setUser] = useState(cachedPage?.user ?? null);
   const [profileInfo, setProfileInfo] = useState(
@@ -210,8 +208,11 @@ export default function DepartmentHeadProfile() {
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
   const [auditLogsVisible, setAuditLogsVisible] = useState(false);
+  const [privacyVisible, setPrivacyVisible] = useState(false);
 
-  useHideBottomNav(editModalVisible || passwordModalVisible);
+  useHideBottomNav(
+    editModalVisible || passwordModalVisible || privacyVisible
+  );
 
   const [fullNameDraft, setFullNameDraft] = useState("");
   const [emailDraft, setEmailDraft] = useState("");
@@ -240,6 +241,7 @@ export default function DepartmentHeadProfile() {
   const displayDepartment = profileInfo.department;
   const avatarUrl = profileInfo.avatarUrl;
 
+  // --- [DEPT PROFILE] Load profile (auth user + profiles table) ---
   const loadUser = useCallback(async () => {
     try {
       const {
@@ -297,6 +299,7 @@ export default function DepartmentHeadProfile() {
     }
   }, []);
 
+  // --- [DEPT PROFILE] Location preference check ---
   const checkLocationPermission = useCallback(async () => {
     if (!user?.id) {
       return;
@@ -317,6 +320,7 @@ export default function DepartmentHeadProfile() {
     }
   }, [user?.id]);
 
+  // --- [DEPT PROFILE] Reload on focus ---
   useFocusEffect(
     useCallback(() => {
       loadUser();
@@ -324,6 +328,7 @@ export default function DepartmentHeadProfile() {
     }, [loadUser, checkLocationPermission])
   );
 
+  // --- [DEPT PROFILE] Realtime: profile row changes ---
   useEffect(() => {
     const authEmail = user?.email;
 
@@ -359,6 +364,7 @@ export default function DepartmentHeadProfile() {
 
   const metadata = user?.user_metadata || {};
 
+  // --- [DEPT PROFILE] Edit / password modal open & close ---
   const openEditProfile = () => {
     setFullNameDraft(displayName === "Department Head User" ? "" : displayName);
     setEmailDraft(displayEmail === "departmenthead@example.com" ? "" : displayEmail);
@@ -378,6 +384,7 @@ export default function DepartmentHeadProfile() {
     setConfirmPassword("");
   };
 
+  // --- [DEPT PROFILE] Location permission toggle ---
   const handleLocationToggle = async (value) => {
     if (value) {
       try {
@@ -448,6 +455,7 @@ export default function DepartmentHeadProfile() {
     });
   };
 
+  // --- [DEPT PROFILE] Profile photo upload ---
   const pickProfilePhoto = async () => {
     try {
       if (!user?.id) {
@@ -582,6 +590,7 @@ export default function DepartmentHeadProfile() {
     }
   };
 
+  // --- [DEPT PROFILE] Edit profile: save changes ---
   const saveProfileChanges = async () => {
     const cleanName = fullNameDraft.trim();
     const cleanEmail = emailDraft.trim();
@@ -690,6 +699,7 @@ export default function DepartmentHeadProfile() {
     }
   };
 
+  // --- [DEPT PROFILE] Change password ---
   const handleChangePassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
       notify("Password Required", "Please enter and confirm your password.");
@@ -741,6 +751,7 @@ export default function DepartmentHeadProfile() {
     }
   };
 
+  // --- [DEPT PROFILE] Push notifications toggle ---
   const handlePushToggle = async (value) => {
     if (!user?.id) {
       setPushEnabled(value);
@@ -773,14 +784,9 @@ export default function DepartmentHeadProfile() {
     }
   };
 
+  // --- [DEPT PROFILE] Settings handlers: privacy, logout ---
   const handlePrivacy = () => {
-    notify(
-      "Privacy & Security",
-      "CitiSense protects department head accounts by allowing only authorized department heads to access assigned complaint records.\n\n" +
-        "Your profile information such as name, email, contact number, department, and profile photo is used for account identification and LGU complaint coordination.\n\n" +
-        "Your location permission may be used for map routing, pinned complaint navigation, and viewing your current location while handling assigned complaints.\n\n" +
-        "For security, keep your password private, use a strong password, and always log out when using a shared device."
-    );
+    setPrivacyVisible(true);
   };
 
   const handleLogout = () => {
@@ -823,15 +829,17 @@ export default function DepartmentHeadProfile() {
     ]);
   };
 
+  // --- [DEPT PROFILE] Render ---
   if (!fontsLoaded && !cachedPage) {
     return <PageSkeleton variant="profile" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [DEPT PROFILE UI] Header: CitiSense logo */}
         <View style={styles.fixedHeader}>
           <View style={styles.logoRow}>
             <Image source={MAIN_LOGO} style={styles.mainLogoImage} />
@@ -842,17 +850,19 @@ export default function DepartmentHeadProfile() {
           </View>
         </View>
 
+        {/* [DEPT PROFILE UI] Scrollable profile content */}
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+          {/* [DEPT PROFILE UI] Profile card: avatar, name, edit button */}
           <View style={styles.profileHeroCard}>
             <View style={styles.avatarOuter}>
               <View style={styles.avatarCircle}>
                 {avatarUrl ? (
                   <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
                 ) : (
-                  <Ionicons name="person" size={42} color={GREEN} />
+                  <Ionicons name="person" size={42} color="rgba(8, 122, 13, 1)" />
                 )}
               </View>
 
@@ -863,9 +873,9 @@ export default function DepartmentHeadProfile() {
                 disabled={uploadingAvatar}
               >
                 {uploadingAvatar ? (
-                  <ActivityIndicator size="small" color={WHITE} />
+                  <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                 ) : (
-                  <Ionicons name="camera" size={15} color={WHITE} />
+                  <Ionicons name="camera" size={15} color="rgba(255, 255, 255, 1)" />
                 )}
               </TouchableOpacity>
             </View>
@@ -882,11 +892,12 @@ export default function DepartmentHeadProfile() {
               style={styles.editButton}
               onPress={openEditProfile}
             >
-              <Feather name="edit-2" size={15} color={GREEN} />
+              <Feather name="edit-2" size={15} color="rgba(8, 122, 13, 1)" />
               <Text style={styles.editButtonText}>Edit</Text>
             </TouchableOpacity>
           </View>
 
+          {/* [DEPT PROFILE UI] Account information rows */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Account Information</Text>
 
@@ -908,6 +919,7 @@ export default function DepartmentHeadProfile() {
             </View>
           </View>
 
+          {/* [DEPT PROFILE UI] Notifications settings */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Notifications</Text>
 
@@ -923,6 +935,7 @@ export default function DepartmentHeadProfile() {
             </View>
           </View>
 
+          {/* [DEPT PROFILE UI] Location services settings */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Location Services</Text>
 
@@ -938,13 +951,14 @@ export default function DepartmentHeadProfile() {
             </View>
           </View>
 
+          {/* [DEPT PROFILE UI] Settings list: password, audit logs, privacy */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Settings</Text>
 
             <View style={styles.settingsCard}>
               <ActionRow
                 icon="lock"
-                iconColor={BLUE}
+                iconColor="rgba(49, 90, 154, 1)"
                 title="Change Password"
                 subtitle="Update your department head password."
                 onPress={() => setPasswordModalVisible(true)}
@@ -952,7 +966,7 @@ export default function DepartmentHeadProfile() {
 
               <ActionRow
                 icon="activity"
-                iconColor={BLUE}
+                iconColor="rgba(49, 90, 154, 1)"
                 title="Audit Logs"
                 subtitle="View your recent account activity."
                 onPress={() => setAuditLogsVisible(true)}
@@ -960,7 +974,7 @@ export default function DepartmentHeadProfile() {
 
               <ActionRow
                 icon="shield"
-                iconColor={GREEN}
+                iconColor="rgba(8, 122, 13, 1)"
                 title="Privacy & Security"
                 subtitle="Manage your account protection."
                 onPress={handlePrivacy}
@@ -969,17 +983,18 @@ export default function DepartmentHeadProfile() {
             </View>
           </View>
 
+          {/* [DEPT PROFILE UI] Log out button */}
           <TouchableOpacity
             activeOpacity={0.8}
             style={styles.logoutButton}
             onPress={handleLogout}
           >
-            <Ionicons name="log-out-outline" size={22} color={RED} />
+            <Ionicons name="log-out-outline" size={22} color="rgba(215, 25, 32, 1)" />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
         </ScrollView>
 
-
+        {/* [DEPT PROFILE UI] Edit profile modal */}
         <Modal
           visible={editModalVisible}
           animationType="slide"
@@ -1004,7 +1019,7 @@ export default function DepartmentHeadProfile() {
                   style={styles.modalCloseButton}
                   onPress={closeEditProfile}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -1025,7 +1040,7 @@ export default function DepartmentHeadProfile() {
                   value={fullNameDraft}
                   onChangeText={setFullNameDraft}
                   placeholder="Enter full name"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
                 />
 
                 <Text style={styles.inputLabel}>Email Address</Text>
@@ -1034,7 +1049,7 @@ export default function DepartmentHeadProfile() {
                   value={emailDraft}
                   onChangeText={setEmailDraft}
                   placeholder="Enter email address"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
                   keyboardType="email-address"
                   autoCapitalize="none"
                 />
@@ -1045,7 +1060,7 @@ export default function DepartmentHeadProfile() {
                   value={contactDraft}
                   onChangeText={setContactDraft}
                   placeholder="Enter contact number"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
                   keyboardType="phone-pad"
                 />
 
@@ -1061,7 +1076,7 @@ export default function DepartmentHeadProfile() {
                   disabled={savingProfile}
                 >
                   {savingProfile ? (
-                    <ActivityIndicator size="small" color={WHITE} />
+                    <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                   ) : (
                     <Text style={styles.saveButtonText}>Save Changes</Text>
                   )}
@@ -1071,6 +1086,7 @@ export default function DepartmentHeadProfile() {
           </View>
         </Modal>
 
+        {/* [DEPT PROFILE UI] Change password modal */}
         <Modal
           visible={passwordModalVisible}
           animationType="slide"
@@ -1095,7 +1111,7 @@ export default function DepartmentHeadProfile() {
                   style={styles.modalCloseButton}
                   onPress={closePasswordModal}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -1116,7 +1132,10 @@ export default function DepartmentHeadProfile() {
                   value={newPassword}
                   onChangeText={setNewPassword}
                   placeholder="Enter new password"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
+                  keyboardType="default"
+                  autoCapitalize="none"
+                  autoCorrect={false}
                   secureTextEntry
                 />
 
@@ -1126,7 +1145,10 @@ export default function DepartmentHeadProfile() {
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
                   placeholder="Confirm new password"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
+                  keyboardType="default"
+                  autoCapitalize="none"
+                  autoCorrect={false}
                   secureTextEntry
                 />
 
@@ -1137,7 +1159,7 @@ export default function DepartmentHeadProfile() {
                   disabled={changingPassword}
                 >
                   {changingPassword ? (
-                    <ActivityIndicator size="small" color={WHITE} />
+                    <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                   ) : (
                     <Text style={styles.saveButtonText}>Update Password</Text>
                   )}
@@ -1147,20 +1169,29 @@ export default function DepartmentHeadProfile() {
           </View>
         </Modal>
 
+        {/* [DEPT PROFILE UI] Audit logs modal */}
         <AuditLogsModal
           visible={auditLogsVisible}
           onClose={() => setAuditLogsVisible(false)}
+        />
+
+        {/* [DEPT PROFILE UI] Privacy & security modal */}
+        <PrivacySecurityModal
+          visible={privacyVisible}
+          onClose={() => setPrivacyVisible(false)}
+          role="departmentHead"
         />
       </View>
     </SafeAreaView>
   );
 }
 
+// ===== [DEPT PROFILE] Subcomponents: InfoRow, SwitchRow, ActionRow =====
 function InfoRow({ icon, label, value, last }) {
   return (
     <View style={[styles.infoRow, last && styles.noBorder]}>
       <View style={styles.infoIconCircle}>
-        <Feather name={icon} size={15} color={GREEN} />
+        <Feather name={icon} size={15} color="rgba(8, 122, 13, 1)" />
       </View>
 
       <View style={styles.infoTextBox}>
@@ -1177,7 +1208,7 @@ function SwitchRow({ icon, label, description, value, onValueChange, last }) {
   return (
     <View style={[styles.settingRow, last && styles.noBorder]}>
       <View style={styles.settingIconCircle}>
-        <Feather name={icon} size={15} color={GREEN} />
+        <Feather name={icon} size={15} color="rgba(8, 122, 13, 1)" />
       </View>
 
       <View style={styles.settingTextBox}>
@@ -1188,9 +1219,9 @@ function SwitchRow({ icon, label, description, value, onValueChange, last }) {
       <Switch
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: "#D5DAD3", true: "#BFE3B5" }}
-        thumbColor={value ? GREEN : "#F4F4F4"}
-        ios_backgroundColor="#D5DAD3"
+        trackColor={{ false: "rgba(213, 218, 211, 1)", true: "rgba(191, 227, 181, 1)" }}
+        thumbColor={value ? "rgba(8, 122, 13, 1)" : "rgba(244, 244, 244, 1)"}
+        ios_backgroundColor="rgba(213, 218, 211, 1)"
       />
     </View>
   );
@@ -1203,7 +1234,7 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, last }) {
       style={[styles.settingRow, last && styles.noBorder]}
       onPress={onPress}
     >
-      <View style={[styles.settingIconCircle, { backgroundColor: "#F7FAF6" }]}>
+      <View style={[styles.settingIconCircle, { backgroundColor: "rgba(247, 250, 246, 1)" }]}>
         <Feather name={icon} size={15} color={iconColor} />
       </View>
 
@@ -1212,27 +1243,29 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, last }) {
         <Text style={styles.settingSubtitle}>{subtitle}</Text>
       </View>
 
-      <Feather name="chevron-right" size={20} color={MUTED} />
+      <Feather name="chevron-right" size={20} color="rgba(111, 119, 111, 1)" />
     </TouchableOpacity>
   );
 }
 
+// ===== [DEPT PROFILE] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   loader: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   fixedHeader: {
@@ -1263,12 +1296,12 @@ const styles = StyleSheet.create({
   logoText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 25,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.1,
   },
 
   logoTextLight: {
-    color: ACCENT_GREEN,
+    color: "rgba(109, 187, 63, 1)",
   },
 
   scrollContent: {
@@ -1277,16 +1310,17 @@ const styles = StyleSheet.create({
     paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
+  // --- Profile card ---
   profileHeroCard: {
     borderRadius: 20,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(9, 122, 14, 1)",
     paddingHorizontal: 16,
     paddingVertical: 18,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 14,
     position: "relative",
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.12,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 3 },
@@ -1308,7 +1342,7 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -1327,9 +1361,9 @@ const styles = StyleSheet.create({
     width: 25,
     height: 25,
     borderRadius: 13,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 2,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1342,7 +1376,7 @@ const styles = StyleSheet.create({
   profileName: {
     fontFamily: "Poppins_700Bold",
     fontSize: 17,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     lineHeight: 22,
   },
 
@@ -1360,7 +1394,7 @@ const styles = StyleSheet.create({
     minWidth: 58,
     height: 31,
     borderRadius: 16,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1371,10 +1405,11 @@ const styles = StyleSheet.create({
   editButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginLeft: 4,
   },
 
+  // --- Sections & info rows ---
   sectionBlock: {
     marginBottom: 15,
   },
@@ -1382,15 +1417,15 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 9,
   },
 
   infoCard: {
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 3,
   },
@@ -1400,14 +1435,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "#EDF1EB",
+    borderBottomColor: "rgba(237, 241, 235, 1)",
   },
 
   infoIconCircle: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -1420,21 +1455,22 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   infoValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 1,
   },
 
+  // --- Settings rows ---
   settingsCard: {
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 3,
   },
@@ -1444,14 +1480,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "#EDF1EB",
+    borderBottomColor: "rgba(237, 241, 235, 1)",
   },
 
   settingIconCircle: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -1465,13 +1501,13 @@ const styles = StyleSheet.create({
   settingTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   settingSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.3,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
@@ -1479,12 +1515,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
   },
 
+  // --- Log out ---
   logoutButton: {
     height: 50,
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#F2C4C4",
-    backgroundColor: "#FFF4F4",
+    borderColor: "rgba(242, 196, 196, 1)",
+    backgroundColor: "rgba(255, 244, 244, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1494,20 +1531,21 @@ const styles = StyleSheet.create({
   logoutText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
     marginLeft: 8,
   },
 
+  // --- Legacy bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -1542,9 +1580,9 @@ const styles = StyleSheet.create({
     minWidth: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 1.5,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -1553,7 +1591,7 @@ const styles = StyleSheet.create({
   notificationNavBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     lineHeight: 11,
     textAlign: "center",
   },
@@ -1566,6 +1604,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Modals & form inputs ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -1577,7 +1616,7 @@ const styles = StyleSheet.create({
     width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     overflow: "hidden",
@@ -1588,7 +1627,7 @@ const styles = StyleSheet.create({
     width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     overflow: "hidden",
@@ -1603,7 +1642,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -1618,14 +1657,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1637,7 +1676,7 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 7,
   },
 
@@ -1645,13 +1684,13 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 10,
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 13,
   },
 
@@ -1659,8 +1698,8 @@ const styles = StyleSheet.create({
     minHeight: 54,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 13,
     paddingVertical: 10,
     marginBottom: 13,
@@ -1669,20 +1708,20 @@ const styles = StyleSheet.create({
   readOnlyLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   readOnlyValue: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 2,
   },
 
   saveButton: {
     height: 50,
     borderRadius: 14,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 4,
@@ -1691,6 +1730,6 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 });

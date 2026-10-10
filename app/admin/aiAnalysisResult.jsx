@@ -29,22 +29,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PageSkeleton } from "../../components/skeletons";
 
+// ===== [ADMIN AI RESULT] Constants: screen size, colors, padding =====
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
-
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#666666";
-const BORDER = "#E0E0E0";
-const ORANGE = "#F4A24C";
-const LIGHT_ORANGE = "#FFF2E8";
-const RED = "#D71920";
-const LIGHT_RED = "#FFF0F0";
 
 const H_PADDING = 20;
 
+// ===== [ADMIN AI RESULT] Bottom tab definitions =====
 const bottomTabs = [
   {
     label: "Home",
@@ -83,6 +73,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [ADMIN AI RESULT] Helpers: route params, category detection, priority =====
 function getParam(value, fallback = "") {
   if (Array.isArray(value)) return value[0] || fallback;
   return value || fallback;
@@ -199,6 +190,7 @@ function getPriorityLevel(isEmergency, title = "", description = "") {
   return "Normal";
 }
 
+// ===== [ADMIN AI RESULT] Subcomponent: animated bottom tab item =====
 function SmoothTabItem({ tab, isActive, onPress }) {
   const animatedValue = useRef(new Animated.Value(isActive ? 1 : 0)).current;
 
@@ -243,7 +235,7 @@ function SmoothTabItem({ tab, isActive, onPress }) {
         <Ionicons
           name={isActive ? tab.activeIcon : tab.inactiveIcon}
           size={25}
-          color={isActive ? GREEN : "#000000"}
+          color={isActive ? "rgba(8, 122, 13, 1)" : "rgba(0, 0, 0, 1)"}
         />
       </Animated.View>
 
@@ -252,7 +244,7 @@ function SmoothTabItem({ tab, isActive, onPress }) {
           styles.navLabel,
           {
             opacity: labelOpacity,
-            color: isActive ? GREEN : "#000000",
+            color: isActive ? "rgba(8, 122, 13, 1)" : "rgba(0, 0, 0, 1)",
             fontFamily: isActive ? "Poppins_600SemiBold" : "Poppins_500Medium",
           },
         ]}
@@ -264,13 +256,14 @@ function SmoothTabItem({ tab, isActive, onPress }) {
   );
 }
 
+// ===== [ADMIN AI RESULT] Subcomponent: progress stepper =====
 function Stepper() {
   return (
     <View style={styles.stepperWrapper}>
       <View style={styles.stepRow}>
         <View style={styles.stepItem}>
           <View style={styles.completedCircle}>
-            <Feather name="check" size={15} color={WHITE} />
+            <Feather name="check" size={15} color="rgba(255, 255, 255, 1)" />
           </View>
           <Text style={styles.activeStepLabel}>Submitted</Text>
         </View>
@@ -279,7 +272,7 @@ function Stepper() {
 
         <View style={styles.stepItem}>
           <View style={styles.completedCircle}>
-            <Feather name="check" size={15} color={WHITE} />
+            <Feather name="check" size={15} color="rgba(255, 255, 255, 1)" />
           </View>
           <Text style={styles.activeStepLabel}>AI Analysis</Text>
         </View>
@@ -288,7 +281,7 @@ function Stepper() {
 
         <View style={styles.stepItem}>
           <View style={styles.completedCircle}>
-            <Feather name="check" size={15} color={WHITE} />
+            <Feather name="check" size={15} color="rgba(255, 255, 255, 1)" />
           </View>
           <Text style={styles.activeStepLabel}>Routed</Text>
         </View>
@@ -306,6 +299,7 @@ function Stepper() {
   );
 }
 
+// ===== [ADMIN AI RESULT] Subcomponents: summary & routing rows =====
 function SummaryRow({ icon, label, value, pill, emergency }) {
   return (
     <View style={styles.summaryRow}>
@@ -349,7 +343,9 @@ function RoutingRow({ icon, label, value, greenValue }) {
   );
 }
 
+// ===== [ADMIN AI RESULT] Screen component =====
 export default function AIAnalysisResult() {
+  // --- [ADMIN AI RESULT] Navigation & route params ---
   const router = useRouter();
   const pathname = usePathname();
   const params = useLocalSearchParams();
@@ -365,6 +361,7 @@ export default function AIAnalysisResult() {
   const complaintType = getParam(params.complaintType, "Non-emergency");
   const isEmergency = getParam(params.isEmergency, "false") === "true";
 
+  // --- [ADMIN AI RESULT] Derived category routing & priority ---
   const detectedRouting = useMemo(
     () => detectCategory(complaintTitle, complaintDescription),
     [complaintTitle, complaintDescription]
@@ -375,6 +372,7 @@ export default function AIAnalysisResult() {
     [isEmergency, complaintTitle, complaintDescription]
   );
 
+  // --- [ADMIN AI RESULT] Fonts & loading skeleton ---
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
@@ -386,11 +384,13 @@ export default function AIAnalysisResult() {
     return <PageSkeleton variant="analysis" />;
   }
 
+  // --- [ADMIN AI RESULT] Render ---
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [ADMIN AI RESULT UI] Fixed header: title & subtitle */}
         <View style={styles.fixedHeader}>
           <Text style={styles.title}>AI Analysis Result</Text>
           <Text style={styles.subtitle}>
@@ -399,21 +399,25 @@ export default function AIAnalysisResult() {
           </Text>
         </View>
 
+        {/* [ADMIN AI RESULT UI] Scrollable result content */}
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+          {/* [ADMIN AI RESULT UI] Progress stepper */}
           <Stepper />
 
+          {/* [ADMIN AI RESULT UI] Card: complaint summary */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Complaint Summary</Text>
 
+            {/* [ADMIN AI RESULT UI] Complaint photo (or placeholder) & text */}
             <View style={styles.complaintTopRow}>
               {photoUri ? (
                 <Image source={{ uri: photoUri }} style={styles.complaintImage} />
               ) : (
                 <View style={styles.noImageBox}>
-                  <Ionicons name="image-outline" size={26} color={MUTED} />
+                  <Ionicons name="image-outline" size={26} color="rgba(102, 102, 102, 1)" />
                 </View>
               )}
 
@@ -425,10 +429,11 @@ export default function AIAnalysisResult() {
               </View>
             </View>
 
+            {/* [ADMIN AI RESULT UI] Summary rows: date, location, type */}
             <View style={styles.summaryDetails}>
               <SummaryRow
                 icon={
-                  <Ionicons name="calendar-outline" size={18} color={GREEN} />
+                  <Ionicons name="calendar-outline" size={18} color="rgba(8, 122, 13, 1)" />
                 }
                 label="Submitted on"
                 value={submittedDateTime}
@@ -436,7 +441,7 @@ export default function AIAnalysisResult() {
 
               <SummaryRow
                 icon={
-                  <Ionicons name="location-outline" size={18} color={GREEN} />
+                  <Ionicons name="location-outline" size={18} color="rgba(8, 122, 13, 1)" />
                 }
                 label="Location"
                 value={locationText}
@@ -444,7 +449,7 @@ export default function AIAnalysisResult() {
 
               <SummaryRow
                 icon={
-                  <Ionicons name="pricetag-outline" size={17} color={GREEN} />
+                  <Ionicons name="pricetag-outline" size={17} color="rgba(8, 122, 13, 1)" />
                 }
                 label="Complaint Type"
                 value={complaintType}
@@ -454,6 +459,7 @@ export default function AIAnalysisResult() {
             </View>
           </View>
 
+          {/* [ADMIN AI RESULT UI] Card: detected category & routing */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Detected Category & Routing</Text>
 
@@ -463,7 +469,7 @@ export default function AIAnalysisResult() {
                   <Ionicons
                     name={detectedRouting.icon}
                     size={18}
-                    color={GREEN}
+                    color="rgba(8, 122, 13, 1)"
                   />
                 }
                 label="Category"
@@ -471,7 +477,7 @@ export default function AIAnalysisResult() {
               />
 
               <RoutingRow
-                icon={<FontAwesome5 name="building" size={16} color={GREEN} />}
+                icon={<FontAwesome5 name="building" size={16} color="rgba(8, 122, 13, 1)" />}
                 label="Assigned Office"
                 value={detectedRouting.office}
               />
@@ -481,7 +487,7 @@ export default function AIAnalysisResult() {
                   <MaterialCommunityIcons
                     name="badge-check"
                     size={20}
-                    color={GREEN}
+                    color="rgba(8, 122, 13, 1)"
                   />
                 }
                 label="Duplicate Check"
@@ -490,7 +496,7 @@ export default function AIAnalysisResult() {
               />
 
               <RoutingRow
-                icon={<Ionicons name="image" size={18} color={GREEN} />}
+                icon={<Ionicons name="image" size={18} color="rgba(8, 122, 13, 1)" />}
                 label="Image Relevance"
                 value="Relevant evidence detected"
                 greenValue
@@ -498,12 +504,13 @@ export default function AIAnalysisResult() {
             </View>
           </View>
 
+          {/* [ADMIN AI RESULT UI] Priority level card */}
           <View style={styles.priorityCard}>
             <View style={styles.priorityLeft}>
               <Ionicons
                 name={isEmergency ? "warning" : "flag"}
                 size={22}
-                color={isEmergency ? RED : GREEN}
+                color={isEmergency ? "rgba(215, 25, 32, 1)" : "rgba(8, 122, 13, 1)"}
               />
 
               <View style={styles.priorityTextBox}>
@@ -533,12 +540,13 @@ export default function AIAnalysisResult() {
             </View>
           </View>
 
+          {/* [ADMIN AI RESULT UI] Action buttons: track complaint / back to dashboard */}
           <TouchableOpacity
             activeOpacity={0.8}
             style={styles.trackButton}
             onPress={() => router.push("/citizen/complaints")}
           >
-            <Ionicons name="search-outline" size={26} color={WHITE} />
+            <Ionicons name="search-outline" size={26} color="rgba(255, 255, 255, 1)" />
             <Text style={styles.trackButtonText}>Track My Complaint</Text>
           </TouchableOpacity>
 
@@ -556,20 +564,22 @@ export default function AIAnalysisResult() {
   );
 }
 
+// ===== [ADMIN AI RESULT] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   loader: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -581,12 +591,12 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 20,
     elevation: 20,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 8,
     paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#E5EDE1",
+    borderBottomColor: "rgba(229, 237, 225, 1)",
   },
 
   scrollContent: {
@@ -598,18 +608,19 @@ const styles = StyleSheet.create({
   title: {
     fontFamily: "Poppins_700Bold",
     fontSize: 25,
-    color: "#15651E",
+    color: "rgba(21, 101, 30, 1)",
     lineHeight: 31,
   },
 
   subtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 15,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 22,
     marginTop: 2,
   },
 
+  // --- Stepper ---
   stepperWrapper: {
     marginBottom: 28,
   },
@@ -629,7 +640,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -638,9 +649,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "#EEF2EE",
+    backgroundColor: "rgba(238, 242, 238, 1)",
     borderWidth: 1,
-    borderColor: "#C8D0C8",
+    borderColor: "rgba(200, 208, 200, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -648,13 +659,13 @@ const styles = StyleSheet.create({
   pendingNumber: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: "#6A756A",
+    color: "rgba(106, 117, 106, 1)",
   },
 
   activeStepLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginTop: 8,
     textAlign: "center",
   },
@@ -662,7 +673,7 @@ const styles = StyleSheet.create({
   pendingStepLabel: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     marginTop: 8,
     textAlign: "center",
   },
@@ -670,7 +681,7 @@ const styles = StyleSheet.create({
   solidLine: {
     width: 56,
     height: 2,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     marginTop: 18,
     marginHorizontal: -17,
   },
@@ -680,16 +691,17 @@ const styles = StyleSheet.create({
     height: 2,
     borderStyle: "dashed",
     borderWidth: 1,
-    borderColor: "#777777",
+    borderColor: "rgba(119, 119, 119, 1)",
     marginTop: 18,
     marginHorizontal: -17,
   },
 
+  // --- Cards & complaint summary ---
   card: {
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(224, 224, 224, 1)",
     paddingHorizontal: 20,
     paddingTop: 14,
     paddingBottom: 17,
@@ -699,7 +711,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 14,
   },
 
@@ -714,7 +726,7 @@ const styles = StyleSheet.create({
     height: 64,
     borderRadius: 6,
     resizeMode: "cover",
-    backgroundColor: "#EDEDED",
+    backgroundColor: "rgba(237, 237, 237, 1)",
     marginRight: 10,
   },
 
@@ -722,7 +734,7 @@ const styles = StyleSheet.create({
     width: 82,
     height: 64,
     borderRadius: 6,
-    backgroundColor: "#EDEDED",
+    backgroundColor: "rgba(237, 237, 237, 1)",
     marginRight: 10,
     alignItems: "center",
     justifyContent: "center",
@@ -736,14 +748,14 @@ const styles = StyleSheet.create({
   complaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 3,
   },
 
   complaintDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12.5,
-    color: "#222222",
+    color: "rgba(34, 34, 34, 1)",
     lineHeight: 18,
   },
 
@@ -766,14 +778,14 @@ const styles = StyleSheet.create({
   summaryLabel: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12.5,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     marginLeft: 8,
   },
 
   summaryValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12.5,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     textAlign: "right",
     maxWidth: SCREEN_WIDTH * 0.46,
   },
@@ -782,26 +794,27 @@ const styles = StyleSheet.create({
     minWidth: 132,
     height: 22,
     borderRadius: 12,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 12,
   },
 
   typePillEmergency: {
-    backgroundColor: LIGHT_RED,
+    backgroundColor: "rgba(255, 240, 240, 1)",
   },
 
   typePillText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   typePillTextEmergency: {
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
   },
 
+  // --- Routing rows ---
   routingDetails: {
     rowGap: 20,
     paddingTop: 2,
@@ -822,30 +835,31 @@ const styles = StyleSheet.create({
   routingLabel: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12.5,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     marginLeft: 9,
   },
 
   routingValue: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     textAlign: "right",
     maxWidth: SCREEN_WIDTH * 0.45,
   },
 
   routingValueGreen: {
     fontFamily: "Poppins_400Regular",
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     fontSize: 11.5,
   },
 
+  // --- Priority card ---
   priorityCard: {
     minHeight: 74,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(224, 224, 224, 1)",
     paddingHorizontal: 20,
     paddingVertical: 12,
     marginBottom: 20,
@@ -868,14 +882,14 @@ const styles = StyleSheet.create({
   priorityTitle: {
     fontFamily: "Poppins_500Medium",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 4,
   },
 
   prioritySubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: MUTED,
+    color: "rgba(102, 102, 102, 1)",
     lineHeight: 17,
   },
 
@@ -883,7 +897,7 @@ const styles = StyleSheet.create({
     minWidth: 60,
     height: 22,
     borderRadius: 12,
-    backgroundColor: LIGHT_ORANGE,
+    backgroundColor: "rgba(255, 242, 232, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 10,
@@ -891,23 +905,24 @@ const styles = StyleSheet.create({
   },
 
   priorityPillEmergency: {
-    backgroundColor: LIGHT_RED,
+    backgroundColor: "rgba(255, 240, 240, 1)",
   },
 
   priorityPillText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: ORANGE,
+    color: "rgba(244, 162, 76, 1)",
   },
 
   priorityPillTextEmergency: {
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
   },
 
+  // --- Action buttons ---
   trackButton: {
     height: 53,
     borderRadius: 8,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -917,7 +932,7 @@ const styles = StyleSheet.create({
   trackButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 16,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     marginLeft: 10,
   },
 
@@ -930,19 +945,20 @@ const styles = StyleSheet.create({
   dashboardButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Bottom navigation ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -10 : -6,
     height: Platform.OS === "ios" ? 82 : 74,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: "#E5E5E5",
-    shadowColor: "#000000",
+    borderTopColor: "rgba(229, 229, 229, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },

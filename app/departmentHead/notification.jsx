@@ -37,23 +37,17 @@ import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
 import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
 import { writeAuditLog } from "../../lib/auditLogService";
+import { backfillDepartmentHeadAssignmentNotifications } from "../../lib/departmentHeadNotificationService";
+import { resolveDepartmentHeadOffice } from "../../lib/complaintCategories";
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
-const ORANGE = "#F4A24C";
+// ===== [DEPT NOTIFS] Constants: colors, layout, cache key =====
 
 const H_PADDING = 20;
 const DEPT_NOTIFICATIONS_CACHE_KEY = "departmentHead.notifications";
 
+// ===== [DEPT NOTIFS] Filter chips & bottom tab config =====
 const filterOptions = [
   "All",
   "Unread",
@@ -98,6 +92,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [DEPT NOTIFS] Helpers: text, metadata, date/time formatting =====
 function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -141,6 +136,7 @@ function formatTime(value) {
   });
 }
 
+// ===== [DEPT NOTIFS] Notification type mapping (label, colors, icon) =====
 function getDisplayType(type, status) {
   const cleanType = normalizeText(type);
   const cleanStatus = normalizeText(status);
@@ -193,51 +189,52 @@ function getNotificationStyle(type, status) {
 
   if (displayType === "New Assignment") {
     return {
-      bg: "#E8EEFF",
-      color: BLUE,
+      bg: "rgba(232, 238, 255, 1)",
+      color: "rgba(49, 90, 154, 1)",
       icon: "clipboard-text-outline",
     };
   }
 
   if (displayType === "Reassigned") {
     return {
-      bg: LIGHT_GREEN,
-      color: GREEN,
+      bg: "rgba(234, 246, 228, 1)",
+      color: "rgba(8, 122, 13, 1)",
       icon: "swap-horizontal-circle-outline",
     };
   }
 
   if (displayType === "Completed") {
     return {
-      bg: LIGHT_GREEN,
-      color: GREEN,
+      bg: "rgba(234, 246, 228, 1)",
+      color: "rgba(8, 122, 13, 1)",
       icon: "check-circle-outline",
     };
   }
 
   if (displayType === "Returned") {
     return {
-      bg: "#FFF0F0",
-      color: RED,
+      bg: "rgba(255, 240, 240, 1)",
+      color: "rgba(215, 25, 32, 1)",
       icon: "arrow-u-left-top",
     };
   }
 
   if (displayType === "Validation") {
     return {
-      bg: "#F3EAFF",
-      color: "#7A3EA8",
+      bg: "rgba(243, 234, 255, 1)",
+      color: "rgba(122, 62, 168, 1)",
       icon: "clipboard-check-outline",
     };
   }
 
   return {
-    bg: "#F1F4F1",
-    color: MUTED,
+    bg: "rgba(241, 244, 241, 1)",
+    color: "rgba(111, 119, 111, 1)",
     icon: "bell-outline",
   };
 }
 
+// ===== [DEPT NOTIFS] Map DB notification row -> UI object =====
 function mapNotification(row) {
   const metadata = normalizeMetadata(row.metadata);
   const displayType = getDisplayType(row.type, row.status);
@@ -277,7 +274,9 @@ function mapNotification(row) {
   };
 }
 
+// ===== [DEPT NOTIFS] Screen component =====
 export default function DepartmentHeadNotification() {
+  // --- [DEPT NOTIFS] Navigation & unread count ---
   const router = useRouter();
   const pathname = usePathname();
 
@@ -287,6 +286,7 @@ export default function DepartmentHeadNotification() {
     resetUnreadNotificationCount,
   } = useDepartmentHeadUnreadNotifications();
 
+  // --- [DEPT NOTIFS] State & refs (seeded from page cache) ---
   const cachedNotifications = getPageCache(DEPT_NOTIFICATIONS_CACHE_KEY);
   const [notifications, setNotifications] = useState(
     cachedNotifications?.notifications ?? []
@@ -331,6 +331,7 @@ export default function DepartmentHeadNotification() {
     Poppins_700Bold,
   });
 
+  // --- [DEPT NOTIFS] Navigation lock helper ---
   const smoothNavigate = useCallback(
     (route, isActive = false) => {
       if (isActive || navigationLockRef.current) return;
@@ -364,6 +365,7 @@ export default function DepartmentHeadNotification() {
     notificationsDataRef.current = notifications;
   }, [notifications]);
 
+  // --- [DEPT NOTIFS] Load notifications (cache, backfill, paginated query) ---
   const loadNotifications = useCallback(async (options = {}) => {
     const normalized =
       typeof options === "boolean" ? { showLoader: options } : options;
@@ -420,6 +422,42 @@ export default function DepartmentHeadNotification() {
       }
 
       setCurrentDepartmentHeadId(user.id);
+
+      if (!append) {
+        try {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("department")
+            .eq("id", user.id)
+            .maybeSingle();
+
+          const department =
+            resolveDepartmentHeadOffice(profile?.department) ||
+            resolveDepartmentHeadOffice(
+              user.user_metadata?.department ||
+                user.user_metadata?.assigned_office ||
+                user.user_metadata?.office ||
+                ""
+            );
+
+          if (department) {
+            const backfill =
+              await backfillDepartmentHeadAssignmentNotifications({
+                departmentHeadId: user.id,
+                department,
+              });
+
+            if (backfill?.createdCount > 0) {
+              reloadUnreadRef.current?.();
+            }
+          }
+        } catch (backfillError) {
+          console.log(
+            "Department head notification backfill error:",
+            backfillError
+          );
+        }
+      }
 
       const offset = append ? notificationsDataRef.current.length : 0;
       const pageSize = getNotificationPageSize(
@@ -490,6 +528,7 @@ export default function DepartmentHeadNotification() {
     }
   }, [selectedFilter]);
 
+  // --- [DEPT NOTIFS] Infinite scroll / load more ---
   const loadMoreNotifications = useCallback(() => {
     loadNotifications({ append: true, showLoader: false });
   }, [loadNotifications]);
@@ -512,6 +551,7 @@ export default function DepartmentHeadNotification() {
     }
   };
 
+  // --- [DEPT NOTIFS] Initial load & reload on focus ---
   useEffect(() => {
     loadNotificationsRef.current = loadNotifications;
   }, [loadNotifications]);
@@ -531,6 +571,7 @@ export default function DepartmentHeadNotification() {
     }, [loadNotifications, reloadUnreadNotificationCount])
   );
 
+  // --- [DEPT NOTIFS] Realtime: moderator_notifications subscription ---
   useEffect(() => {
     if (!currentDepartmentHeadId) return;
 
@@ -590,6 +631,7 @@ export default function DepartmentHeadNotification() {
     };
   }, [currentDepartmentHeadId]);
 
+  // --- [DEPT NOTIFS] Filtered list & pull-to-refresh ---
   const filteredNotifications = useMemo(() => {
     if (selectedFilter === "Unread") {
       return notifications.filter((item) => item.unread);
@@ -608,6 +650,7 @@ export default function DepartmentHeadNotification() {
     reloadUnreadNotificationCount?.();
   };
 
+  // --- [DEPT NOTIFS] Mark read (single / all) ---
   const markSingleAsRead = async (notification) => {
     if (!notification?.id || !currentDepartmentHeadId || !notification.unread) return;
 
@@ -683,6 +726,7 @@ export default function DepartmentHeadNotification() {
     }
   };
 
+  // --- [DEPT NOTIFS] Details modal & open related complaint ---
   const openNotificationDetails = async (notification) => {
     const updatedNotification = { ...notification, unread: false };
 
@@ -715,15 +759,17 @@ export default function DepartmentHeadNotification() {
     });
   };
 
+  // --- [DEPT NOTIFS] Render ---
   if (!fontsLoaded && !cachedNotifications) {
     return <PageSkeleton variant="notifications" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [DEPT NOTIFS UI] Sticky header: title + mark all read */}
         <View style={styles.stickyHeader}>
           <View style={styles.headerTopRow}>
             <Text style={styles.headerTitle}>Notifications</Text>
@@ -736,7 +782,7 @@ export default function DepartmentHeadNotification() {
                 onPress={markAllAsRead}
               >
                 {markingAllRead ? (
-                  <ActivityIndicator size="small" color={GREEN} />
+                  <ActivityIndicator size="small" color="rgba(8, 122, 13, 1)" />
                 ) : (
                   <Text style={styles.markAllButtonText}>Mark all read</Text>
                 )}
@@ -744,6 +790,7 @@ export default function DepartmentHeadNotification() {
             )}
           </View>
 
+          {/* [DEPT NOTIFS UI] Filter chips */}
           <ScrollView
             horizontal
             nestedScrollEnabled
@@ -777,6 +824,7 @@ export default function DepartmentHeadNotification() {
           </ScrollView>
         </View>
 
+        {/* [DEPT NOTIFS UI] Notification list (pull-to-refresh + infinite scroll) */}
         <ScrollView
           style={styles.listScroll}
           showsVerticalScrollIndicator={false}
@@ -784,8 +832,8 @@ export default function DepartmentHeadNotification() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor={GREEN}
-              colors={[GREEN]}
+              tintColor="rgba(8, 122, 13, 1)"
+              colors={["rgba(8, 122, 13, 1)"]}
             />
           }
           contentContainerStyle={styles.scrollContent}
@@ -797,6 +845,7 @@ export default function DepartmentHeadNotification() {
           onContentSizeChange={(_, height) => maybeFillViewport(height)}
         >
           <View style={styles.notificationList}>
+            {/* [DEPT NOTIFS UI] Loading skeleton / empty state / notification cards */}
             {loadingNotifications && notifications.length === 0 ? (
               <NotificationListSkeleton count={5} />
             ) : filteredNotifications.length === 0 ? (
@@ -804,7 +853,7 @@ export default function DepartmentHeadNotification() {
                 <Ionicons
                   name="notifications-off-outline"
                   size={34}
-                  color={MUTED}
+                  color="rgba(111, 119, 111, 1)"
                 />
                 <Text style={styles.emptyTitle}>No notifications found</Text>
                 <Text style={styles.emptyText}>
@@ -882,6 +931,7 @@ export default function DepartmentHeadNotification() {
                 );
               })
             )}
+            {/* [DEPT NOTIFS UI] Load-more footer */}
             <ComplaintsLoadMoreFooter
               loading={loadingMoreNotifications}
               label="Loading more notifications..."
@@ -889,6 +939,7 @@ export default function DepartmentHeadNotification() {
           </View>
         </ScrollView>
 
+        {/* [DEPT NOTIFS UI] Notification details modal */}
         <Modal
           visible={detailsVisible}
           transparent
@@ -907,7 +958,7 @@ export default function DepartmentHeadNotification() {
                   style={styles.modalCloseButton}
                   onPress={closeNotificationDetails}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -937,6 +988,7 @@ export default function DepartmentHeadNotification() {
                     </View>
                   </View>
 
+                  {/* [DEPT NOTIFS UI] Details: message & citizen feedback */}
                   <View style={styles.messageBox}>
                     <Text style={styles.infoLabel}>Message</Text>
                     <Text style={styles.messageText}>
@@ -953,6 +1005,7 @@ export default function DepartmentHeadNotification() {
                     </View>
                   ) : null}
 
+                  {/* [DEPT NOTIFS UI] Details: complaint information rows */}
                   <View style={styles.complaintInfoCard}>
                     <Text style={styles.sectionTitle}>Complaint Information</Text>
 
@@ -984,6 +1037,7 @@ export default function DepartmentHeadNotification() {
                     />
                   </View>
 
+                  {/* [DEPT NOTIFS UI] Details: view assigned complaint button */}
                   <TouchableOpacity
                     activeOpacity={0.78}
                     style={styles.viewComplaintButton}
@@ -992,7 +1046,7 @@ export default function DepartmentHeadNotification() {
                     <Text style={styles.viewComplaintButtonText}>
                       View Assigned Complaint
                     </Text>
-                    <Feather name="arrow-right" size={17} color={WHITE} />
+                    <Feather name="arrow-right" size={17} color="rgba(255, 255, 255, 1)" />
                   </TouchableOpacity>
                 </ScrollView>
               )}
@@ -1004,6 +1058,7 @@ export default function DepartmentHeadNotification() {
   );
 }
 
+// ===== [DEPT NOTIFS] Subcomponent: InfoRow =====
 function InfoRow({ label, value, last }) {
   return (
     <View style={[styles.infoRow, last && styles.infoRowLast]}>
@@ -1013,24 +1068,26 @@ function InfoRow({ label, value, last }) {
   );
 }
 
+// ===== [DEPT NOTIFS] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   stickyHeader: {
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 4,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    borderBottomColor: "rgba(226, 231, 224, 1)",
     zIndex: 2,
   },
 
@@ -1040,7 +1097,7 @@ const styles = StyleSheet.create({
 
   loader: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1061,7 +1118,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 29,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     lineHeight: 35,
     letterSpacing: 0.3,
   },
@@ -1070,8 +1127,8 @@ const styles = StyleSheet.create({
     minHeight: 32,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: WHITE,
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 12,
@@ -1080,9 +1137,10 @@ const styles = StyleSheet.create({
   markAllButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Filter chips ---
   filterScrollContent: {
     gap: 8,
     paddingRight: 10,
@@ -1092,42 +1150,43 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 15,
     alignItems: "center",
     justifyContent: "center",
   },
 
   filterChipActive: {
-    backgroundColor: GREEN,
-    borderColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
+    borderColor: "rgba(8, 122, 13, 1)",
   },
 
   filterChipText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 11,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   filterChipTextActive: {
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
+  // --- Notification cards ---
   notificationList: {
     gap: 10,
   },
 
   notificationCard: {
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     borderRadius: 14,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.03,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
@@ -1135,8 +1194,8 @@ const styles = StyleSheet.create({
   },
 
   notificationCardUnread: {
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
   },
 
   notificationIconCircle: {
@@ -1162,20 +1221,20 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_700Bold",
     fontSize: 13.2,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   unreadDot: {
     width: 9,
     height: 9,
     borderRadius: 5,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
   },
 
   notificationMessage: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.8,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     lineHeight: 15,
     marginTop: 2,
   },
@@ -1183,7 +1242,7 @@ const styles = StyleSheet.create({
   complaintTitleText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.2,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 4,
   },
 
@@ -1213,15 +1272,16 @@ const styles = StyleSheet.create({
     textAlign: "right",
     fontFamily: "Poppins_500Medium",
     fontSize: 9.6,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
+  // --- Empty state ---
   emptyCard: {
     minHeight: 150,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 20,
@@ -1230,29 +1290,30 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 8,
   },
 
   emptyText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     lineHeight: 16,
     marginTop: 3,
   },
 
+  // --- Legacy bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -1287,9 +1348,9 @@ const styles = StyleSheet.create({
     minWidth: 17,
     height: 17,
     borderRadius: 9,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 1.5,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -1298,7 +1359,7 @@ const styles = StyleSheet.create({
   notificationNavBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     includeFontPadding: false,
     lineHeight: 11,
   },
@@ -1311,6 +1372,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Details modal ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -1321,7 +1383,7 @@ const styles = StyleSheet.create({
     maxHeight: "88%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 30 : 20,
@@ -1331,7 +1393,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -1346,14 +1408,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1380,22 +1442,22 @@ const styles = StyleSheet.create({
   detailsTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 16,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 22,
   },
 
   detailsSubtitle: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 3,
   },
 
   messageBox: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 12,
@@ -1404,7 +1466,7 @@ const styles = StyleSheet.create({
   messageText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginTop: 3,
   },
@@ -1412,8 +1474,8 @@ const styles = StyleSheet.create({
   citizenFeedbackBox: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 12,
@@ -1422,8 +1484,8 @@ const styles = StyleSheet.create({
   complaintInfoCard: {
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     marginBottom: 14,
@@ -1432,7 +1494,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 8,
   },
 
@@ -1447,13 +1509,13 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   infoValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 16,
     marginTop: 1,
   },
@@ -1461,7 +1523,7 @@ const styles = StyleSheet.create({
   viewComplaintButton: {
     height: 44,
     borderRadius: 22,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1472,6 +1534,6 @@ const styles = StyleSheet.create({
   viewComplaintButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 });

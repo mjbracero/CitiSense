@@ -17,17 +17,10 @@ import {
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { confirmStore, inferConfirmDialogMeta } from "../lib/toast";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const RED = "#D71920";
-const LIGHT_RED = "#FFF4F4";
-const TEXT = "#171717";
-const MUTED = "#5A615A";
-const WHITE = "#FFFFFF";
-const BG = "#F7FAF6";
-const BORDER = "#E3E8E0";
+// ===== [CONFIRM DIALOG] Colors & dialog width =====
 const DIALOG_WIDTH = Math.min(Dimensions.get("window").width - 48, 320);
 
+// ===== [CONFIRM DIALOG] Helpers: button type checks =====
 function isCancelButton(button) {
   return button?.style === "cancel" || button?.text === "Cancel";
 }
@@ -36,7 +29,9 @@ function isDestructiveButton(button) {
   return button?.style === "destructive";
 }
 
+// ===== [CONFIRM DIALOG] Global confirm dialog host =====
 export default function ConfirmDialogHost() {
+  // --- [CONFIRM DIALOG] State, fonts & confirmStore subscription ---
   const [dialog, setDialog] = useState(null);
   useFonts({
     Poppins_400Regular,
@@ -46,6 +41,7 @@ export default function ConfirmDialogHost() {
 
   useEffect(() => confirmStore.subscribe(setDialog), []);
 
+  // --- [CONFIRM DIALOG] Derived: buttons, meta (icon/accent), layout mode ---
   const buttons = dialog?.buttons || [];
   const options = dialog?.options || {};
   const cancelable = options.cancelable !== false;
@@ -61,6 +57,7 @@ export default function ConfirmDialogHost() {
     : buttons.filter((button) => !isCancelButton(button));
   const cancelButton = buttons.find((button) => isCancelButton(button));
 
+  // --- [CONFIRM DIALOG] Handlers: dismiss, backdrop, button press ---
   const dismissDialog = () => {
     confirmStore.dismiss();
   };
@@ -82,6 +79,7 @@ export default function ConfirmDialogHost() {
     button?.onPress?.();
   };
 
+  // --- [CONFIRM DIALOG] Render ---
   if (!dialog) return null;
 
   return (
@@ -103,16 +101,19 @@ export default function ConfirmDialogHost() {
           style={styles.cardShell}
         >
           <Pressable style={styles.card} onPress={(event) => event.stopPropagation()}>
+            {/* [CONFIRM DIALOG UI] Icon */}
             <View style={[styles.iconWrap, { backgroundColor: meta.iconBackground }]}>
               <Ionicons name={meta.icon} size={24} color={meta.accent} />
             </View>
 
+            {/* [CONFIRM DIALOG UI] Title & message */}
             <Text style={styles.title}>{dialog.title}</Text>
 
             {dialog.message ? (
               <Text style={styles.message}>{dialog.message}</Text>
             ) : null}
 
+            {/* [CONFIRM DIALOG UI] Actions: stacked (3+ buttons) or side-by-side row */}
             {stackedActions ? (
               <View style={styles.stackedActions}>
                 {actionButtons.map((button) => (
@@ -200,7 +201,9 @@ export default function ConfirmDialogHost() {
   );
 }
 
+// ===== [CONFIRM DIALOG] Styles =====
 const styles = StyleSheet.create({
+  // --- Overlay & card ---
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.38)",
@@ -216,11 +219,11 @@ const styles = StyleSheet.create({
   card: {
     width: DIALOG_WIDTH,
     borderRadius: 22,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 20,
     paddingTop: 22,
     paddingBottom: 18,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 12 },
@@ -240,7 +243,7 @@ const styles = StyleSheet.create({
   title: {
     fontFamily: "Poppins_700Bold",
     fontSize: 16,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     textAlign: "center",
     lineHeight: 22,
     width: "100%",
@@ -249,7 +252,7 @@ const styles = StyleSheet.create({
   message: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12.5,
-    color: MUTED,
+    color: "rgba(90, 97, 90, 1)",
     textAlign: "center",
     lineHeight: 19,
     marginTop: 8,
@@ -257,6 +260,7 @@ const styles = StyleSheet.create({
     width: "100%",
   },
 
+  // --- Row actions ---
   rowActions: {
     flexDirection: "row",
     alignItems: "stretch",
@@ -276,17 +280,17 @@ const styles = StyleSheet.create({
   },
 
   rowButtonOutline: {
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(227, 232, 224, 1)",
   },
 
   rowButtonPrimary: {
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
   },
 
   rowButtonDestructive: {
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
   },
 
   rowButtonText: {
@@ -296,20 +300,21 @@ const styles = StyleSheet.create({
   },
 
   primaryTextOnFill: {
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   destructiveTextOnFill: {
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   cancelText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 13,
-    color: MUTED,
+    color: "rgba(90, 97, 90, 1)",
     textAlign: "center",
   },
 
+  // --- Stacked actions ---
   stackedActions: {
     alignSelf: "stretch",
     width: "100%",
@@ -327,15 +332,15 @@ const styles = StyleSheet.create({
   },
 
   stackedButtonPrimary: {
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#C6E4C0",
+    borderColor: "rgba(198, 228, 192, 1)",
   },
 
   stackedButtonDestructive: {
-    backgroundColor: LIGHT_RED,
+    backgroundColor: "rgba(255, 244, 244, 1)",
     borderWidth: 1,
-    borderColor: "#F3C4C6",
+    borderColor: "rgba(243, 196, 198, 1)",
   },
 
   stackedButtonText: {
@@ -345,11 +350,11 @@ const styles = StyleSheet.create({
   },
 
   primaryText: {
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   destructiveText: {
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
   },
 
   stackedCancel: {

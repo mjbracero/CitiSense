@@ -31,6 +31,8 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import AuditLogsModal from "../../components/AuditLogsModal";
+import PrivacySecurityModal from "../../components/PrivacySecurityModal";
+import SystemLogAnalysisModal from "../../components/SystemLogAnalysisModal";
 import { PageSkeleton } from "../../components/skeletons";
 import { writeAuditLog } from "../../lib/auditLogService";
 import { clearPageCache, getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
@@ -47,16 +49,7 @@ import {
 import useAdminUnreadNotifications from "../../hooks/useAdminUnreadNotifications";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const ACCENT_GREEN = "#6DBB3F";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
+// ===== [ADMIN PROFILE] Constants: colors, layout, avatar bucket, cache key =====
 
 const H_PADDING = 20;
 const PROFILE_SHEET_MAX_HEIGHT = Math.round(Dimensions.get("screen").height * 0.9);
@@ -65,6 +58,7 @@ const ADMIN_PROFILE_CACHE_KEY = "admin.profile";
 
 const MAIN_LOGO = require("../../assets/images/mainlogo.png");
 
+// ===== [ADMIN PROFILE] Default profile & module-level profile cache =====
 const DEFAULT_ADMIN_PROFILE = {
   fullName: "City Administrator",
   role: "Admin",
@@ -78,6 +72,7 @@ const DEFAULT_ADMIN_PROFILE = {
 
 let cachedAdminProfile = DEFAULT_ADMIN_PROFILE;
 
+// ===== [ADMIN PROFILE] Legacy bottom tabs config =====
 const bottomTabs = [
   {
     label: "Home",
@@ -121,6 +116,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [ADMIN PROFILE] Helpers: text cleanup, image extension =====
 function normalizeSpace(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
@@ -145,6 +141,7 @@ function getImageExtension(asset) {
   return "jpeg";
 }
 
+// ===== [ADMIN PROFILE] Avatar storage: resolve path & signed/public URL =====
 function extractAvatarPath(value) {
   if (!value) return null;
 
@@ -201,7 +198,9 @@ async function createReadableAvatarUrl(value) {
   return null;
 }
 
+// ===== [ADMIN PROFILE] Screen component =====
 export default function AdminProfile() {
+  // --- [ADMIN PROFILE] State, modal visibility & drafts ---
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
@@ -221,8 +220,16 @@ export default function AdminProfile() {
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
   const [auditLogsVisible, setAuditLogsVisible] = useState(false);
+  const [systemLogAnalysisVisible, setSystemLogAnalysisVisible] =
+    useState(false);
+  const [privacyVisible, setPrivacyVisible] = useState(false);
 
-  useHideBottomNav(editModalVisible || passwordModalVisible);
+  useHideBottomNav(
+    editModalVisible ||
+      passwordModalVisible ||
+      systemLogAnalysisVisible ||
+      privacyVisible
+  );
 
   const [fullNameDraft, setFullNameDraft] = useState("");
   const [emailDraft, setEmailDraft] = useState("");
@@ -244,6 +251,7 @@ export default function AdminProfile() {
     Poppins_700Bold,
   });
 
+  // --- [ADMIN PROFILE] Derived display values ---
   const displayName = profileInfo.fullName;
   const displayEmail = profileInfo.email;
   const displayRole = "Admin";
@@ -252,6 +260,7 @@ export default function AdminProfile() {
   const displayLocation = profileInfo.location;
   const avatarUrl = profileInfo.avatarUrl;
 
+  // --- [ADMIN PROFILE] Load profile (auth user + profiles row + push pref) ---
   const loadUser = useCallback(async () => {
     try {
       if (shouldShowPageLoader(ADMIN_PROFILE_CACHE_KEY)) {
@@ -373,6 +382,7 @@ export default function AdminProfile() {
 
   const metadata = user?.user_metadata || {};
 
+  // --- [ADMIN PROFILE] Open/close edit & password modals ---
   const openEditProfile = () => {
     setFullNameDraft(displayName === DEFAULT_ADMIN_PROFILE.fullName ? "" : displayName);
     setEmailDraft(displayEmail === DEFAULT_ADMIN_PROFILE.email ? "" : displayEmail);
@@ -394,6 +404,7 @@ export default function AdminProfile() {
     setConfirmPassword("");
   };
 
+  // --- [ADMIN PROFILE] Sync profiles table row ---
   const syncProfileRow = async ({
     fullName,
     email,
@@ -414,6 +425,7 @@ export default function AdminProfile() {
     });
   };
 
+  // --- [ADMIN PROFILE] Pick & upload profile photo ---
   const pickProfilePhoto = async () => {
     try {
       if (!user?.id) {
@@ -530,6 +542,7 @@ export default function AdminProfile() {
     }
   };
 
+  // --- [ADMIN PROFILE] Save edited profile (incl. email change) ---
   const saveProfileChanges = async () => {
     const cleanName = normalizeSpace(fullNameDraft);
     const cleanEmail = normalizeSpace(emailDraft);
@@ -636,6 +649,7 @@ export default function AdminProfile() {
     }
   };
 
+  // --- [ADMIN PROFILE] Change password ---
   const handleChangePassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
       notify("Password Required", "Please enter and confirm your password.");
@@ -687,6 +701,7 @@ export default function AdminProfile() {
     }
   };
 
+  // --- [ADMIN PROFILE] Settings: push toggle, privacy, logout ---
   const handlePushToggle = async (value) => {
     if (!user?.id) {
       setPushEnabled(value);
@@ -720,12 +735,7 @@ export default function AdminProfile() {
   };
 
   const handlePrivacy = () => {
-    notify(
-      "Privacy & Security",
-      "CitiSense protects admin accounts by allowing only authorized users to access complaint records, analytics, notifications, and system management tools.\n\n" +
-        "Your admin account information is used for identification, access control, and LGU system activity tracking.\n\n" +
-        "For security, keep your password private, use a strong password, and always log out when using a shared device."
-    );
+    setPrivacyVisible(true);
   };
 
   const handleLogout = () => {
@@ -761,15 +771,17 @@ export default function AdminProfile() {
     ]);
   };
 
+  // --- [ADMIN PROFILE] Render ---
   if (!fontsLoaded || loadingUser) {
     return <PageSkeleton variant="profile" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [ADMIN PROFILE UI] Fixed header: CitiSense logo */}
         <View style={styles.fixedHeader}>
           <View style={styles.logoRow}>
             <Image source={MAIN_LOGO} style={styles.mainLogoImage} />
@@ -784,13 +796,14 @@ export default function AdminProfile() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+          {/* [ADMIN PROFILE UI] Profile card: avatar, camera button, name, Edit */}
           <View style={styles.profileHeroCard}>
             <View style={styles.avatarOuter}>
               <View style={styles.avatarCircle}>
                 {avatarUrl ? (
                   <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
                 ) : (
-                  <Ionicons name="person" size={42} color={GREEN} />
+                  <Ionicons name="person" size={42} color="rgba(8, 122, 13, 1)" />
                 )}
               </View>
 
@@ -801,9 +814,9 @@ export default function AdminProfile() {
                 disabled={uploadingAvatar}
               >
                 {uploadingAvatar ? (
-                  <ActivityIndicator size="small" color={WHITE} />
+                  <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                 ) : (
-                  <Ionicons name="camera" size={15} color={WHITE} />
+                  <Ionicons name="camera" size={15} color="rgba(255, 255, 255, 1)" />
                 )}
               </TouchableOpacity>
             </View>
@@ -820,11 +833,12 @@ export default function AdminProfile() {
               style={styles.editButton}
               onPress={openEditProfile}
             >
-              <Feather name="edit-2" size={15} color={GREEN} />
+              <Feather name="edit-2" size={15} color="rgba(8, 122, 13, 1)" />
               <Text style={styles.editButtonText}>Edit</Text>
             </TouchableOpacity>
           </View>
 
+          {/* [ADMIN PROFILE UI] Account Information section */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Account Information</Text>
 
@@ -841,6 +855,7 @@ export default function AdminProfile() {
             </View>
           </View>
 
+          {/* [ADMIN PROFILE UI] Office Information section */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Office Information</Text>
 
@@ -856,6 +871,7 @@ export default function AdminProfile() {
             </View>
           </View>
 
+          {/* [ADMIN PROFILE UI] Notifications section: push toggle */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Notifications</Text>
 
@@ -871,13 +887,14 @@ export default function AdminProfile() {
             </View>
           </View>
 
+          {/* [ADMIN PROFILE UI] Settings list: password, audit logs, log analysis, privacy */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Settings</Text>
 
             <View style={styles.settingsCard}>
               <ActionRow
                 icon="lock"
-                iconColor={BLUE}
+                iconColor="rgba(49, 90, 154, 1)"
                 title="Change Password"
                 subtitle="Update your admin account password."
                 onPress={() => setPasswordModalVisible(true)}
@@ -885,15 +902,23 @@ export default function AdminProfile() {
 
               <ActionRow
                 icon="activity"
-                iconColor={BLUE}
+                iconColor="rgba(49, 90, 154, 1)"
                 title="Audit Logs"
                 subtitle="Review account and system activity."
                 onPress={() => setAuditLogsVisible(true)}
               />
 
               <ActionRow
+                icon="bar-chart-2"
+                iconColor="rgba(8, 122, 13, 1)"
+                title="System Log Analysis"
+                subtitle="AI accuracy, processing time, and resolution metrics."
+                onPress={() => setSystemLogAnalysisVisible(true)}
+              />
+
+              <ActionRow
                 icon="shield"
-                iconColor={GREEN}
+                iconColor="rgba(8, 122, 13, 1)"
                 title="Privacy & Security"
                 subtitle="Manage your account protection."
                 onPress={handlePrivacy}
@@ -902,16 +927,18 @@ export default function AdminProfile() {
             </View>
           </View>
 
+          {/* [ADMIN PROFILE UI] Log Out button */}
           <TouchableOpacity
             activeOpacity={0.8}
             style={styles.logoutButton}
             onPress={handleLogout}
           >
-            <Ionicons name="log-out-outline" size={22} color={RED} />
+            <Ionicons name="log-out-outline" size={22} color="rgba(215, 25, 32, 1)" />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
         </ScrollView>
 
+        {/* [ADMIN PROFILE UI] Edit Profile modal */}
         <Modal
           visible={editModalVisible}
           animationType="slide"
@@ -936,7 +963,7 @@ export default function AdminProfile() {
                   style={styles.modalCloseButton}
                   onPress={closeEditProfile}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -957,7 +984,7 @@ export default function AdminProfile() {
                   value={fullNameDraft}
                   onChangeText={setFullNameDraft}
                   placeholder="Enter full name"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
                 />
 
                 <Text style={styles.inputLabel}>Email Address</Text>
@@ -966,7 +993,7 @@ export default function AdminProfile() {
                   value={emailDraft}
                   onChangeText={setEmailDraft}
                   placeholder="Enter email address"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
                   keyboardType="email-address"
                   autoCapitalize="none"
                 />
@@ -977,7 +1004,7 @@ export default function AdminProfile() {
                   value={contactDraft}
                   onChangeText={setContactDraft}
                   placeholder="Enter contact number"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
                   keyboardType="phone-pad"
                 />
 
@@ -987,7 +1014,7 @@ export default function AdminProfile() {
                   value={officeDraft}
                   onChangeText={setOfficeDraft}
                   placeholder="Enter office"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
                 />
 
                 <Text style={styles.inputLabel}>Location</Text>
@@ -996,7 +1023,7 @@ export default function AdminProfile() {
                   value={locationDraft}
                   onChangeText={setLocationDraft}
                   placeholder="Enter location"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
                 />
 
                 <TouchableOpacity
@@ -1006,7 +1033,7 @@ export default function AdminProfile() {
                   disabled={savingProfile}
                 >
                   {savingProfile ? (
-                    <ActivityIndicator size="small" color={WHITE} />
+                    <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                   ) : (
                     <Text style={styles.saveButtonText}>Save Changes</Text>
                   )}
@@ -1016,6 +1043,7 @@ export default function AdminProfile() {
           </View>
         </Modal>
 
+        {/* [ADMIN PROFILE UI] Change Password modal */}
         <Modal
           visible={passwordModalVisible}
           animationType="slide"
@@ -1040,7 +1068,7 @@ export default function AdminProfile() {
                   style={styles.modalCloseButton}
                   onPress={closePasswordModal}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -1061,7 +1089,10 @@ export default function AdminProfile() {
                   value={newPassword}
                   onChangeText={setNewPassword}
                   placeholder="Enter new password"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
+                  keyboardType="default"
+                  autoCapitalize="none"
+                  autoCorrect={false}
                   secureTextEntry
                 />
 
@@ -1071,7 +1102,10 @@ export default function AdminProfile() {
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
                   placeholder="Confirm new password"
-                  placeholderTextColor="#9A9A9A"
+                  placeholderTextColor="rgba(154, 154, 154, 1)"
+                  keyboardType="default"
+                  autoCapitalize="none"
+                  autoCorrect={false}
                   secureTextEntry
                 />
 
@@ -1082,7 +1116,7 @@ export default function AdminProfile() {
                   disabled={changingPassword}
                 >
                   {changingPassword ? (
-                    <ActivityIndicator size="small" color={WHITE} />
+                    <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                   ) : (
                     <Text style={styles.saveButtonText}>Update Password</Text>
                   )}
@@ -1092,20 +1126,35 @@ export default function AdminProfile() {
           </View>
         </Modal>
 
+        {/* [ADMIN PROFILE UI] Audit Logs modal */}
         <AuditLogsModal
           visible={auditLogsVisible}
           onClose={() => setAuditLogsVisible(false)}
+        />
+
+        {/* [ADMIN PROFILE UI] System Log Analysis modal */}
+        <SystemLogAnalysisModal
+          visible={systemLogAnalysisVisible}
+          onClose={() => setSystemLogAnalysisVisible(false)}
+        />
+
+        {/* [ADMIN PROFILE UI] Privacy & Security modal */}
+        <PrivacySecurityModal
+          visible={privacyVisible}
+          onClose={() => setPrivacyVisible(false)}
+          role="admin"
         />
       </View>
     </SafeAreaView>
   );
 }
 
+// ===== [ADMIN PROFILE] Subcomponents: InfoRow, SwitchRow, ActionRow =====
 function InfoRow({ icon, label, value, last }) {
   return (
     <View style={[styles.infoRow, last && styles.noBorder]}>
       <View style={styles.infoIconCircle}>
-        <Feather name={icon} size={15} color={GREEN} />
+        <Feather name={icon} size={15} color="rgba(8, 122, 13, 1)" />
       </View>
 
       <View style={styles.infoTextBox}>
@@ -1122,7 +1171,7 @@ function SwitchRow({ icon, label, description, value, onValueChange, last }) {
   return (
     <View style={[styles.settingRow, last && styles.noBorder]}>
       <View style={styles.settingIconCircle}>
-        <Feather name={icon} size={15} color={GREEN} />
+        <Feather name={icon} size={15} color="rgba(8, 122, 13, 1)" />
       </View>
 
       <View style={styles.settingTextBox}>
@@ -1133,9 +1182,9 @@ function SwitchRow({ icon, label, description, value, onValueChange, last }) {
       <Switch
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: "#D5DAD3", true: "#BFE3B5" }}
-        thumbColor={value ? GREEN : "#F4F4F4"}
-        ios_backgroundColor="#D5DAD3"
+        trackColor={{ false: "rgba(213, 218, 211, 1)", true: "rgba(191, 227, 181, 1)" }}
+        thumbColor={value ? "rgba(8, 122, 13, 1)" : "rgba(244, 244, 244, 1)"}
+        ios_backgroundColor="rgba(213, 218, 211, 1)"
       />
     </View>
   );
@@ -1148,7 +1197,7 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, last }) {
       style={[styles.settingRow, last && styles.noBorder]}
       onPress={onPress}
     >
-      <View style={[styles.settingIconCircle, { backgroundColor: "#F7FAF6" }]}>
+      <View style={[styles.settingIconCircle, { backgroundColor: "rgba(247, 250, 246, 1)" }]}>
         <Feather name={icon} size={15} color={iconColor} />
       </View>
 
@@ -1157,27 +1206,29 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, last }) {
         <Text style={styles.settingSubtitle}>{subtitle}</Text>
       </View>
 
-      <Feather name="chevron-right" size={20} color={MUTED} />
+      <Feather name="chevron-right" size={20} color="rgba(111, 119, 111, 1)" />
     </TouchableOpacity>
   );
 }
 
+// ===== [ADMIN PROFILE] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   loader: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   fixedHeader: {
@@ -1208,12 +1259,12 @@ const styles = StyleSheet.create({
   logoText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 25,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.1,
   },
 
   logoTextLight: {
-    color: ACCENT_GREEN,
+    color: "rgba(109, 187, 63, 1)",
   },
 
   scrollContent: {
@@ -1222,16 +1273,17 @@ const styles = StyleSheet.create({
     paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
+  // --- Profile card ---
   profileHeroCard: {
     borderRadius: 20,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     paddingHorizontal: 16,
     paddingVertical: 18,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 14,
     position: "relative",
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.12,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 3 },
@@ -1253,7 +1305,7 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -1272,9 +1324,9 @@ const styles = StyleSheet.create({
     width: 25,
     height: 25,
     borderRadius: 13,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 2,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1287,7 +1339,7 @@ const styles = StyleSheet.create({
   profileName: {
     fontFamily: "Poppins_700Bold",
     fontSize: 17,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     lineHeight: 22,
   },
 
@@ -1305,7 +1357,7 @@ const styles = StyleSheet.create({
     minWidth: 58,
     height: 31,
     borderRadius: 16,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1316,10 +1368,11 @@ const styles = StyleSheet.create({
   editButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginLeft: 4,
   },
 
+  // --- Info & settings sections ---
   sectionBlock: {
     marginBottom: 15,
   },
@@ -1327,15 +1380,15 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 9,
   },
 
   infoCard: {
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 3,
   },
@@ -1345,14 +1398,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "#EDF1EB",
+    borderBottomColor: "rgba(237, 241, 235, 1)",
   },
 
   infoIconCircle: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -1365,21 +1418,21 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   infoValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 1,
   },
 
   settingsCard: {
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 3,
   },
@@ -1389,14 +1442,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "#EDF1EB",
+    borderBottomColor: "rgba(237, 241, 235, 1)",
   },
 
   settingIconCircle: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -1410,13 +1463,13 @@ const styles = StyleSheet.create({
   settingTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   settingSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.3,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
@@ -1424,12 +1477,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
   },
 
+  // --- Log out button ---
   logoutButton: {
     height: 50,
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#F2C4C4",
-    backgroundColor: "#FFF4F4",
+    borderColor: "rgba(242, 196, 196, 1)",
+    backgroundColor: "rgba(255, 244, 244, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1439,20 +1493,21 @@ const styles = StyleSheet.create({
   logoutText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: RED,
+    color: "rgba(215, 25, 32, 1)",
     marginLeft: 8,
   },
 
+  // --- Legacy bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -1487,9 +1542,9 @@ const styles = StyleSheet.create({
     minWidth: 17,
     height: 17,
     borderRadius: 9,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 1.5,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -1498,7 +1553,7 @@ const styles = StyleSheet.create({
   notificationNavBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     includeFontPadding: false,
     lineHeight: 11,
   },
@@ -1511,6 +1566,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Edit / password modals & form inputs ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -1522,7 +1578,7 @@ const styles = StyleSheet.create({
     width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     overflow: "hidden",
@@ -1533,7 +1589,7 @@ const styles = StyleSheet.create({
     width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     overflow: "hidden",
@@ -1548,7 +1604,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -1563,14 +1619,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1582,7 +1638,7 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 7,
   },
 
@@ -1590,20 +1646,20 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 10,
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 13,
   },
 
   saveButton: {
     height: 50,
     borderRadius: 14,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 4,
@@ -1612,6 +1668,6 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 });

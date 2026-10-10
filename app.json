@@ -26,12 +26,12 @@
         "android.permission.RECEIVE_BOOT_COMPLETED"
       ],
       "edgeToEdgeEnabled": true,
-      "softwareKeyboardLayoutMode": "pan",
+      "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false,
       "package": "com.mj.nnyrs.citisense"
     },
     "web": {
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/images/mainlogo2.png"
     },
     "plugins": [
@@ -48,6 +48,14 @@
           "photosPermission": "CitiSense needs access to your photos so you can upload complaint evidence.",
           "cameraPermission": "CitiSense needs camera access so you can take complaint evidence photos.",
           "microphonePermission": "CitiSense needs microphone access so you can use voice input when submitting complaints."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "CitiSense needs camera access so you can take complaint evidence photos.",
+          "microphonePermission": "CitiSense needs microphone access so you can use voice input when submitting complaints.",
+          "recordAudioAndroid": true
         }
       ],
       [
@@ -76,7 +84,8 @@
           "defaultChannel": "default"
         }
       ],
-      "expo-font"
+      "expo-font",
+      "./plugins/withAndroidAdjustNothing.js"
     ],
     "experiments": {
       "typedRoutes": true,

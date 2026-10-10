@@ -37,7 +37,11 @@ import {
   requestCitizenValidationReminders,
 } from "../../lib/citizenValidationReminderService";
 import { countComplaintsMany } from "../../lib/complaintCountService";
-import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import {
+  resolveComplaintEvidencePhotoUrls,
+  resolveComplaintValidationPhotoUrls,
+} from "../../lib/complaintPhotoCache";
+import { getPageCache, setPageCache, shouldShowPageLoader, ensureDashboardCacheHydrated } from "../../lib/pageDataCache";
 import {
   applyOffsetPagination,
   COMPLAINTS_PAGE_SIZE,
@@ -50,21 +54,10 @@ import { supabase } from "../../lib/supabase";
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
+// ===== [CITIZEN DASHBOARD] Constants: colors, layout, cache key =====
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 const MAIN_LOGO = require("../../assets/images/mainlogo.png");
-
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const ACCENT_GREEN = "#6DBB3F";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
-const ORANGE = "#F4A24C";
 
 const H_PADDING = 20;
 const CARD_GAP = 8;
@@ -74,30 +67,43 @@ const CITIZEN_DASHBOARD_CACHE_KEY = "citizen.dashboard";
 const PHOTO_PLACEHOLDER =
   "https://placehold.co/900x600/eaf6e4/087a0d?text=CitiSense+Complaint";
 
+// ===== [CITIZEN DASHBOARD] Status card config & bottom tab config =====
 const dashboardCardConfig = [
   {
     title: "Pending",
     statusNames: ["Pending"],
     filter: "Pending",
     icon: "clock-outline",
+    accent: "rgba(8, 122, 13, 1)",
+    background: "rgba(255, 255, 255, 1)",
+    border: "rgba(226, 231, 224, 1)",
   },
   {
     title: "In Progress",
     statusNames: ["In Progress"],
     filter: "In Progress",
     icon: "progress-wrench",
+    accent: "rgba(8, 122, 13, 1)",
+    background: "rgba(255, 255, 255, 1)",
+    border: "rgba(226, 231, 224, 1)",
   },
   {
     title: "For Validation",
     statusNames: ["For Validation", "Validation"],
     filter: "For Validation",
     icon: "account-check-outline",
+    accent: "rgba(8, 122, 13, 1)",
+    background: "rgba(255, 255, 255, 1)",
+    border: "rgba(226, 231, 224, 1)",
   },
   {
     title: "Completed",
     statusNames: ["Completed"],
     filter: "Completed",
     icon: "check-circle-outline",
+    accent: "rgba(8, 122, 13, 1)",
+    background: "rgba(255, 255, 255, 1)",
+    border: "rgba(226, 231, 224, 1)",
   },
 ];
 
@@ -136,142 +142,17 @@ const bottomTabs = [
   },
 ];
 
+// ===== [CITIZEN DASHBOARD] Helpers: text, photo URLs, date/time formatting =====
 function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function normalizePhotoUrls(value) {
-  if (!value) return [];
-
-  if (Array.isArray(value)) return value.filter(Boolean);
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-
-      if (Array.isArray(parsed)) return parsed.filter(Boolean);
-    } catch {
-      return value ? [value] : [];
-    }
-  }
-
-  return [];
-}
-
-function extractComplaintPhotoPath(value) {
-  if (!value) return null;
-
-  const text = decodeURIComponent(String(value));
-  const publicMarker = "/storage/v1/object/public/complaint-photos/";
-  const signMarker = "/storage/v1/object/sign/complaint-photos/";
-
-  if (text.includes(publicMarker)) {
-    return text.split(publicMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (text.includes(signMarker)) {
-    return text.split(signMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (!/^https?:\/\//i.test(text)) {
-    return text.replace(/^complaint-photos\//, "").replace(/^\/+/, "");
-  }
-
-  return null;
-}
-
-async function createReadableComplaintPhotoUrl(value) {
-  if (!value) return null;
-
-  try {
-    const path = extractComplaintPhotoPath(value);
-
-    if (path) {
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from("complaint-photos")
-        .createSignedUrl(path, 60 * 60);
-
-      if (!signedError && signedData?.signedUrl) {
-        return signedData.signedUrl;
-      }
-
-      const { data: publicData } = supabase.storage
-        .from("complaint-photos")
-        .getPublicUrl(path);
-
-      if (publicData?.publicUrl) {
-        return publicData.publicUrl;
-      }
-    }
-
-    if (/^https?:\/\//i.test(String(value))) {
-      return String(value);
-    }
-  } catch (error) {
-    console.log("Resolve complaint photo error:", error);
-  }
-
-  return null;
-}
-
 async function resolveComplaintPhotoUrls(row) {
-  const rawUrls = normalizePhotoUrls(row?.photo_urls);
-  const resolvedUrls = [];
+  return resolveComplaintEvidencePhotoUrls(row);
+}
 
-  for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
-
-    if (resolvedUrl) {
-      resolvedUrls.push(resolvedUrl);
-    }
-  }
-
-  if (resolvedUrls.length > 0) {
-    return resolvedUrls;
-  }
-
-  if (!row?.id) return [];
-
-  try {
-    const { data: files, error } = await supabase.storage
-      .from("complaint-photos")
-      .list(String(row.id), {
-        limit: 20,
-        sortBy: { column: "name", order: "asc" },
-      });
-
-    if (error || !files?.length) return [];
-
-    const imageFiles = files.filter((file) => {
-      const name = String(file.name || "").toLowerCase();
-
-      if (name.startsWith("validation-")) return false;
-
-      return (
-        name.endsWith(".jpg") ||
-        name.endsWith(".jpeg") ||
-        name.endsWith(".png") ||
-        name.endsWith(".heic") ||
-        name.endsWith(".heif")
-      );
-    });
-
-    const listedUrls = [];
-
-    for (const file of imageFiles) {
-      const storagePath = `${row.id}/${file.name}`;
-      const resolvedUrl = await createReadableComplaintPhotoUrl(storagePath);
-
-      if (resolvedUrl) {
-        listedUrls.push(resolvedUrl);
-      }
-    }
-
-    return listedUrls;
-  } catch (error) {
-    console.log("List complaint photos error:", error);
-    return [];
-  }
+async function resolveValidationPhotoUrls(row) {
+  return resolveComplaintValidationPhotoUrls(row);
 }
 
 function formatDbDate(value) {
@@ -298,80 +179,7 @@ function formatDbTime(value) {
   });
 }
 
-function normalizeValidationPhotoUrls(value) {
-  if (!value) return [];
-
-  if (Array.isArray(value)) return value.filter(Boolean);
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-
-      if (Array.isArray(parsed)) return parsed.filter(Boolean);
-    } catch {
-      return value ? [value] : [];
-    }
-  }
-
-  return [];
-}
-
-async function resolveValidationPhotoUrls(row) {
-  const rawUrls = normalizeValidationPhotoUrls(
-    row?.citizen_validation_photo_urls ||
-      row?.validation_photo_urls ||
-      row?.citizen_feedback_photo_urls
-  );
-
-  const resolvedUrls = [];
-
-  for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
-
-    if (resolvedUrl) {
-      resolvedUrls.push(resolvedUrl);
-    }
-  }
-
-  if (resolvedUrls.length > 0) {
-    return resolvedUrls;
-  }
-
-  if (!row?.id) return [];
-
-  try {
-    const { data: files, error } = await supabase.storage
-      .from("complaint-photos")
-      .list(String(row.id), {
-        limit: 20,
-        sortBy: { column: "name", order: "asc" },
-      });
-
-    if (error || !files?.length) return [];
-
-    const validationFiles = files.filter((file) => {
-      const name = String(file.name || "").toLowerCase();
-      return name.startsWith("validation-");
-    });
-
-    const listedUrls = [];
-
-    for (const file of validationFiles) {
-      const storagePath = `${row.id}/${file.name}`;
-      const resolvedUrl = await createReadableComplaintPhotoUrl(storagePath);
-
-      if (resolvedUrl) {
-        listedUrls.push(resolvedUrl);
-      }
-    }
-
-    return listedUrls;
-  } catch (error) {
-    console.log("List validation photos error:", error);
-    return [];
-  }
-}
-
+// ===== [CITIZEN DASHBOARD] Status timeline builder =====
 function buildTimeline(status, createdAt, assignedOffice) {
   const submittedTime = `${formatDbDate(createdAt)} • ${formatDbTime(createdAt)}`;
 
@@ -415,6 +223,7 @@ function buildTimeline(status, createdAt, assignedOffice) {
   }));
 }
 
+// ===== [CITIZEN DASHBOARD] Helpers: complaint ID & validation flags =====
 function getDisplayComplaintId(row) {
   if (row.short_id) return String(row.short_id);
   if (row.complaint_short_id) return String(row.complaint_short_id);
@@ -443,28 +252,29 @@ function getValidationSubmitted(row) {
   );
 }
 
+// ===== [CITIZEN DASHBOARD] Badge styles: status, priority, concern type =====
 function getStatusStyle(status) {
   if (status === "Pending") {
-    return { bg: "#E8EEFF", color: BLUE, icon: "clock-outline" };
+    return { bg: "rgba(232, 238, 255, 1)", color: "rgba(49, 90, 154, 1)", icon: "clock-outline" };
   }
 
   if (status === "In Progress") {
-    return { bg: "#FFF8D6", color: "#C9A000", icon: "progress-wrench" };
+    return { bg: "rgba(255, 248, 214, 1)", color: "rgba(201, 160, 0, 1)", icon: "progress-wrench" };
   }
 
   if (status === "For Validation" || status === "Validation") {
-    return { bg: "#F3EAFF", color: "#7A3EA8", icon: "clipboard-check-outline" };
+    return { bg: "rgba(243, 234, 255, 1)", color: "rgba(122, 62, 168, 1)", icon: "clipboard-check-outline" };
   }
 
   if (status === "Completed") {
-    return { bg: "#DFF0DF", color: GREEN, icon: "check-circle-outline" };
+    return { bg: "rgba(223, 240, 223, 1)", color: "rgba(8, 122, 13, 1)", icon: "check-circle-outline" };
   }
 
   if (status === "Returned") {
-    return { bg: "#FFF0F0", color: RED, icon: "backup-restore" };
+    return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)", icon: "backup-restore" };
   }
 
-  return { bg: "#F1F1F1", color: MUTED, icon: "file-document-outline" };
+  return { bg: "rgba(241, 241, 241, 1)", color: "rgba(111, 119, 111, 1)", icon: "file-document-outline" };
 }
 
 function getDashboardStatusRank(status) {
@@ -475,14 +285,14 @@ function getDashboardStatusRank(status) {
 
 function getPriorityStyle(priority) {
   if (priority === "Critical" || priority === "Urgent") {
-    return { bg: "#FFF0F0", color: RED };
+    return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
   }
 
-  if (priority === "High") return { bg: "#FFF2E8", color: ORANGE };
+  if (priority === "High") return { bg: "rgba(255, 242, 232, 1)", color: "rgba(244, 162, 76, 1)" };
 
-  if (priority === "Low") return { bg: "#F1F4F1", color: MUTED };
+  if (priority === "Low") return { bg: "rgba(241, 244, 241, 1)", color: "rgba(111, 119, 111, 1)" };
 
-  return { bg: LIGHT_GREEN, color: GREEN };
+  return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
 }
 
 function normalizeConcernType(value, isEmergency = false, priority = "Normal") {
@@ -502,12 +312,13 @@ function normalizeConcernType(value, isEmergency = false, priority = "Normal") {
 
 function getConcernStyle(concernType) {
   if (concernType === "Emergency") {
-    return { bg: "#FFF0F0", color: RED, icon: "alert-triangle" };
+    return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)", icon: "alert-triangle" };
   }
 
-  return { bg: LIGHT_GREEN, color: GREEN, icon: "check-circle" };
+  return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)", icon: "check-circle" };
 }
 
+// ===== [CITIZEN DASHBOARD] Map DB complaint row -> UI complaint object =====
 async function mapDashboardComplaint(row) {
   const createdAt =
     row.created_at ||
@@ -563,6 +374,7 @@ async function mapDashboardComplaint(row) {
   };
 }
 
+// ===== [CITIZEN DASHBOARD] Greeting, date header & date parsing helpers =====
 function getGreetingByTime(date) {
   const hour = date.getHours();
 
@@ -626,15 +438,18 @@ function parseComplaintDateTime(date, time) {
   return new Date(year, month, day, hour, minute).getTime();
 }
 
+// ===== [CITIZEN DASHBOARD] Screen component =====
 export default function CitizenDashboard() {
   const router = useRouter();
   const pathname = usePathname();
 
+  // --- [CITIZEN DASHBOARD] Register push token on mount ---
   useEffect(() => {
     console.log("CITIZEN DASHBOARD: registering push token...");
     registerPushTokenForCurrentUser();
   }, []);
 
+  // --- [CITIZEN DASHBOARD] State (cache-seeded) & fonts ---
   const cachedDashboard = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedComplaint, setSelectedComplaint] = useState(null);
@@ -658,7 +473,9 @@ export default function CitizenDashboard() {
       completed: 0,
     }
   );
-  const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
+  const [loadingComplaints, setLoadingComplaints] = useState(
+    !cachedDashboard?.counts
+  );
   const [currentUserId, setCurrentUserId] = useState(
     cachedDashboard?.currentUserId ?? null
   );
@@ -674,6 +491,7 @@ export default function CitizenDashboard() {
     
   });
 
+  // --- [CITIZEN DASHBOARD] Debounced navigation ---
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
 
@@ -706,6 +524,7 @@ export default function CitizenDashboard() {
     };
   }, []);
 
+  // --- [CITIZEN DASHBOARD] Profile avatar subscription ---
   useEffect(() => {
     return subscribeProfileAvatar((url) => {
       setProfilePhotoUrl(url);
@@ -717,6 +536,7 @@ export default function CitizenDashboard() {
     });
   }, []);
 
+  // --- [CITIZEN DASHBOARD] Unread notification badge count ---
   const loadUnreadNotificationCount = useCallback(async (userId = null) => {
     try {
       const targetUserId = userId || currentUserId;
@@ -750,6 +570,7 @@ export default function CitizenDashboard() {
     }
   }, [currentUserId]);
 
+  // --- [CITIZEN DASHBOARD] Load status counts & latest complaints ---
   const loadDashboardComplaints = useCallback(async () => {
     try {
       if (shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY)) {
@@ -762,7 +583,10 @@ export default function CitizenDashboard() {
       } = await supabase.auth.getUser();
 
       if (userError || !currentUser) {
-        if (shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY)) {
+        if (
+          shouldShowPageLoader(CITIZEN_DASHBOARD_CACHE_KEY) &&
+          !getPageCache(CITIZEN_DASHBOARD_CACHE_KEY)?.counts
+        ) {
           setCurrentUserId(null);
           setComplaintsData([]);
           setDashboardCounts({
@@ -863,16 +687,63 @@ export default function CitizenDashboard() {
     }
   }, [loadUnreadNotificationCount]);
 
+  // --- [CITIZEN DASHBOARD] On focus: restore cache, then refresh ---
   useFocusEffect(
     useCallback(() => {
-      const cached = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY);
-      if (cached?.counts) {
-        setDashboardCounts(cached.counts);
-      }
-      loadDashboardComplaints();
+      let cancelled = false;
+
+      const restoreAndRefresh = async () => {
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          const userId = session?.user?.id;
+
+          if (userId) {
+            const cached = await ensureDashboardCacheHydrated(
+              userId,
+              CITIZEN_DASHBOARD_CACHE_KEY
+            );
+            if (cancelled) return;
+
+            if (cached?.counts) {
+              setDashboardCounts(cached.counts);
+              setLoadingComplaints(false);
+            }
+            if (Array.isArray(cached?.complaints) && cached.complaints.length) {
+              setComplaintsData(cached.complaints);
+            }
+            if (cached?.currentUserId) {
+              setCurrentUserId(cached.currentUserId);
+            }
+            if (typeof cached?.unreadNotificationCount === "number") {
+              setUnreadNotificationCount(cached.unreadNotificationCount);
+            }
+          } else {
+            const cached = getPageCache(CITIZEN_DASHBOARD_CACHE_KEY);
+            if (cached?.counts) {
+              setDashboardCounts(cached.counts);
+              setLoadingComplaints(false);
+            }
+          }
+        } catch (error) {
+          console.log("Citizen dashboard cache restore error:", error);
+        }
+
+        if (!cancelled) {
+          loadDashboardComplaints();
+        }
+      };
+
+      restoreAndRefresh();
+
+      return () => {
+        cancelled = true;
+      };
     }, [loadDashboardComplaints])
   );
 
+  // --- [CITIZEN DASHBOARD] Derived: pending validation count ---
   const pendingValidationCount = useMemo(
     () =>
       dashboardCounts.forValidation ||
@@ -880,6 +751,7 @@ export default function CitizenDashboard() {
     [dashboardCounts.forValidation, complaintsData]
   );
 
+  // --- [CITIZEN DASHBOARD] Clock tick (updates greeting/date) ---
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentDate(new Date());
@@ -888,6 +760,7 @@ export default function CitizenDashboard() {
     return () => clearInterval(timer);
   }, []);
 
+  // --- [CITIZEN DASHBOARD] Realtime: notifications & complaints channels ---
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -929,6 +802,7 @@ export default function CitizenDashboard() {
     };
   }, [currentUserId, loadUnreadNotificationCount, loadDashboardComplaints]);
 
+  // --- [CITIZEN DASHBOARD] Derived: greeting, date, cards, latest complaints ---
   const greeting = useMemo(() => getGreetingByTime(currentDate), [currentDate]);
 
   const formattedDate = useMemo(
@@ -966,6 +840,7 @@ export default function CitizenDashboard() {
       .slice(0, 4);
   }, [complaintsData]);
 
+  // --- [CITIZEN DASHBOARD] Complaint details modal & photo viewer handlers ---
   const openComplaintDetails = (complaint) => {
     setSelectedComplaint(complaint);
     setComplaintModalVisible(true);
@@ -997,15 +872,17 @@ export default function CitizenDashboard() {
     }, 160);
   };
 
-  if (!fontsLoaded && !cachedDashboard) {
+  if (!fontsLoaded && !cachedDashboard?.counts) {
     return <PageSkeleton variant="dashboard" />;
   }
 
+  // --- [CITIZEN DASHBOARD] Render ---
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [CITIZEN DASHBOARD UI] Fixed header: logo, notifications, avatar */}
         <View style={styles.fixedHeader}>
           <View style={styles.logoRow}>
             <Image source={MAIN_LOGO} style={styles.mainLogoImage} />
@@ -1023,7 +900,7 @@ export default function CitizenDashboard() {
                 smoothNavigate("/citizen/notification")
               }
             >
-              <Ionicons name="notifications-outline" size={25} color={TEXT} />
+              <Ionicons name="notifications-outline" size={25} color="rgba(23, 23, 23, 1)" />
 
               {unreadNotificationCount > 0 && (
                 <View style={styles.notificationBadge}>
@@ -1047,7 +924,7 @@ export default function CitizenDashboard() {
                 style={styles.avatar}
                 />
               ) : (
-                <Ionicons name="person" size={25} color={GREEN} />
+                <Ionicons name="person" size={25} color="rgba(8, 122, 13, 1)" />
               )}
             </TouchableOpacity>
           </View>
@@ -1057,12 +934,14 @@ export default function CitizenDashboard() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+          {/* [CITIZEN DASHBOARD UI] Greeting & date */}
           <View style={styles.greetingContainer}>
             <Text style={styles.greetingSmall}>{greeting}</Text>
             <Text style={styles.greetingLarge}>Bogohanon!</Text>
             <Text style={styles.dateText}>{formattedDate}</Text>
           </View>
 
+          {/* [CITIZEN DASHBOARD UI] Validation reminder banner */}
           {pendingValidationCount > 0 ? (
             <TouchableOpacity
               activeOpacity={0.85}
@@ -1078,7 +957,7 @@ export default function CitizenDashboard() {
                 <MaterialCommunityIcons
                   name="clipboard-check-outline"
                   size={22}
-                  color="#7A3EA8"
+                  color="rgba(122, 62, 168, 1)"
                 />
               </View>
 
@@ -1093,10 +972,11 @@ export default function CitizenDashboard() {
                 </Text>
               </View>
 
-              <Feather name="chevron-right" size={20} color="#7A3EA8" />
+              <Feather name="chevron-right" size={20} color="rgba(122, 62, 168, 1)" />
             </TouchableOpacity>
           ) : null}
 
+          {/* [CITIZEN DASHBOARD UI] Status cards: Pending / In Progress / For Validation / Completed */}
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Dashboard</Text>
           </View>
@@ -1113,6 +993,8 @@ export default function CitizenDashboard() {
                     marginRight:
                       index === dashboardCards.length - 1 ? 0 : CARD_GAP,
                   },
+                  item.background && { backgroundColor: item.background },
+                  item.border && { borderColor: item.border },
                 ]}
                 onPress={() =>
                   smoothNavigate({
@@ -1121,20 +1003,30 @@ export default function CitizenDashboard() {
                   })
                 }
               >
-                <View style={styles.cardIconCircle}>
+                <View
+                  style={[
+                    styles.cardIconCircle,
+                    item.accent && { backgroundColor: item.accent },
+                  ]}
+                >
                   <MaterialCommunityIcons
                     name={item.icon}
                     size={23}
-                    color={WHITE}
+                    color="rgba(255, 255, 255, 1)"
                   />
                 </View>
 
-                <Text style={styles.cardTitle}>{item.title}</Text>
-                <Text style={styles.cardValue}>{item.value}</Text>
+                <Text style={[styles.cardTitle, item.accent && { color: item.accent }]}>
+                  {item.title}
+                </Text>
+                <Text style={[styles.cardValue, item.accent && { color: item.accent }]}>
+                  {item.value}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
 
+          {/* [CITIZEN DASHBOARD UI] My Complaints header + View All */}
           <View style={styles.sectionRow}>
             <Text style={styles.myComplaintsTitle}>My Complaints</Text>
 
@@ -1144,16 +1036,17 @@ export default function CitizenDashboard() {
               onPress={() => smoothNavigate("/citizen/complaints")}
             >
               <Text style={styles.viewAllText}>View All</Text>
-              <Feather name="chevron-right" size={17} color={MUTED} />
+              <Feather name="chevron-right" size={17} color="rgba(111, 119, 111, 1)" />
             </TouchableOpacity>
           </View>
 
+          {/* [CITIZEN DASHBOARD UI] Latest complaints list (skeleton / empty / cards) */}
           <View style={styles.complaintsList}>
             {loadingComplaints && complaintsData.length === 0 ? (
               <ComplaintListSkeleton count={3} />
             ) : latestComplaints.length === 0 ? (
               <View style={styles.emptyComplaintsCard}>
-                <Ionicons name="document-text-outline" size={30} color={MUTED} />
+                <Ionicons name="document-text-outline" size={30} color="rgba(111, 119, 111, 1)" />
                 <Text style={styles.emptyComplaintsTitle}>
                   No submitted complaints yet
                 </Text>
@@ -1246,33 +1139,33 @@ export default function CitizenDashboard() {
                     </View>
 
                     <View style={styles.detailRow}>
-                      <Feather name="tag" size={13} color={MUTED} />
+                      <Feather name="tag" size={13} color="rgba(111, 119, 111, 1)" />
                       <Text style={styles.detailText} numberOfLines={1}>
                         Category: {item.category}
                       </Text>
                     </View>
 
                     <View style={styles.detailRow}>
-                      <Feather name="briefcase" size={13} color={MUTED} />
+                      <Feather name="briefcase" size={13} color="rgba(111, 119, 111, 1)" />
                       <Text style={styles.detailText} numberOfLines={1}>
                         Assigned Office: {item.assignedOffice}
                       </Text>
                     </View>
 
                     <View style={styles.detailRow}>
-                      <Feather name="map-pin" size={13} color={MUTED} />
+                      <Feather name="map-pin" size={13} color="rgba(111, 119, 111, 1)" />
                       <Text style={styles.detailText} numberOfLines={1}>
                         {item.location}
                       </Text>
                     </View>
 
                     <View style={styles.detailRow}>
-                      <Feather name="calendar" size={13} color={MUTED} />
+                      <Feather name="calendar" size={13} color="rgba(111, 119, 111, 1)" />
                       <Text style={styles.detailText}>{item.date}</Text>
                     </View>
 
                     <View style={styles.detailRow}>
-                      <Feather name="clock" size={13} color={MUTED} />
+                      <Feather name="clock" size={13} color="rgba(111, 119, 111, 1)" />
                       <Text style={styles.detailText}>{item.time}</Text>
                     </View>
 
@@ -1300,7 +1193,7 @@ export default function CitizenDashboard() {
 
                       <View style={styles.viewRow}>
                         <Text style={styles.viewText}>View Details</Text>
-                        <Feather name="chevron-right" size={16} color={GREEN} />
+                        <Feather name="chevron-right" size={16} color="rgba(8, 122, 13, 1)" />
                       </View>
                     </View>
                   </TouchableOpacity>
@@ -1310,6 +1203,7 @@ export default function CitizenDashboard() {
           </View>
         </ScrollView>
 
+        {/* [CITIZEN DASHBOARD UI] Complaint details modal */}
         <Modal
           visible={complaintModalVisible}
           transparent
@@ -1320,6 +1214,7 @@ export default function CitizenDashboard() {
             <View style={styles.complaintDetailsSheet}>
               <View style={styles.modalHandle} />
 
+              {/* [CITIZEN DASHBOARD UI] Modal header + close button */}
               <View style={styles.modalHeaderRow}>
                 <Text style={styles.modalTitle}>Complaint Details</Text>
 
@@ -1328,7 +1223,7 @@ export default function CitizenDashboard() {
                   style={styles.modalCloseButton}
                   onPress={closeComplaintDetails}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -1337,6 +1232,7 @@ export default function CitizenDashboard() {
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={styles.modalScrollContent}
                 >
+                  {/* [CITIZEN DASHBOARD UI] Details: evidence & validation photos */}
                   {(() => {
                     const detailPhotos = (
                       selectedComplaint.photoUrls || []
@@ -1420,6 +1316,7 @@ export default function CitizenDashboard() {
                     );
                   })()}
 
+                  {/* [CITIZEN DASHBOARD UI] Details: title & description */}
                   <Text style={styles.complaintDetailsTitle}>
                     {selectedComplaint.title}
                   </Text>
@@ -1428,6 +1325,7 @@ export default function CitizenDashboard() {
                     {selectedComplaint.description}
                   </Text>
 
+                  {/* [CITIZEN DASHBOARD UI] Details: info card */}
                   <View style={styles.detailsInfoCard}>
                     <Text style={styles.detailsLabel}>Complaint ID</Text>
                     <Text style={styles.detailsValue}>
@@ -1475,6 +1373,7 @@ export default function CitizenDashboard() {
                     </Text>
                   </View>
 
+                  {/* [CITIZEN DASHBOARD UI] Details: status timeline */}
                   <Text style={styles.timelineTitle}>Status Timeline</Text>
 
                   <View style={styles.timelineBox}>
@@ -1488,7 +1387,7 @@ export default function CitizenDashboard() {
                             ]}
                           >
                             {step.done && (
-                              <Feather name="check" size={11} color={WHITE} />
+                              <Feather name="check" size={11} color="rgba(255, 255, 255, 1)" />
                             )}
                           </View>
 
@@ -1518,6 +1417,7 @@ export default function CitizenDashboard() {
                     ))}
                   </View>
 
+                  {/* [CITIZEN DASHBOARD UI] Details: validation action / validated notice */}
                   {canCitizenSubmitValidation(selectedComplaint) ? (
                     <TouchableOpacity
                       activeOpacity={0.8}
@@ -1534,7 +1434,7 @@ export default function CitizenDashboard() {
                         });
                       }}
                     >
-                      <Ionicons name="camera-outline" size={18} color={WHITE} />
+                      <Ionicons name="camera-outline" size={18} color="rgba(255, 255, 255, 1)" />
                       <Text style={styles.returnedActionText}>
                         {isValidationResubmit(selectedComplaint)
                           ? "Submit Validation Again"
@@ -1547,7 +1447,7 @@ export default function CitizenDashboard() {
                       <Ionicons
                         name="checkmark-circle-outline"
                         size={18}
-                        color={MUTED}
+                        color="rgba(111, 119, 111, 1)"
                       />
                       <Text style={styles.validatedNoticeText}>
                         Validated — waiting for admin review
@@ -1558,6 +1458,7 @@ export default function CitizenDashboard() {
               )}
             </View>
 
+            {/* [CITIZEN DASHBOARD UI] Photo viewer (over modal) */}
             <FullscreenPhotoViewer
               variant="overlay"
               visible={photoViewerVisible && complaintModalVisible}
@@ -1567,6 +1468,7 @@ export default function CitizenDashboard() {
           </View>
         </Modal>
 
+        {/* [CITIZEN DASHBOARD UI] Photo viewer (standalone) */}
         <FullscreenPhotoViewer
           visible={photoViewerVisible && !complaintModalVisible}
           uri={selectedPhoto}
@@ -1577,24 +1479,26 @@ export default function CitizenDashboard() {
   );
 }
 
+// ===== [CITIZEN DASHBOARD] Styles =====
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   loader: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
+  // --- Header ---
   fixedHeader: {
     height: 46,
     paddingHorizontal: H_PADDING,
@@ -1629,13 +1533,13 @@ const styles = StyleSheet.create({
   logoText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 25,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.1,
     backgroundColor: "transparent",
   },
 
   logoTextLight: {
-    color: ACCENT_GREEN,
+    color: "rgba(109, 187, 63, 1)",
   },
 
   headerRightActions: {
@@ -1660,9 +1564,9 @@ const styles = StyleSheet.create({
     minWidth: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 1.5,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -1671,7 +1575,7 @@ const styles = StyleSheet.create({
   notificationBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 9,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     lineHeight: 12,
     textAlign: "center",
   },
@@ -1680,9 +1584,9 @@ const styles = StyleSheet.create({
     width: 43,
     height: 43,
     borderRadius: 22,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -1694,6 +1598,7 @@ const styles = StyleSheet.create({
     resizeMode: "cover",
   },
 
+  // --- Greeting ---
   greetingContainer: {
     marginBottom: 16,
   },
@@ -1701,14 +1606,14 @@ const styles = StyleSheet.create({
   greetingSmall: {
     fontFamily: "Poppins_700Bold",
     fontSize: 19,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.4,
   },
 
   greetingLarge: {
     fontFamily: "Poppins_700Bold",
     fontSize: 29,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     lineHeight: 35,
     letterSpacing: 0.3,
   },
@@ -1716,11 +1621,12 @@ const styles = StyleSheet.create({
   dateText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 13,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 4,
     letterSpacing: 0.4,
   },
 
+  // --- Validation reminder banner ---
   validationReminderBanner: {
     flexDirection: "row",
     alignItems: "center",
@@ -1730,15 +1636,15 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#E6D4F5",
-    backgroundColor: "#F9F2FF",
+    borderColor: "rgba(230, 212, 245, 1)",
+    backgroundColor: "rgba(249, 242, 255, 1)",
   },
 
   validationReminderIconCircle: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "#F3EAFF",
+    backgroundColor: "rgba(243, 234, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1750,14 +1656,14 @@ const styles = StyleSheet.create({
   validationReminderTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: "#7A3EA8",
+    color: "rgba(122, 62, 168, 1)",
     lineHeight: 18,
   },
 
   validationReminderSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     lineHeight: 16,
     marginTop: 2,
   },
@@ -1772,13 +1678,13 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 20,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   myComplaintsTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 22,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.2,
   },
 
@@ -1790,10 +1696,11 @@ const styles = StyleSheet.create({
   viewAllText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginRight: 2,
   },
 
+  // --- Status cards ---
   dashboardCardsRow: {
     flexDirection: "row",
     marginBottom: 19,
@@ -1803,11 +1710,11 @@ const styles = StyleSheet.create({
     height: 138,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     paddingTop: 12,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.04,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
@@ -1818,7 +1725,7 @@ const styles = StyleSheet.create({
     width: 43,
     height: 43,
     borderRadius: 22,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 7,
@@ -1827,7 +1734,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.7,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     textAlign: "center",
     lineHeight: 14,
     height: 34,
@@ -1837,11 +1744,12 @@ const styles = StyleSheet.create({
   cardValue: {
     fontFamily: "Poppins_700Bold",
     fontSize: 31,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginTop: 0,
     lineHeight: 36,
   },
 
+  // --- Complaints list & cards ---
   complaintsList: {
     marginTop: 0,
   },
@@ -1849,9 +1757,9 @@ const styles = StyleSheet.create({
   emptyComplaintsCard: {
     minHeight: 120,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     borderRadius: 12,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18,
@@ -1861,27 +1769,27 @@ const styles = StyleSheet.create({
   emptyComplaintsTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 8,
   },
 
   emptyComplaintsText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     marginTop: 3,
   },
 
   complaintCard: {
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     borderRadius: 16,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 13,
     marginBottom: 8,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.03,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
@@ -1899,7 +1807,7 @@ const styles = StyleSheet.create({
     height: 58,
     borderRadius: 10,
     overflow: "hidden",
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
     marginRight: 10,
   },
 
@@ -1923,7 +1831,7 @@ const styles = StyleSheet.create({
   complaintId: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 10,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   priorityPill: {
@@ -1943,7 +1851,7 @@ const styles = StyleSheet.create({
   complaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 2,
   },
 
@@ -1959,7 +1867,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     paddingRight: 2,
   },
 
@@ -1991,7 +1899,7 @@ const styles = StyleSheet.create({
   detailText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginLeft: 7,
     flexShrink: 1,
   },
@@ -2028,19 +1936,20 @@ const styles = StyleSheet.create({
   viewText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 11.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -2068,6 +1977,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Complaint details modal ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -2078,7 +1988,7 @@ const styles = StyleSheet.create({
     maxHeight: "88%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 30 : 20,
@@ -2088,7 +1998,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -2103,14 +2013,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2124,7 +2034,7 @@ const styles = StyleSheet.create({
     height: 165,
     borderRadius: 16,
     resizeMode: "cover",
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
     marginBottom: 13,
   },
 
@@ -2138,7 +2048,7 @@ const styles = StyleSheet.create({
     width: 176,
     height: 165,
     borderRadius: 16,
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
   },
 
   detailsValidationPhotosBox: {
@@ -2148,13 +2058,13 @@ const styles = StyleSheet.create({
   complaintDetailsTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 16,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   detailsDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginTop: 5,
     marginBottom: 12,
@@ -2163,8 +2073,8 @@ const styles = StyleSheet.create({
   detailsInfoCard: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     marginBottom: 14,
@@ -2173,21 +2083,22 @@ const styles = StyleSheet.create({
   detailsLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginTop: 8,
   },
 
   detailsValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 2,
   },
 
+  // --- Status timeline ---
   timelineTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 10,
   },
 
@@ -2211,27 +2122,27 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 9,
     borderWidth: 2,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
 
   timelineCircleDone: {
-    backgroundColor: GREEN,
-    borderColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
+    borderColor: "rgba(8, 122, 13, 1)",
   },
 
   timelineLine: {
     width: 2,
     flex: 1,
-    backgroundColor: BORDER,
+    backgroundColor: "rgba(226, 231, 224, 1)",
     marginTop: 3,
     marginBottom: 3,
   },
 
   timelineLineDone: {
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
   },
 
   timelineTextBox: {
@@ -2242,25 +2153,26 @@ const styles = StyleSheet.create({
   timelineStep: {
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   timelineStepDone: {
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     fontFamily: "Poppins_600SemiBold",
   },
 
   timelineTime: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
+  // --- Validation actions ---
   returnedActionButton: {
     marginTop: 4,
     marginBottom: 8,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     borderRadius: 12,
     minHeight: 46,
     paddingHorizontal: 16,
@@ -2273,13 +2185,13 @@ const styles = StyleSheet.create({
   returnedActionText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   validatedNotice: {
     marginTop: 4,
     marginBottom: 8,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderRadius: 12,
     minHeight: 46,
     paddingHorizontal: 16,
@@ -2288,12 +2200,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
   },
 
   validatedNoticeText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 });

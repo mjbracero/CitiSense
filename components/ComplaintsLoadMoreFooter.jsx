@@ -1,7 +1,6 @@
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 
-const GREEN = "#087A0D";
-const MUTED = "#6F776F";
+// ===== [LOAD MORE FOOTER] Pagination "loading more" footer for complaint lists =====
 
 export default function ComplaintsLoadMoreFooter({
   loading = false,
@@ -11,7 +10,7 @@ export default function ComplaintsLoadMoreFooter({
 
   return (
     <View style={styles.wrap}>
-      <ActivityIndicator size="small" color={GREEN} />
+      <ActivityIndicator size="small" color="rgba(8, 122, 13, 1)" />
       <Text style={styles.text}>{label}</Text>
     </View>
   );
@@ -27,6 +26,6 @@ const styles = StyleSheet.create({
   text: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 });

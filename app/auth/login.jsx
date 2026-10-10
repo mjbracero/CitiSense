@@ -7,6 +7,7 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -16,13 +17,9 @@ import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
 import { markPasswordRecoveryActive } from "../../lib/passwordReset";
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
-import {
-  AuthLogoStage,
-  AuthScreenBackground,
-  AUTH_BG_TOP,
-  AUTH_GREEN,
-} from "../../components/AuthScreenChrome";
+import { AuthLogoStage, AuthScreenBackground } from "../../components/AuthScreenChrome";
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
+import { useKeyboardInset } from "../../hooks/useKeyboardInset";
 import { writeAuditLog } from "../../lib/auditLogService";
 import { setPageCacheUser, hydratePageCache } from "../../lib/pageDataCache";
 import { saveLastRoute } from "../../lib/navigationPersistence";
@@ -35,16 +32,21 @@ import {
   Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
 
+// ===== [AUTH LOGIN] Login screen component =====
 export default function LoginScreen() {
+  // --- [AUTH LOGIN] State, refs & keyboard ---
   const router = useRouter();
   const { confirmed } = useLocalSearchParams();
   const shownEmailConfirmedRef = useRef(false);
+  const { keyboardHeight } = useKeyboardInset();
+  const isKeyboardOpen = keyboardHeight > 0;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // --- [AUTH LOGIN] Fonts ---
   useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
@@ -52,6 +54,7 @@ export default function LoginScreen() {
     Poppins_700Bold,
   });
 
+  // --- [AUTH LOGIN] "Email confirmed" toast from deep link ---
   useEffect(() => {
     if (confirmed === "1" && !shownEmailConfirmedRef.current) {
       shownEmailConfirmedRef.current = true;
@@ -62,6 +65,7 @@ export default function LoginScreen() {
     }
   }, [confirmed]);
 
+  // --- [AUTH LOGIN] Login handler: auth, profile/ban check, role routing, audit ---
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
       notify("Missing fields", "Please enter email and password.");
@@ -178,20 +182,38 @@ export default function LoginScreen() {
     }
   };
 
+  // --- [AUTH LOGIN] Navigation handlers ---
   const handleForgotPassword = () => {
     router.push("/auth/forgotPassword");
   };
 
+  // --- [AUTH LOGIN] Render ---
   return (
     <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
+      {/* [AUTH LOGIN UI] Background */}
       <AuthScreenBackground />
 
+      {/* [AUTH LOGIN UI] Keyboard-aware scroll container */}
       <KeyboardAwareScrollView
-          contentContainerStyle={styles.container}
-          showsVerticalScrollIndicator={false}
-        >
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.container,
+          isKeyboardOpen && styles.containerKeyboardOpen,
+        ]}
+        enableOnAndroid
+        enableAutomaticScroll
+        enableResetScrollToCoords={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        extraScrollHeight={Platform.OS === "android" ? 8 : 12}
+        extraHeight={Platform.OS === "android" ? 10 : 12}
+        showsVerticalScrollIndicator={false}
+        bounces
+      >
+          {/* [AUTH LOGIN UI] Logo */}
           <AuthLogoStage />
 
+          {/* [AUTH LOGIN UI] Title & subtitle */}
           <Animated.Text
             entering={FadeInDown.delay(120).duration(520)}
             style={[styles.welcomeTitle, { fontFamily: "Poppins_700Bold" }]}
@@ -206,21 +228,23 @@ export default function LoginScreen() {
             Sign in to continue improving our community together.
           </Animated.Text>
 
+          {/* [AUTH LOGIN UI] Login form card */}
           <Animated.View
             entering={FadeInUp.delay(260).duration(560)}
             style={styles.form}
           >
+            {/* [AUTH LOGIN UI] Email field */}
             <Text style={[styles.label, { fontFamily: "Poppins_600SemiBold" }]}>
               Email
             </Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="mail" size={18} color={AUTH_GREEN} />
+              <Ionicons name="mail" size={18} color="rgba(10, 118, 10, 1)" />
 
               <TextInput
                 style={[styles.input, { fontFamily: "Poppins_400Regular" }]}
                 placeholder="Enter your email"
-                placeholderTextColor="#717A6D"
+                placeholderTextColor="rgba(113, 122, 109, 1)"
                 value={email}
                 onChangeText={setEmail}
                 keyboardType="email-address"
@@ -229,12 +253,13 @@ export default function LoginScreen() {
               />
             </View>
 
+            {/* [AUTH LOGIN UI] Password field with show/hide toggle */}
             <Text style={[styles.label, { fontFamily: "Poppins_600SemiBold" }]}>
               Password
             </Text>
 
             <View style={styles.inputWrapper}>
-              <Ionicons name="lock-closed" size={18} color={AUTH_GREEN} />
+              <Ionicons name="lock-closed" size={18} color="rgba(10, 118, 10, 1)" />
 
               <TextInput
                 style={[
@@ -245,9 +270,12 @@ export default function LoginScreen() {
                   },
                 ]}
                 placeholder="Enter your password"
-                placeholderTextColor="#717A6D"
+                placeholderTextColor="rgba(113, 122, 109, 1)"
                 value={password}
                 onChangeText={setPassword}
+                keyboardType="default"
+                autoCapitalize="none"
+                autoCorrect={false}
                 secureTextEntry={!showPassword}
               />
 
@@ -259,11 +287,12 @@ export default function LoginScreen() {
                 <Ionicons
                   name={showPassword ? "eye-off" : "eye"}
                   size={18}
-                  color="#717A6D"
+                  color="rgba(113, 122, 109, 1)"
                 />
               </TouchableOpacity>
             </View>
 
+            {/* [AUTH LOGIN UI] Forgot password link */}
             <TouchableOpacity
               style={styles.forgotPasswordButton}
               onPress={handleForgotPassword}
@@ -279,14 +308,15 @@ export default function LoginScreen() {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
+            {/* [AUTH LOGIN UI] Log In button */}
+          <TouchableOpacity
               style={[styles.loginButton, loading && styles.disabledButton]}
               onPress={handleLogin}
               disabled={loading}
               activeOpacity={0.8}
             >
               {loading ? (
-                <ActivityIndicator color="#FFFFFF" />
+                <ActivityIndicator color="rgba(255, 255, 255, 1)" />
               ) : (
                 <Text
                   style={[
@@ -300,11 +330,12 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </Animated.View>
 
+          {/* [AUTH LOGIN UI] "Register" link footer */}
           <Animated.View
             entering={FadeIn.delay(420).duration(500)}
             style={styles.registerContainer}
           >
-            <Text style={{ fontFamily: "Poppins_400Regular", color: "#41493E" }}>
+            <Text style={{ fontFamily: "Poppins_400Regular", color: "rgba(65, 73, 62, 1)" }}>
               Don&apos;t have an account?{" "}
             </Text>
 
@@ -312,7 +343,7 @@ export default function LoginScreen() {
               <Text
                 style={{
                   fontFamily: "Poppins_700Bold",
-                  color: AUTH_GREEN,
+                  color: "rgba(10, 118, 10, 1)",
                 }}
               >
                 Register
@@ -324,10 +355,16 @@ export default function LoginScreen() {
   );
 }
 
+// ===== [AUTH LOGIN] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout ---
   safeArea: {
     flex: 1,
-    backgroundColor: AUTH_BG_TOP,
+    backgroundColor: "rgba(243, 250, 241, 1)",
+  },
+
+  scroll: {
+    flex: 1,
   },
 
   container: {
@@ -339,11 +376,18 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
 
+  containerKeyboardOpen: {
+    justifyContent: "flex-start",
+    paddingTop: 16,
+    paddingBottom: 16,
+  },
+
+  // --- Title & subtitle ---
   welcomeTitle: {
     width: 280,
     textAlign: "center",
     fontSize: 24,
-    color: AUTH_GREEN,
+    color: "rgba(10, 118, 10, 1)",
     marginTop: 4,
   },
 
@@ -351,19 +395,20 @@ const styles = StyleSheet.create({
     width: 280,
     textAlign: "center",
     fontSize: 13,
-    color: "#41493E",
+    color: "rgba(65, 73, 62, 1)",
     lineHeight: 20,
     marginTop: 8,
     marginBottom: 8,
   },
 
+  // --- Form & inputs ---
   form: {
     width: "100%",
     marginTop: 28,
     backgroundColor: "rgba(255,255,255,0.88)",
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#DCE8D6",
+    borderColor: "rgba(220, 232, 214, 1)",
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 18,
@@ -371,7 +416,7 @@ const styles = StyleSheet.create({
 
   label: {
     fontSize: 13,
-    color: "#41493E",
+    color: "rgba(65, 73, 62, 1)",
     marginBottom: 6,
     marginTop: 8,
   },
@@ -380,19 +425,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#B4B4B4",
+    borderColor: "rgba(180, 180, 180, 1)",
     borderRadius: 10,
     paddingHorizontal: 12,
     height: 50,
     marginBottom: 12,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   input: {
     flex: 1,
     height: "100%",
     fontSize: 13,
-    color: "#41493E",
+    color: "rgba(65, 73, 62, 1)",
     marginLeft: 8,
   },
 
@@ -409,11 +454,12 @@ const styles = StyleSheet.create({
 
   forgotPasswordText: {
     fontSize: 13,
-    color: AUTH_GREEN,
+    color: "rgba(10, 118, 10, 1)",
   },
 
+  // --- Buttons & footer ---
   loginButton: {
-    backgroundColor: AUTH_GREEN,
+    backgroundColor: "rgba(10, 118, 10, 1)",
     borderRadius: 50,
     height: 52,
     justifyContent: "center",
@@ -425,7 +471,7 @@ const styles = StyleSheet.create({
   },
 
   loginButtonText: {
-    color: "#FFFFFF",
+    color: "rgba(255, 255, 255, 1)",
     fontSize: 16,
   },
 

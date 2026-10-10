@@ -19,6 +19,59 @@ type NotifyDepartmentHeadsRequest = {
   excludeDepartmentHeadId?: string | null;
 };
 
+function normalizeOfficeKey(value: string) {
+  return String(value || "")
+    .replace(/['’]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function parseAssignedOffices(department = "") {
+  // Only split dual-routed offices on "&". Never split on the word "and"
+  // (e.g. "City Planning and Development Office" is one office).
+  return String(department || "")
+    .split(/\s*&\s*/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function officesMatch(left: string, right: string) {
+  const leftKey = normalizeOfficeKey(left);
+  const rightKey = normalizeOfficeKey(right);
+
+  if (!leftKey || !rightKey) return false;
+  if (leftKey === rightKey) return true;
+  if (leftKey.includes(rightKey) || rightKey.includes(leftKey)) return true;
+
+  const leftTokens = leftKey
+    .split(" ")
+    .filter((token) => token.length > 2 && !["office", "city", "the", "of", "and", "lgu", "bogo", "department"].includes(token));
+  const rightTokens = rightKey
+    .split(" ")
+    .filter((token) => token.length > 2 && !["office", "city", "the", "of", "and", "lgu", "bogo", "department"].includes(token));
+
+  if (!leftTokens.length || !rightTokens.length) return false;
+
+  const shared = leftTokens.filter((token) => rightTokens.includes(token));
+  const minimum = Math.min(leftTokens.length, rightTokens.length);
+  return shared.length >= Math.max(1, Math.min(2, minimum));
+}
+
+function profileMatchesAssignedOffice(
+  profileDepartment: string | null | undefined,
+  assignedOffice: string
+) {
+  const profileParts = parseAssignedOffices(profileDepartment || "");
+  const assignedParts = parseAssignedOffices(assignedOffice);
+
+  if (!profileParts.length || !assignedParts.length) return false;
+
+  return profileParts.some((profilePart) =>
+    assignedParts.some((assignedPart) => officesMatch(profilePart, assignedPart))
+  );
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -70,13 +123,7 @@ Deno.serve(async (request) => {
     const message = String(body.message || "There is a new department update.").trim();
     const excludeDepartmentHeadId = body.excludeDepartmentHeadId || null;
 
-    // Support dual routing e.g. "BFP Bogo City Fire Station & CDRRMO"
-    const departments = department
-      .split(/\s*&\s*/)
-      .map((part) => part.replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-
-    if (departments.length === 0 || !complaintId) {
+    if (!department || !complaintId) {
       return new Response(
         JSON.stringify({ error: "Missing department or complaint id." }),
         {
@@ -91,9 +138,10 @@ Deno.serve(async (request) => {
     const { data: departmentHeads, error: departmentHeadsError } =
       await adminClient
         .from("profiles")
-        .select("id")
-        .eq("role", "moderator")
-        .in("department", departments);
+        .select("id, department, role")
+        .or(
+          "role.eq.moderator,role.eq.departmentHead,role.ilike.moderator,role.ilike.departmenthead"
+        );
 
     if (departmentHeadsError) {
       throw departmentHeadsError;
@@ -102,6 +150,9 @@ Deno.serve(async (request) => {
     const departmentHeadIds = [
       ...new Set(
         (departmentHeads || [])
+          .filter((profile) =>
+            profileMatchesAssignedOffice(profile.department, department)
+          )
           .map((profile) => profile.id)
           .filter((id) => id && id !== excludeDepartmentHeadId)
       ),

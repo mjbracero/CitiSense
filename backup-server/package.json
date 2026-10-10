@@ -1,0 +1,24 @@
+{
+  "name": "citisense-backup-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Independent backup API for CitiSense (database + storage), outside Supabase.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --env-file=.env src/server.js",
+    "backup:now": "node src/cli.js backup",
+    "backup:local": "node --env-file=.env src/cli.js backup",
+    "restore:storage": "node scripts/restore-storage.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.4",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3"
+  }
+}

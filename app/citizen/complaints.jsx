@@ -20,7 +20,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Keyboard,
   Modal,
@@ -38,6 +37,7 @@ import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import ComplaintsLoadMoreFooter from "../../components/ComplaintsLoadMoreFooter";
 import { ComplaintListSkeleton, PageSkeleton } from "../../components/skeletons";
 import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
+import EvidencePrivacyEditor from "../../components/EvidencePrivacyEditor";
 import Skeleton from "../../components/Skeleton";
 import {
   getProfileDisplayName,
@@ -83,16 +83,7 @@ import {
 } from "../../lib/complaintPhotoCache";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const ORANGE = "#F4A24C";
-const BLUE = "#315A9A";
+// ===== [CITIZEN COMPLAINTS] Constants: colors, limits, storage & cache keys =====
 
 const H_PADDING = 20;
 const MAX_VALIDATION_PHOTOS = 3;
@@ -108,6 +99,7 @@ function citizenComplaintsCacheKey(filter) {
   return `citizen.complaints:${filter || "All"}`;
 }
 
+// ===== [CITIZEN COMPLAINTS] Bottom tab config =====
 const bottomTabs = [
   {
     label: "Home",
@@ -143,6 +135,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [CITIZEN COMPLAINTS] Status filters =====
 const filters = [
   "All",
   "Pending",
@@ -163,6 +156,7 @@ function resolveComplaintsFilter(params, lastFilter) {
   return lastFilter || "All";
 }
 
+// ===== [CITIZEN COMPLAINTS] Helpers: status sort rank & concern type =====
 function getStatusSortRank(status) {
   if (status === "Returned") return 0;
   if (status === "For Validation") return 1;
@@ -184,6 +178,7 @@ function normalizeConcernType(value, isEmergency = false, priority = "Normal") {
   return "Non-Emergency";
 }
 
+// ===== [CITIZEN COMPLAINTS] Photo URL resolvers =====
 async function createReadableComplaintPhotoUrl(value) {
   return resolveReadableComplaintPhotoUrl(value);
 }
@@ -196,6 +191,7 @@ async function resolveValidationPhotoUrls(row) {
   return resolveComplaintValidationPhotoUrls(row);
 }
 
+// ===== [CITIZEN COMPLAINTS] Date/time formatting & status timeline =====
 function formatDbDate(value) {
   const date = new Date(value);
 
@@ -265,6 +261,7 @@ function buildTimeline(status, createdAt, assignedOffice) {
   }));
 }
 
+// ===== [CITIZEN COMPLAINTS] Map DB complaint row -> UI complaint object =====
 function getDisplayComplaintId(row) {
   if (row.short_id) return String(row.short_id);
   if (row.complaint_short_id) return String(row.complaint_short_id);
@@ -326,50 +323,51 @@ async function mapDatabaseComplaint(row) {
   };
 }
 
+// ===== [CITIZEN COMPLAINTS] Badge styles: status, priority, concern type =====
 function getStatusStyle(status) {
   if (status === "Pending") {
     return {
-      bg: "#E8EEFF",
-      color: BLUE,
+      bg: "rgba(232, 238, 255, 1)",
+      color: "rgba(49, 90, 154, 1)",
       icon: "clock-outline",
     };
   }
 
   if (status === "In Progress") {
     return {
-      bg: "#FFF8D6",
-      color: "#C9A000",
+      bg: "rgba(255, 248, 214, 1)",
+      color: "rgba(201, 160, 0, 1)",
       icon: "progress-wrench",
     };
   }
 
   if (status === "For Validation") {
     return {
-      bg: "#F3EAFF",
-      color: "#7A3EA8",
+      bg: "rgba(243, 234, 255, 1)",
+      color: "rgba(122, 62, 168, 1)",
       icon: "clipboard-check-outline",
     };
   }
 
   if (status === "Completed") {
     return {
-      bg: "#DFF0DF",
-      color: GREEN,
+      bg: "rgba(223, 240, 223, 1)",
+      color: "rgba(8, 122, 13, 1)",
       icon: "check-circle-outline",
     };
   }
 
   if (status === "Returned") {
     return {
-      bg: "#FFF0F0",
-      color: RED,
+      bg: "rgba(255, 240, 240, 1)",
+      color: "rgba(215, 25, 32, 1)",
       icon: "arrow-u-left-top",
     };
   }
 
   return {
-    bg: "#F1F1F1",
-    color: MUTED,
+    bg: "rgba(241, 241, 241, 1)",
+    color: "rgba(111, 119, 111, 1)",
     icon: "file-document-outline",
   };
 }
@@ -377,47 +375,48 @@ function getStatusStyle(status) {
 function getPriorityStyle(priority) {
   if (priority === "High") {
     return {
-      bg: "#FFF2E8",
-      color: ORANGE,
+      bg: "rgba(255, 242, 232, 1)",
+      color: "rgba(244, 162, 76, 1)",
     };
   }
 
   if (priority === "Critical" || priority === "Urgent") {
     return {
-      bg: "#FFF0F0",
-      color: RED,
+      bg: "rgba(255, 240, 240, 1)",
+      color: "rgba(215, 25, 32, 1)",
     };
   }
 
   if (priority === "Low") {
     return {
-      bg: "#F1F4F1",
-      color: MUTED,
+      bg: "rgba(241, 244, 241, 1)",
+      color: "rgba(111, 119, 111, 1)",
     };
   }
 
   return {
-    bg: LIGHT_GREEN,
-    color: GREEN,
+    bg: "rgba(234, 246, 228, 1)",
+    color: "rgba(8, 122, 13, 1)",
   };
 }
 
 function getConcernStyle(concernType) {
   if (concernType === "Emergency") {
     return {
-      bg: "#FFF0F0",
-      color: RED,
+      bg: "rgba(255, 240, 240, 1)",
+      color: "rgba(215, 25, 32, 1)",
       icon: "alert-triangle",
     };
   }
 
   return {
-    bg: LIGHT_GREEN,
-    color: GREEN,
+    bg: "rgba(234, 246, 228, 1)",
+    color: "rgba(8, 122, 13, 1)",
     icon: "check-circle",
   };
 }
 
+// ===== [CITIZEN COMPLAINTS] Validation photo helpers: format check, extension, resize =====
 function isValidImageFormat(asset) {
   const mimeType = asset.mimeType?.toLowerCase() || "";
   const uri = asset.uri?.toLowerCase() || "";
@@ -509,6 +508,7 @@ async function prepareValidationPhotoAsset(asset) {
   }
 }
 
+// ===== [CITIZEN COMPLAINTS] Validation fields read from DB row =====
 function getValidationSubmitted(row) {
   const directFlags = [
     row.validation_status,
@@ -548,6 +548,7 @@ function getValidationFeedback(row) {
   );
 }
 
+// ===== [CITIZEN COMPLAINTS] Validation photo upload (read file + Supabase storage) =====
 function getValidationFileExtension(photo) {
   const name = String(photo?.fileName || photo?.uri || "").toLowerCase();
   const mimeType = String(photo?.mimeType || "").toLowerCase();
@@ -637,6 +638,7 @@ async function uploadValidationPhotos(complaintId, photos = []) {
   return uploadedPaths;
 }
 
+// ===== [CITIZEN COMPLAINTS] Sort helper: parse submittedAt string =====
 function parseSubmittedAt(submittedAt) {
   const [datePart, timePart = "12:00 AM"] = submittedAt
     .split("•")
@@ -684,7 +686,9 @@ function parseSubmittedAt(submittedAt) {
   return new Date(year, month, day, hour, minute).getTime();
 }
 
+// ===== [CITIZEN COMPLAINTS] Screen component =====
 export default function CitizenComplaints() {
+  // --- [CITIZEN COMPLAINTS] Route params, target complaint & cache seed ---
   const router = useRouter();
   const pathname = usePathname();
   const params = useLocalSearchParams();
@@ -702,6 +706,7 @@ export default function CitizenComplaints() {
     )
   );
 
+  // --- [CITIZEN COMPLAINTS] State: list, counts, filter, modals, validation photos ---
   const [complaintsData, setComplaintsData] = useState(
     cachedComplaintsPage?.complaints ?? []
   );
@@ -738,11 +743,18 @@ export default function CitizenComplaints() {
   const [validationPhotos, setValidationPhotos] = useState([]);
   const [validationAnswer, setValidationAnswer] = useState(null);
   const [submittingValidation, setSubmittingValidation] = useState(false);
+  const [privacyQueue, setPrivacyQueue] = useState([]);
+  const [privacyPhoto, setPrivacyPhoto] = useState(null);
+  const [privacyReplaceId, setPrivacyReplaceId] = useState(null);
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
 
-  useHideBottomNav(detailsVisible || validationVisible);
+  // --- [CITIZEN COMPLAINTS] Hide bottom nav while modals are open ---
+  useHideBottomNav(
+    detailsVisible || validationVisible || Boolean(privacyPhoto?.uri)
+  );
 
+  // --- [CITIZEN COMPLAINTS] Fonts ---
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
     Poppins_500Medium,
@@ -750,6 +762,7 @@ export default function CitizenComplaints() {
     Poppins_700Bold,
   });
 
+  // --- [CITIZEN COMPLAINTS] Filters: apply cached page / switch filter ---
   const applyCachedComplaintsPage = (cached) => {
     if (!cached?.complaints) return false;
 
@@ -775,6 +788,7 @@ export default function CitizenComplaints() {
     applyCachedComplaintsPage(getPageCache(citizenComplaintsCacheKey(filter)));
   };
 
+  // --- [CITIZEN COMPLAINTS] Sync filter from route param ---
   const appliedQueryFilterRef = useRef(
     params?.filter ? String(params.filter) : null
   );
@@ -789,6 +803,7 @@ export default function CitizenComplaints() {
     applyListFilter(next);
   }, [params?.filter]);
 
+  // --- [CITIZEN COMPLAINTS] Refs: pagination & validation-open guards ---
   const complaintsDataRef = useRef(cachedComplaintsPage?.complaints ?? []);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(cachedComplaintsPage?.hasMore !== false);
@@ -801,6 +816,7 @@ export default function CitizenComplaints() {
     complaintsDataRef.current = complaintsData;
   }, [complaintsData]);
 
+  // --- [CITIZEN COMPLAINTS] Load complaints (cached + paginated, routing fix-ups) ---
   const loadComplaints = useCallback(async (options = {}) => {
     const append = options.append === true;
     const cacheKey = citizenComplaintsCacheKey(activeFilter);
@@ -1048,6 +1064,7 @@ export default function CitizenComplaints() {
     }
   }, [activeFilter]);
 
+  // --- [CITIZEN COMPLAINTS] Pagination: load more on scroll / fill viewport ---
   const loadComplaintsRef = useRef(loadComplaints);
   loadComplaintsRef.current = loadComplaints;
 
@@ -1073,12 +1090,14 @@ export default function CitizenComplaints() {
     }
   };
 
+  // --- [CITIZEN COMPLAINTS] Reload on screen focus ---
   useFocusEffect(
     useCallback(() => {
       loadComplaints();
     }, [loadComplaints])
   );
 
+  // --- [CITIZEN COMPLAINTS] Realtime: reload when own complaints change ---
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -1114,6 +1133,7 @@ export default function CitizenComplaints() {
     };
   }, [currentUserId]);
 
+  // --- [CITIZEN COMPLAINTS] Sorting & filtered list ---
   const sortedComplaintsData = useMemo(() => {
     return [...complaintsData].sort((a, b) => {
       const rank = getStatusSortRank(a.status) - getStatusSortRank(b.status);
@@ -1148,6 +1168,7 @@ export default function CitizenComplaints() {
     return sortedComplaintsData.filter((item) => item.status === activeFilter);
   }, [activeFilter, sortedComplaintsData]);
 
+  // --- [CITIZEN COMPLAINTS] Auto-open complaint from route params (details/validation) ---
   useEffect(() => {
     if (!targetComplaintId) return;
     if (loadingComplaints) return;
@@ -1202,6 +1223,7 @@ export default function CitizenComplaints() {
     targetComplaintId,
   ]);
 
+  // --- [CITIZEN COMPLAINTS] Details modal: open / close ---
   const openDetails = (complaint) => {
     if (openingValidationRef.current || validationVisible) return;
     setSelectedComplaint(complaint);
@@ -1214,6 +1236,7 @@ export default function CitizenComplaints() {
     setSelectedPhoto(null);
   };
 
+  // --- [CITIZEN COMPLAINTS] Photo viewer: open / close ---
   const openPhotoViewer = (uri) => {
     if (!uri) return;
     if (
@@ -1233,6 +1256,7 @@ export default function CitizenComplaints() {
     }, 160);
   };
 
+  // --- [CITIZEN COMPLAINTS] Validation flow: open modal ---
   const openValidation = (complaint) => {
     Keyboard.dismiss();
 
@@ -1273,11 +1297,12 @@ export default function CitizenComplaints() {
     };
   }, []);
 
+  // --- [CITIZEN COMPLAINTS] Validation photos: check, resize, queue for privacy blur ---
   const addValidationPhotoAssets = async (assets = []) => {
     const remainingSlots = MAX_VALIDATION_PHOTOS - validationPhotos.length;
 
     if (remainingSlots <= 0) {
-      Alert.alert(
+      notify(
         "Photo Limit Reached",
         "You can only upload up to 3 validation photos."
       );
@@ -1320,7 +1345,7 @@ export default function CitizenComplaints() {
       invalidSizeCount > 0 ||
       failedPrepareCount > 0
     ) {
-      Alert.alert(
+      notify(
         "Some Photos Were Not Added",
         "Only PNG, JPG, JPEG, HEIC, and HEIF files are allowed, with a maximum size of 10MB per photo."
       );
@@ -1328,11 +1353,47 @@ export default function CitizenComplaints() {
 
     if (validAssets.length === 0) return;
 
-    setValidationPhotos((prev) =>
-      [...prev, ...validAssets].slice(0, MAX_VALIDATION_PHOTOS)
-    );
+    const [firstPhoto, ...restPhotos] = validAssets;
+    setPrivacyQueue(restPhotos);
+    setPrivacyReplaceId(null);
+    setPrivacyPhoto(firstPhoto);
   };
 
+  // --- [CITIZEN COMPLAINTS] Privacy blur editor: finish / close / reopen ---
+  const finishPrivacyValidationPhoto = (photo) => {
+    if (privacyReplaceId) {
+      setValidationPhotos((prev) =>
+        prev.map((item) =>
+          item.id === privacyReplaceId ? { ...item, ...photo, id: item.id } : item
+        )
+      );
+    } else {
+      setValidationPhotos((prev) =>
+        [...prev, photo].slice(0, MAX_VALIDATION_PHOTOS)
+      );
+    }
+
+    const [nextPhoto, ...restPhotos] = privacyQueue;
+    setPrivacyQueue(restPhotos);
+    setPrivacyReplaceId(null);
+    setPrivacyPhoto(nextPhoto || null);
+  };
+
+  const closePrivacyEditor = () => {
+    const [nextPhoto, ...restPhotos] = privacyQueue;
+    setPrivacyQueue(restPhotos);
+    setPrivacyReplaceId(null);
+    setPrivacyPhoto(nextPhoto || null);
+  };
+
+  const openPrivacyEditorForPhoto = (photo) => {
+    if (!photo?.uri) return;
+    setPrivacyQueue([]);
+    setPrivacyReplaceId(photo.id);
+    setPrivacyPhoto(photo);
+  };
+
+  // --- [CITIZEN COMPLAINTS] Validation photos: camera ---
   const openCameraForValidationPhoto = async () => {
     try {
       await markMediaPickerSession("/citizen/complaints");
@@ -1341,7 +1402,7 @@ export default function CitizenComplaints() {
 
       if (permission.status !== "granted") {
         scheduleClearMediaPickerSession();
-        Alert.alert(
+        notify(
           "Permission Needed",
           "Please allow camera access so you can take validation evidence photos."
         );
@@ -1361,19 +1422,20 @@ export default function CitizenComplaints() {
     } catch (error) {
       scheduleClearMediaPickerSession();
       console.log("Validation camera error:", error);
-      Alert.alert(
+      notify(
         "Camera Error",
         "The app could not open the camera. Please try again or choose a photo from your gallery."
       );
     }
   };
 
+  // --- [CITIZEN COMPLAINTS] Validation photos: gallery ---
   const openGalleryForValidationPhoto = async () => {
     try {
       const remainingSlots = MAX_VALIDATION_PHOTOS - validationPhotos.length;
 
       if (remainingSlots <= 0) {
-        Alert.alert(
+        notify(
           "Photo Limit Reached",
           "You can only upload up to 3 validation photos."
         );
@@ -1386,7 +1448,7 @@ export default function CitizenComplaints() {
 
       if (permission.status !== "granted") {
         scheduleClearMediaPickerSession();
-        Alert.alert(
+        notify(
           "Permission Needed",
           "Please allow photo access so you can upload validation evidence."
         );
@@ -1408,26 +1470,26 @@ export default function CitizenComplaints() {
     } catch (error) {
       scheduleClearMediaPickerSession();
       console.log("Validation gallery error:", error);
-      Alert.alert(
+      notify(
         "Photo Error",
         "The app could not open or load the selected photo. Please try again."
       );
     }
   };
 
+  // --- [CITIZEN COMPLAINTS] Validation photos: picker prompt & remove ---
   const pickValidationPhoto = () => {
     Keyboard.dismiss();
 
     if (validationPhotos.length >= MAX_VALIDATION_PHOTOS) {
-      Alert.alert(
+      notify(
         "Photo Limit Reached",
         "You can only upload up to 3 validation photos."
       );
       return;
     }
 
-    // Native Alert sits above the validation Modal (in-app confirm dialog does not).
-    Alert.alert(
+    notify(
       "Add Validation Photo",
       "Take a photo with your camera or choose from your gallery.",
       [
@@ -1445,6 +1507,7 @@ export default function CitizenComplaints() {
     setValidationPhotos((prev) => prev.filter((photo) => photo.id !== photoId));
   };
 
+  // --- [CITIZEN COMPLAINTS] Submit validation + AI validation ---
   const submitValidation = async () => {
     Keyboard.dismiss();
 
@@ -1490,6 +1553,7 @@ export default function CitizenComplaints() {
     try {
       setSubmittingValidation(true);
 
+      // --- [CITIZEN COMPLAINTS] Submit: upload photos & save feedback snapshot ---
       const uploadedValidationPhotos = await uploadValidationPhotos(
         selectedComplaint.id,
         validationPhotos
@@ -1548,6 +1612,7 @@ export default function CitizenComplaints() {
         console.log("Complaint snapshot update after feedback error:", error);
       }
 
+      // --- [CITIZEN COMPLAINTS] Submit: Gemini AI resolution check ---
       let aiValidation = null;
 
       try {
@@ -1625,6 +1690,7 @@ export default function CitizenComplaints() {
         });
       }
 
+      // --- [CITIZEN COMPLAINTS] Submit: update local list & reset form ---
       const resolvedValidationPhotoUrls = [];
 
       for (const path of uploadedValidationPhotos) {
@@ -1678,6 +1744,7 @@ export default function CitizenComplaints() {
       setValidationPhotos([]);
       setValidationAnswer(null);
 
+      // --- [CITIZEN COMPLAINTS] Submit: notify admins/citizen + audit log ---
       const citizenName = await getProfileDisplayName(citizenId);
 
       const notifyResult = await notifyAdminsCitizenValidated({
@@ -1743,6 +1810,7 @@ export default function CitizenComplaints() {
         actorRole: "citizen",
         metadata: {
           validation_answer: validationAnswer,
+          analysis_type: "resolution_performance",
         },
       });
 
@@ -1758,15 +1826,17 @@ export default function CitizenComplaints() {
     }
   };
 
+  // --- [CITIZEN COMPLAINTS] Render ---
   if (!fontsLoaded && !cachedComplaintsPage) {
     return <PageSkeleton variant="list" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(255, 255, 255, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [CITIZEN COMPLAINTS UI] Sticky header: title & description */}
         <View style={styles.stickyHeader}>
           <View style={styles.headerTitleBox}>
             <Text style={styles.headerTitle}>My Complaints</Text>
@@ -1775,6 +1845,7 @@ export default function CitizenComplaints() {
             </Text>
           </View>
 
+          {/* [CITIZEN COMPLAINTS UI] Record count */}
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Complaint Records</Text>
             {loadingComplaints && complaintsData.length === 0 ? (
@@ -1786,13 +1857,14 @@ export default function CitizenComplaints() {
             )}
           </View>
 
+          {/* [CITIZEN COMPLAINTS UI] Summary card: total submitted */}
           <View style={styles.summaryCard}>
             <View style={styles.summaryTopRow}>
               <View style={styles.summaryIconCircle}>
                 <MaterialCommunityIcons
                   name="file-document-multiple-outline"
                   size={28}
-                  color={WHITE}
+                  color="rgba(255, 255, 255, 1)"
                 />
               </View>
 
@@ -1810,6 +1882,7 @@ export default function CitizenComplaints() {
               </View>
             </View>
 
+            {/* [CITIZEN COMPLAINTS UI] Emergency / non-emergency filter chips */}
             <View style={styles.concernSummaryRow}>
               <TouchableOpacity
                 activeOpacity={0.78}
@@ -1820,7 +1893,7 @@ export default function CitizenComplaints() {
                 ]}
                 onPress={() => applyListFilter("All Emergency")}
               >
-                <Feather name="alert-triangle" size={12} color={WHITE} />
+                <Feather name="alert-triangle" size={12} color="rgba(255, 255, 255, 1)" />
                 <Text style={styles.concernSummaryText} numberOfLines={1}>
                   {emergencyCount} Emergency
                 </Text>
@@ -1835,7 +1908,7 @@ export default function CitizenComplaints() {
                 ]}
                 onPress={() => applyListFilter("All Non-Emergency")}
               >
-                <Feather name="check-circle" size={12} color={WHITE} />
+                <Feather name="check-circle" size={12} color="rgba(255, 255, 255, 1)" />
                 <Text style={styles.concernSummaryText} numberOfLines={1}>
                   {nonEmergencyCount} Non-Emergency
                 </Text>
@@ -1843,6 +1916,7 @@ export default function CitizenComplaints() {
             </View>
           </View>
 
+          {/* [CITIZEN COMPLAINTS UI] Status filter chips */}
           <ScrollView
             horizontal
             nestedScrollEnabled
@@ -1876,6 +1950,7 @@ export default function CitizenComplaints() {
           </ScrollView>
         </View>
 
+        {/* [CITIZEN COMPLAINTS UI] Complaint list (infinite scroll) */}
         <ScrollView
           style={styles.listScroll}
           showsVerticalScrollIndicator={false}
@@ -1887,11 +1962,12 @@ export default function CitizenComplaints() {
           }}
           onContentSizeChange={(_, height) => maybeFillViewport(height)}
         >
+          {/* [CITIZEN COMPLAINTS UI] Loading skeleton / empty state / complaint cards */}
           {loadingComplaints && complaintsData.length === 0 ? (
             <ComplaintListSkeleton count={COMPLAINTS_PAGE_SIZE} />
           ) : filteredComplaints.length === 0 ? (
             <View style={styles.emptyCard}>
-              <Ionicons name="document-text-outline" size={38} color={MUTED} />
+              <Ionicons name="document-text-outline" size={38} color="rgba(111, 119, 111, 1)" />
               <Text style={styles.emptyTitle}>
                 {activeFilter === "Returned"
                   ? "No returned complaints"
@@ -1914,6 +1990,7 @@ export default function CitizenComplaints() {
 
                 return (
                   <View key={item.id} style={styles.complaintCard}>
+                    {/* [CITIZEN COMPLAINTS UI] Card body (tap opens details) */}
                     <TouchableOpacity
                       activeOpacity={0.78}
                       onPress={() => openDetails(item)}
@@ -1986,38 +2063,40 @@ export default function CitizenComplaints() {
                         </View>
                       </View>
 
+                      {/* [CITIZEN COMPLAINTS UI] Card details: category, office, location, date, time */}
                       <View style={styles.detailRow}>
-                        <Feather name="tag" size={13} color={MUTED} />
+                        <Feather name="tag" size={13} color="rgba(111, 119, 111, 1)" />
                         <Text style={styles.detailText} numberOfLines={1}>
                           Category: {item.category}
                         </Text>
                       </View>
 
                       <View style={styles.detailRow}>
-                        <Feather name="briefcase" size={13} color={MUTED} />
+                        <Feather name="briefcase" size={13} color="rgba(111, 119, 111, 1)" />
                         <Text style={styles.detailText} numberOfLines={1}>
                           Assigned Office: {item.assignedOffice}
                         </Text>
                       </View>
 
                       <View style={styles.detailRow}>
-                        <Feather name="map-pin" size={13} color={MUTED} />
+                        <Feather name="map-pin" size={13} color="rgba(111, 119, 111, 1)" />
                         <Text style={styles.detailText} numberOfLines={1}>
                           {item.location}
                         </Text>
                       </View>
 
                       <View style={styles.detailRow}>
-                        <Feather name="calendar" size={13} color={MUTED} />
+                        <Feather name="calendar" size={13} color="rgba(111, 119, 111, 1)" />
                         <Text style={styles.detailText}>{item.date}</Text>
                       </View>
 
                       <View style={styles.detailRow}>
-                        <Feather name="clock" size={13} color={MUTED} />
+                        <Feather name="clock" size={13} color="rgba(111, 119, 111, 1)" />
                         <Text style={styles.detailText}>{item.time}</Text>
                       </View>
                     </TouchableOpacity>
 
+                    {/* [CITIZEN COMPLAINTS UI] Card footer: status badge & action */}
                     <View style={styles.cardBottomRow}>
                       <View
                         style={[
@@ -2040,6 +2119,7 @@ export default function CitizenComplaints() {
                         </Text>
                       </View>
 
+                      {/* [CITIZEN COMPLAINTS UI] Action: Validate / Validated / View Details */}
                       {canCitizenSubmitValidation(item) ? (
                         <TouchableOpacity
                           activeOpacity={0.75}
@@ -2056,7 +2136,7 @@ export default function CitizenComplaints() {
                           <Ionicons
                             name="checkmark-circle-outline"
                             size={15}
-                            color={MUTED}
+                            color="rgba(111, 119, 111, 1)"
                           />
                           <Text style={styles.validatedButtonText}>
                             Validated
@@ -2069,7 +2149,7 @@ export default function CitizenComplaints() {
                           onPress={() => openDetails(item)}
                         >
                           <Text style={styles.viewText}>View Details</Text>
-                          <Feather name="chevron-right" size={16} color={GREEN} />
+                          <Feather name="chevron-right" size={16} color="rgba(8, 122, 13, 1)" />
                         </TouchableOpacity>
                       )}
                     </View>
@@ -2079,10 +2159,11 @@ export default function CitizenComplaints() {
             </View>
           )}
 
+          {/* [CITIZEN COMPLAINTS UI] Load-more footer */}
           <ComplaintsLoadMoreFooter loading={loadingMoreComplaints} />
         </ScrollView>
 
-
+        {/* [CITIZEN COMPLAINTS UI] Details modal */}
         <Modal
           visible={detailsVisible}
           animationType="slide"
@@ -2093,6 +2174,7 @@ export default function CitizenComplaints() {
             <View style={styles.detailsSheet}>
               <View style={styles.modalHandle} />
 
+              {/* [CITIZEN COMPLAINTS UI] Details modal: header & close */}
               <View style={styles.modalHeaderRow}>
                 <Text style={styles.modalTitle}>Complaint Details</Text>
 
@@ -2101,12 +2183,14 @@ export default function CitizenComplaints() {
                   style={styles.modalCloseButton}
                   onPress={closeDetails}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
+              {/* [CITIZEN COMPLAINTS UI] Details modal: scrollable content */}
               {selectedComplaint && (
                 <ScrollView showsVerticalScrollIndicator={false}>
+                  {/* [CITIZEN COMPLAINTS UI] Details: complaint photos & validation photos */}
                   {(() => {
                     const detailPhotos = (
                       selectedComplaint.photoUrls || []
@@ -2190,6 +2274,7 @@ export default function CitizenComplaints() {
                     );
                   })()}
 
+                  {/* [CITIZEN COMPLAINTS UI] Details: title & description */}
                   <Text style={styles.detailsComplaintTitle}>
                     {selectedComplaint.title}
                   </Text>
@@ -2198,6 +2283,7 @@ export default function CitizenComplaints() {
                     {selectedComplaint.description}
                   </Text>
 
+                  {/* [CITIZEN COMPLAINTS UI] Details: info card */}
                   <View style={styles.detailsInfoCard}>
                     <Text style={styles.detailsLabel}>Complaint ID</Text>
                     <Text style={styles.detailsValue}>
@@ -2245,6 +2331,7 @@ export default function CitizenComplaints() {
                     </Text>
                   </View>
 
+                  {/* [CITIZEN COMPLAINTS UI] Details: status timeline */}
                   <Text style={styles.timelineTitle}>Status Timeline</Text>
 
                   <View style={styles.timelineBox}>
@@ -2258,7 +2345,7 @@ export default function CitizenComplaints() {
                             ]}
                           >
                             {step.done && (
-                              <Feather name="check" size={11} color={WHITE} />
+                              <Feather name="check" size={11} color="rgba(255, 255, 255, 1)" />
                             )}
                           </View>
 
@@ -2287,13 +2374,14 @@ export default function CitizenComplaints() {
                     ))}
                   </View>
 
+                  {/* [CITIZEN COMPLAINTS UI] Details: validate button / validated notice */}
                   {canCitizenSubmitValidation(selectedComplaint) ? (
                     <TouchableOpacity
                       activeOpacity={0.8}
                       style={styles.detailsValidateButton}
                       onPress={() => openValidation(selectedComplaint)}
                     >
-                      <Ionicons name="camera-outline" size={21} color={WHITE} />
+                      <Ionicons name="camera-outline" size={21} color="rgba(255, 255, 255, 1)" />
                       <Text style={styles.detailsValidateText}>
                         {isValidationResubmit(selectedComplaint)
                           ? "Submit Validation Again"
@@ -2306,7 +2394,7 @@ export default function CitizenComplaints() {
                       <Ionicons
                         name="checkmark-circle-outline"
                         size={21}
-                        color={MUTED}
+                        color="rgba(111, 119, 111, 1)"
                       />
                       <Text style={styles.detailsValidatedText}>
                         Validated — waiting for admin review
@@ -2317,6 +2405,7 @@ export default function CitizenComplaints() {
               )}
             </View>
 
+            {/* [CITIZEN COMPLAINTS UI] Details: fullscreen photo viewer overlay */}
             <FullscreenPhotoViewer
               variant="overlay"
               visible={photoViewerVisible && detailsVisible}
@@ -2326,6 +2415,7 @@ export default function CitizenComplaints() {
           </View>
         </Modal>
 
+        {/* [CITIZEN COMPLAINTS UI] Validation modal */}
         <Modal
           visible={validationVisible}
           animationType="slide"
@@ -2344,6 +2434,7 @@ export default function CitizenComplaints() {
             <View style={styles.validationSheet}>
               <View style={styles.modalHandle} />
 
+              {/* [CITIZEN COMPLAINTS UI] Validation modal: header & close */}
               <View style={styles.modalHeaderRow}>
                 <Text style={styles.modalTitle}>Citizen Validation</Text>
 
@@ -2360,10 +2451,11 @@ export default function CitizenComplaints() {
                     setValidationVisible(false);
                   }}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
+              {/* [CITIZEN COMPLAINTS UI] Validation modal: form (keyboard-aware scroll) */}
               {selectedComplaint && (
                 <KeyboardAwareScrollView
                   modal
@@ -2375,6 +2467,7 @@ export default function CitizenComplaints() {
                   }
                   contentContainerStyle={styles.validationScrollContent}
                 >
+                    {/* [CITIZEN COMPLAINTS UI] Validation: intro & complaint summary */}
                     <Text style={styles.validationIntro}>
                       {isValidationResubmit(selectedComplaint)
                         ? "This complaint was returned for more work and is now For Validation again. Please submit your validation feedback."
@@ -2390,6 +2483,7 @@ export default function CitizenComplaints() {
                       </Text>
                     </View>
 
+                    {/* [CITIZEN COMPLAINTS UI] Validation: resolved? Yes / No answer */}
                     <Text style={styles.inputLabel}>Was the issue resolved?</Text>
 
                     <View style={styles.answerRow}>
@@ -2408,7 +2502,7 @@ export default function CitizenComplaints() {
                         <Ionicons
                           name="checkmark-circle-outline"
                           size={20}
-                          color={validationAnswer === "resolved" ? WHITE : GREEN}
+                          color={validationAnswer === "resolved" ? "rgba(255, 255, 255, 1)" : "rgba(8, 122, 13, 1)"}
                         />
 
                         <Text
@@ -2438,7 +2532,7 @@ export default function CitizenComplaints() {
                           name="close-circle-outline"
                           size={20}
                           color={
-                            validationAnswer === "not_resolved" ? WHITE : RED
+                            validationAnswer === "not_resolved" ? "rgba(255, 255, 255, 1)" : "rgba(215, 25, 32, 1)"
                           }
                         />
 
@@ -2454,6 +2548,7 @@ export default function CitizenComplaints() {
                       </TouchableOpacity>
                     </View>
 
+                    {/* [CITIZEN COMPLAINTS UI] Validation: feedback input */}
                     <Text style={styles.inputLabel}>Feedback</Text>
 
                     <TextInput
@@ -2464,11 +2559,12 @@ export default function CitizenComplaints() {
                       value={feedback}
                       onChangeText={setFeedback}
                       placeholder="Write your feedback here..."
-                      placeholderTextColor="#9A9A9A"
+                      placeholderTextColor="rgba(154, 154, 154, 1)"
                       multiline
                       textAlignVertical="top"
                     />
 
+                    {/* [CITIZEN COMPLAINTS UI] Validation: photo evidence (add / previews) */}
                     <Text style={styles.inputLabel}>Photo Evidence</Text>
 
                     <View style={styles.photoUploadBox}>
@@ -2478,7 +2574,7 @@ export default function CitizenComplaints() {
                           style={styles.emptyPhotoUpload}
                           onPress={pickValidationPhoto}
                         >
-                          <Ionicons name="camera" size={32} color={GREEN} />
+                          <Ionicons name="camera" size={32} color="rgba(8, 122, 13, 1)" />
 
                           <Text style={styles.photoUploadText}>
                             Add validation photo
@@ -2486,7 +2582,8 @@ export default function CitizenComplaints() {
 
                           <Text style={styles.photoRulesText}>
                             Camera or gallery • Up to 3 photos • JPG, PNG, HEIC •
-                            Max 10MB each
+                            Max 10MB each{"\n"}
+                            The app automatically blurs faces, IDs, and other private details.
                           </Text>
                         </TouchableOpacity>
                       ) : (
@@ -2496,6 +2593,7 @@ export default function CitizenComplaints() {
                             {validationPhotos.length > 1 ? "s" : ""} selected
                           </Text>
 
+                          {/* [CITIZEN COMPLAINTS UI] Photo thumbnails with blur & remove buttons */}
                           <View style={styles.validationPhotoRow}>
                             {validationPhotos.map((photo) => (
                               <View
@@ -2514,13 +2612,25 @@ export default function CitizenComplaints() {
 
                                 <TouchableOpacity
                                   activeOpacity={0.8}
+                                  style={styles.blurPhotoButton}
+                                  onPress={() => openPrivacyEditorForPhoto(photo)}
+                                >
+                                  <Ionicons
+                                    name="eye-off-outline"
+                                    size={12}
+                                    color="rgba(255, 255, 255, 1)"
+                                  />
+                                </TouchableOpacity>
+
+                                <TouchableOpacity
+                                  activeOpacity={0.8}
                                   style={styles.removePhotoButton}
                                   onPress={() => removeValidationPhoto(photo.id)}
                                 >
                                   <Ionicons
                                     name="close"
                                     size={13}
-                                    color={WHITE}
+                                    color="rgba(255, 255, 255, 1)"
                                   />
                                 </TouchableOpacity>
                               </View>
@@ -2536,7 +2646,7 @@ export default function CitizenComplaints() {
                               <Ionicons
                                 name="add-circle-outline"
                                 size={17}
-                                color={GREEN}
+                                color="rgba(8, 122, 13, 1)"
                               />
 
                               <Text style={styles.addMorePhotoText}>
@@ -2552,6 +2662,7 @@ export default function CitizenComplaints() {
                       )}
                     </View>
 
+                    {/* [CITIZEN COMPLAINTS UI] Validation: submit button */}
                     <TouchableOpacity
                       activeOpacity={0.8}
                       disabled={submittingValidation}
@@ -2562,7 +2673,7 @@ export default function CitizenComplaints() {
                       onPress={submitValidation}
                     >
                       {submittingValidation ? (
-                        <ActivityIndicator size="small" color={WHITE} />
+                        <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
                       ) : (
                         <Text style={styles.submitValidationText}>
                           Submit Validation
@@ -2573,6 +2684,7 @@ export default function CitizenComplaints() {
               )}
             </View>
 
+            {/* [CITIZEN COMPLAINTS UI] Validation: fullscreen photo viewer overlay */}
             <FullscreenPhotoViewer
               variant="overlay"
               visible={photoViewerVisible && validationVisible}
@@ -2582,6 +2694,7 @@ export default function CitizenComplaints() {
           </View>
         </Modal>
 
+        {/* [CITIZEN COMPLAINTS UI] Standalone fullscreen photo viewer */}
         <FullscreenPhotoViewer
           visible={
             photoViewerVisible && !detailsVisible && !validationVisible
@@ -2589,29 +2702,49 @@ export default function CitizenComplaints() {
           uri={selectedPhoto}
           onClose={closePhotoViewer}
         />
+
+        {/* [CITIZEN COMPLAINTS UI] Privacy blur editor for validation photos */}
+        <EvidencePrivacyEditor
+          visible={Boolean(privacyPhoto?.uri)}
+          uri={privacyPhoto?.uri}
+          onCancel={closePrivacyEditor}
+          onKeepOriginal={() => {
+            if (privacyPhoto) finishPrivacyValidationPhoto(privacyPhoto);
+          }}
+          onSaved={(uri) => {
+            if (!privacyPhoto) return;
+            finishPrivacyValidationPhoto({
+              ...privacyPhoto,
+              uri,
+              id: `${uri}-${Date.now()}`,
+            });
+          }}
+        />
       </View>
     </SafeAreaView>
   );
 }
 
+// ===== [CITIZEN COMPLAINTS] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & sticky header ---
   safeArea: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   stickyHeader: {
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 12,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    borderBottomColor: "rgba(226, 231, 224, 1)",
     zIndex: 2,
   },
 
@@ -2621,16 +2754,16 @@ const styles = StyleSheet.create({
 
   loader: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
 
   header: {
     minHeight: 62,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderBottomWidth: 1,
-    borderBottomColor: "#EEEEEE",
+    borderBottomColor: "rgba(238, 238, 238, 1)",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: H_PADDING,
@@ -2657,13 +2790,13 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 20,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   headerDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: -2,
   },
 
@@ -2673,13 +2806,14 @@ const styles = StyleSheet.create({
     paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
+  // --- Summary card & concern chips ---
   summaryCard: {
     borderRadius: 18,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     paddingVertical: 16,
     paddingHorizontal: 18,
     marginBottom: 12,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.1,
     shadowRadius: 7,
     shadowOffset: { width: 0, height: 3 },
@@ -2709,7 +2843,7 @@ const styles = StyleSheet.create({
   summaryTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     lineHeight: 21,
   },
 
@@ -2735,7 +2869,7 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     paddingHorizontal: 8,
     paddingVertical: 6,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -2757,13 +2891,13 @@ const styles = StyleSheet.create({
 
   concernSummaryPillActive: {
     borderWidth: 1.4,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
   },
 
   concernSummaryText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.8,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     flexShrink: 1,
   },
 
@@ -2779,7 +2913,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     paddingRight: 4,
   },
 
@@ -2800,6 +2934,7 @@ const styles = StyleSheet.create({
     fontSize: 8.8,
   },
 
+  // --- Filter chips & section row ---
   filterRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2811,26 +2946,26 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 14,
     alignItems: "center",
     justifyContent: "center",
   },
 
   filterPillActive: {
-    backgroundColor: GREEN,
-    borderColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
+    borderColor: "rgba(8, 122, 13, 1)",
   },
 
   filterText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   filterTextActive: {
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   sectionRow: {
@@ -2843,26 +2978,26 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 20,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   sectionCount: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
+  // --- List, loading & empty states ---
   complaintList: {
     gap: 10,
   },
-
 
   loadingCard: {
     minHeight: 160,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2870,7 +3005,7 @@ const styles = StyleSheet.create({
   loadingText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 10,
   },
 
@@ -2878,8 +3013,8 @@ const styles = StyleSheet.create({
     minHeight: 180,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 22,
@@ -2888,23 +3023,24 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 8,
   },
 
   emptyText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     marginTop: 3,
   },
 
+  // --- Complaint card ---
   complaintCard: {
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 13,
   },
@@ -2920,7 +3056,7 @@ const styles = StyleSheet.create({
     height: 58,
     borderRadius: 12,
     overflow: "hidden",
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
     marginRight: 11,
   },
 
@@ -2943,7 +3079,7 @@ const styles = StyleSheet.create({
   complaintId: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 10,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   priorityPill: {
@@ -2963,7 +3099,7 @@ const styles = StyleSheet.create({
   complaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 2,
   },
 
@@ -2977,10 +3113,11 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 10.8,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginLeft: 7,
   },
 
+  // --- Card footer: status badge & actions ---
   cardBottomRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3008,7 +3145,7 @@ const styles = StyleSheet.create({
     minWidth: 88,
     height: 30,
     borderRadius: 15,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -3016,14 +3153,14 @@ const styles = StyleSheet.create({
   validateButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   validatedButton: {
     minWidth: 94,
     height: 30,
     borderRadius: 15,
-    backgroundColor: "#E6E8E6",
+    backgroundColor: "rgba(230, 232, 230, 1)",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -3033,7 +3170,7 @@ const styles = StyleSheet.create({
   validatedButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   viewRow: {
@@ -3044,20 +3181,21 @@ const styles = StyleSheet.create({
   viewText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginRight: 2,
   },
 
+  // --- Bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -3085,6 +3223,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Modals: overlay, sheets, header ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -3095,7 +3234,7 @@ const styles = StyleSheet.create({
     maxHeight: "86%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 30 : 20,
@@ -3105,7 +3244,7 @@ const styles = StyleSheet.create({
     maxHeight: "88%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     paddingBottom: 12,
@@ -3121,7 +3260,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -3136,24 +3275,25 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
 
+  // --- Details modal: photos, info, timeline ---
   detailsImage: {
     width: "100%",
     height: 155,
     borderRadius: 16,
     resizeMode: "cover",
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
     marginBottom: 12,
   },
 
@@ -3167,7 +3307,7 @@ const styles = StyleSheet.create({
     width: 168,
     height: 155,
     borderRadius: 16,
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
   },
 
   detailsValidationPhotosBox: {
@@ -3177,13 +3317,13 @@ const styles = StyleSheet.create({
   detailsComplaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 16,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   detailsDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginTop: 5,
     marginBottom: 12,
@@ -3192,8 +3332,8 @@ const styles = StyleSheet.create({
   detailsInfoCard: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 13,
@@ -3202,21 +3342,21 @@ const styles = StyleSheet.create({
   detailsLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginTop: 5,
   },
 
   detailsValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 16,
   },
 
   timelineTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 8,
   },
 
@@ -3238,26 +3378,26 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 9,
     borderWidth: 1.5,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
 
   timelineCircleDone: {
-    backgroundColor: GREEN,
-    borderColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
+    borderColor: "rgba(8, 122, 13, 1)",
   },
 
   timelineLine: {
     width: 2,
     flex: 1,
-    backgroundColor: BORDER,
+    backgroundColor: "rgba(226, 231, 224, 1)",
     marginVertical: 3,
   },
 
   timelineLineDone: {
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
   },
 
   timelineTextBox: {
@@ -3268,24 +3408,25 @@ const styles = StyleSheet.create({
   timelineStep: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   timelineStepDone: {
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   timelineTime: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
+  // --- Details modal: validate buttons ---
   detailsValidateButton: {
     height: 48,
     borderRadius: 14,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3295,14 +3436,14 @@ const styles = StyleSheet.create({
   detailsValidateText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     marginLeft: 8,
   },
 
   detailsValidatedButton: {
     height: 48,
     borderRadius: 14,
-    backgroundColor: "#E6E8E6",
+    backgroundColor: "rgba(230, 232, 230, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3312,23 +3453,24 @@ const styles = StyleSheet.create({
   detailsValidatedText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginLeft: 8,
   },
 
+  // --- Validation modal: intro, answer, feedback ---
   validationIntro: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginBottom: 12,
   },
 
   validationComplaintBox: {
     borderRadius: 14,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 13,
@@ -3337,20 +3479,20 @@ const styles = StyleSheet.create({
   validationComplaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   validationComplaintLocation: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 2,
   },
 
   inputLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 7,
   },
 
@@ -3365,8 +3507,8 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -3374,36 +3516,36 @@ const styles = StyleSheet.create({
   },
 
   answerButtonActive: {
-    backgroundColor: GREEN,
-    borderColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
+    borderColor: "rgba(8, 122, 13, 1)",
   },
 
   answerButtonDanger: {
-    backgroundColor: RED,
-    borderColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
+    borderColor: "rgba(215, 25, 32, 1)",
   },
 
   answerText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   answerTextActive: {
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   feedbackInput: {
     minHeight: 92,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginBottom: 13,
   },
 
@@ -3411,13 +3553,14 @@ const styles = StyleSheet.create({
     outlineStyle: "none",
   },
 
+  // --- Validation modal: photo evidence ---
   photoUploadBox: {
     minHeight: 132,
     borderRadius: 16,
     borderWidth: 1.2,
     borderStyle: "dashed",
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -3436,14 +3579,14 @@ const styles = StyleSheet.create({
   photoUploadText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 11.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginTop: 6,
   },
 
   photoRulesText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 9.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     marginTop: 6,
   },
@@ -3456,7 +3599,7 @@ const styles = StyleSheet.create({
   selectedCountText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 9,
   },
 
@@ -3473,7 +3616,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: "hidden",
     position: "relative",
-    backgroundColor: "#E8E8E8",
+    backgroundColor: "rgba(232, 232, 232, 1)",
   },
 
   validationPhotoPreview: {
@@ -3494,10 +3637,22 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
+  blurPhotoButton: {
+    position: "absolute",
+    top: 4,
+    left: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(8, 122, 13, 0.92)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
   addMorePhotoButton: {
     height: 30,
     borderRadius: 15,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     paddingHorizontal: 12,
     marginTop: 11,
     flexDirection: "row",
@@ -3509,13 +3664,14 @@ const styles = StyleSheet.create({
   addMorePhotoText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Validation modal: submit button ---
   submitValidationButton: {
     height: 50,
     borderRadius: 14,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -3527,6 +3683,6 @@ const styles = StyleSheet.create({
   submitValidationText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 });

@@ -18,15 +18,19 @@ import {
   isPasswordRecoveryActive,
 } from "../lib/passwordReset";
 
+// ===== [ENTRY] Constants =====
 const MIN_SPLASH_MS = 1100;
 
+// ===== [ENTRY] Splash / entry screen component =====
 export default function SplashScreen() {
+  // --- [ENTRY] Router & fonts ---
   const router = useRouter();
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
   });
 
+  // --- [ENTRY] Bootstrap: reset/confirm links, permissions, route resolution ---
   useEffect(() => {
     let cancelled = false;
 
@@ -97,15 +101,19 @@ export default function SplashScreen() {
     };
   }, [router]);
 
+  // --- [ENTRY] Render ---
   return (
     <View style={styles.container}>
+      {/* [ENTRY UI] Background */}
       <AuthScreenBackground />
 
       <View style={styles.content}>
+        {/* [ENTRY UI] Animated logo */}
         <Animated.View entering={FadeIn.duration(420)}>
           <AuthLogoStage />
         </Animated.View>
 
+        {/* [ENTRY UI] Tagline (after fonts load) */}
         {fontsLoaded ? (
           <Animated.Text
             entering={FadeInDown.delay(160).duration(480)}
@@ -119,10 +127,11 @@ export default function SplashScreen() {
   );
 }
 
+// ===== [ENTRY] Styles =====
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F3FAF1",
+    backgroundColor: "rgba(243, 250, 241, 1)",
   },
 
   content: {
@@ -138,7 +147,7 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins_400Regular",
     fontSize: 14,
     lineHeight: 21,
-    color: "#4A554A",
+    color: "rgba(74, 85, 74, 1)",
     textAlign: "center",
   },
 });

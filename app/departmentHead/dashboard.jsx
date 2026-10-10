@@ -21,7 +21,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { WebView } from "react-native-webview";
+import WebView from "../../components/AppWebView";
 import { ComplaintListSkeleton, PageSkeleton } from "../../components/skeletons";
 import FullscreenPhotoViewer from "../../components/FullscreenPhotoViewer";
 import {
@@ -32,7 +32,14 @@ import {
   normalizeOfficeKey,
 } from "../../lib/complaintCategories";
 import { countComplaintsMany } from "../../lib/complaintCountService";
-import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/pageDataCache";
+import { loadCitizenProfiles } from "../../lib/citizenProfileCache";
+import { resolveComplaintEvidencePhotoUrls } from "../../lib/complaintPhotoCache";
+import {
+  ensureDashboardCacheHydrated,
+  getPageCache,
+  setPageCache,
+  shouldShowPageLoader,
+} from "../../lib/pageDataCache";
 import {
   applyOffsetPagination,
   COMPLAINTS_PAGE_SIZE,
@@ -46,21 +53,10 @@ import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadU
 import { registerPushTokenForCurrentUser } from "../../lib/pushNotifications";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
+// ===== [DEPT DASHBOARD] Constants: logo, colors, layout, cache key, map config =====
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 const MAIN_LOGO = require("../../assets/images/mainlogo.png");
-
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const ACCENT_GREEN = "#6DBB3F";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const BLUE = "#315A9A";
-const ORANGE = "#F4A24C";
 
 const H_PADDING = 20;
 const CARD_GAP = 8;
@@ -75,8 +71,7 @@ const MAPTILER_API_KEY =
 const PHOTO_PLACEHOLDER =
   "https://placehold.co/900x600/eaf6e4/087a0d?text=CitiSense+Complaint";
 
-const AVATAR_BUCKET = "avatars";
-
+// ===== [DEPT DASHBOARD] Filter options, dashboard card config, bottom tabs =====
 const priorityFilters = [
   "All Priority",
   "Critical",
@@ -90,22 +85,38 @@ const dashboardCardConfig = [
   {
     title: "Assigned Complaints",
     countAll: true,
+    filter: "All Status",
     icon: "clipboard-text-outline",
+    accent: "rgba(8, 122, 13, 1)",
+    background: "rgba(255, 255, 255, 1)",
+    border: "rgba(226, 231, 224, 1)",
   },
   {
     title: "In Progress",
     statusNames: ["In Progress", "Returned"],
+    filter: "In Progress",
     icon: "progress-wrench",
+    accent: "rgba(8, 122, 13, 1)",
+    background: "rgba(255, 255, 255, 1)",
+    border: "rgba(226, 231, 224, 1)",
   },
   {
     title: "For Validation",
     statusNames: ["For Validation"],
+    filter: "For Validation",
     icon: "account-check-outline",
+    accent: "rgba(8, 122, 13, 1)",
+    background: "rgba(255, 255, 255, 1)",
+    border: "rgba(226, 231, 224, 1)",
   },
   {
     title: "Completed",
     statusNames: ["Completed"],
+    filter: "Completed",
     icon: "check-circle-outline",
+    accent: "rgba(8, 122, 13, 1)",
+    background: "rgba(255, 255, 255, 1)",
+    border: "rgba(226, 231, 224, 1)",
   },
 ];
 
@@ -144,6 +155,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [DEPT DASHBOARD] Helpers: normalize text/office/status/priority, badge styles =====
 function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -192,30 +204,31 @@ function normalizePriority(priority, isEmergency = false) {
 function getStatusStyle(status) {
   const normalizedStatus = normalizeStatus(status);
 
-  if (normalizedStatus === "Assigned") return { bg: "#E8EEFF", color: BLUE };
-  if (normalizedStatus === "Pending") return { bg: "#E8EEFF", color: BLUE };
+  if (normalizedStatus === "Assigned") return { bg: "rgba(232, 238, 255, 1)", color: "rgba(49, 90, 154, 1)" };
+  if (normalizedStatus === "Pending") return { bg: "rgba(232, 238, 255, 1)", color: "rgba(49, 90, 154, 1)" };
   if (normalizedStatus === "In Progress")
-    return { bg: "#FFF8D6", color: "#C9A000" };
+    return { bg: "rgba(255, 248, 214, 1)", color: "rgba(201, 160, 0, 1)" };
   if (normalizedStatus === "For Validation")
-    return { bg: "#F3EAFF", color: "#7A3EA8" };
-  if (normalizedStatus === "Completed") return { bg: "#DFF0DF", color: GREEN };
-  if (normalizedStatus === "Returned") return { bg: "#FFF0F0", color: RED };
+    return { bg: "rgba(243, 234, 255, 1)", color: "rgba(122, 62, 168, 1)" };
+  if (normalizedStatus === "Completed") return { bg: "rgba(223, 240, 223, 1)", color: "rgba(8, 122, 13, 1)" };
+  if (normalizedStatus === "Returned") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
 
-  return { bg: "#F1F1F1", color: MUTED };
+  return { bg: "rgba(241, 241, 241, 1)", color: "rgba(111, 119, 111, 1)" };
 }
 
 function getPriorityStyle(priority) {
   const normalizedPriority = normalizePriority(priority);
 
-  if (normalizedPriority === "Critical") return { bg: "#FFF0F0", color: RED };
-  if (normalizedPriority === "Urgent") return { bg: "#FFF0F0", color: RED };
-  if (normalizedPriority === "High") return { bg: "#FFF2E8", color: ORANGE };
-  if (normalizedPriority === "Normal") return { bg: LIGHT_GREEN, color: GREEN };
-  if (normalizedPriority === "Low") return { bg: "#F1F4F1", color: MUTED };
+  if (normalizedPriority === "Critical") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
+  if (normalizedPriority === "Urgent") return { bg: "rgba(255, 240, 240, 1)", color: "rgba(215, 25, 32, 1)" };
+  if (normalizedPriority === "High") return { bg: "rgba(255, 242, 232, 1)", color: "rgba(244, 162, 76, 1)" };
+  if (normalizedPriority === "Normal") return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
+  if (normalizedPriority === "Low") return { bg: "rgba(241, 244, 241, 1)", color: "rgba(111, 119, 111, 1)" };
 
-  return { bg: LIGHT_GREEN, color: GREEN };
+  return { bg: "rgba(234, 246, 228, 1)", color: "rgba(8, 122, 13, 1)" };
 }
 
+// ===== [DEPT DASHBOARD] Helpers: greeting and date/time formatting =====
 function getGreetingByTime(date) {
   const hour = date.getHours();
 
@@ -293,191 +306,9 @@ function parseComplaintDateTime(date, time) {
   return new Date(year, month, day, hour, minute).getTime();
 }
 
-function normalizePhotoUrls(value) {
-  if (!value) return [];
-
-  if (Array.isArray(value)) return value.filter(Boolean);
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-
-      if (Array.isArray(parsed)) return parsed.filter(Boolean);
-    } catch {
-      return value ? [value] : [];
-    }
-  }
-
-  return [];
-}
-
-function extractComplaintPhotoPath(value) {
-  if (!value) return null;
-
-  const text = decodeURIComponent(String(value));
-  const publicMarker = "/storage/v1/object/public/complaint-photos/";
-  const signMarker = "/storage/v1/object/sign/complaint-photos/";
-
-  if (text.includes(publicMarker)) {
-    return text.split(publicMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (text.includes(signMarker)) {
-    return text.split(signMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (!/^https?:\/\//i.test(text)) {
-    return text.replace(/^complaint-photos\//, "").replace(/^\/+/, "");
-  }
-
-  return null;
-}
-
-async function createReadableComplaintPhotoUrl(value) {
-  if (!value) return null;
-
-  try {
-    const path = extractComplaintPhotoPath(value);
-
-    if (path) {
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from("complaint-photos")
-        .createSignedUrl(path, 60 * 60);
-
-      if (!signedError && signedData?.signedUrl) {
-        return signedData.signedUrl;
-      }
-
-      const { data: publicData } = supabase.storage
-        .from("complaint-photos")
-        .getPublicUrl(path);
-
-      if (publicData?.publicUrl) {
-        return publicData.publicUrl;
-      }
-    }
-
-    if (/^https?:\/\//i.test(String(value))) {
-      return String(value);
-    }
-  } catch (error) {
-    console.log("Resolve complaint photo error:", error);
-  }
-
-  return null;
-}
-
-function extractAvatarPath(value) {
-  if (!value) return null;
-
-  const text = decodeURIComponent(String(value));
-  const publicMarker = `/storage/v1/object/public/${AVATAR_BUCKET}/`;
-  const signMarker = `/storage/v1/object/sign/${AVATAR_BUCKET}/`;
-
-  if (text.includes(publicMarker)) {
-    return text.split(publicMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (text.includes(signMarker)) {
-    return text.split(signMarker)[1]?.split("?")[0] || null;
-  }
-
-  if (!/^https?:\/\//i.test(text)) {
-    return text.replace(/^avatars\//, "").replace(/^\/+/, "");
-  }
-
-  return null;
-}
-
-async function createReadableAvatarUrl(value) {
-  if (!value) return null;
-
-  try {
-    const rawValue = String(value);
-
-    if (/^https?:\/\//i.test(rawValue)) {
-      return rawValue;
-    }
-
-    const path = extractAvatarPath(rawValue);
-
-    if (!path) return null;
-
-    const { data: signedData, error: signedError } = await supabase.storage
-      .from(AVATAR_BUCKET)
-      .createSignedUrl(path, 60 * 60);
-
-    if (!signedError && signedData?.signedUrl) {
-      return signedData.signedUrl;
-    }
-
-    const { data: publicData } = supabase.storage
-      .from(AVATAR_BUCKET)
-      .getPublicUrl(path);
-
-    return publicData?.publicUrl || null;
-  } catch (error) {
-    console.log("Resolve avatar error:", error);
-    return null;
-  }
-}
-
+// ===== [DEPT DASHBOARD] Map DB complaint row -> UI complaint object =====
 async function resolveComplaintPhotoUrls(row) {
-  const rawUrls = normalizePhotoUrls(row?.photo_urls);
-  const resolvedUrls = [];
-
-  for (const rawUrl of rawUrls) {
-    const resolvedUrl = await createReadableComplaintPhotoUrl(rawUrl);
-
-    if (resolvedUrl) {
-      resolvedUrls.push(resolvedUrl);
-    }
-  }
-
-  if (resolvedUrls.length > 0) {
-    return resolvedUrls;
-  }
-
-  if (!row?.id) return [];
-
-  try {
-    const { data: files, error } = await supabase.storage
-      .from("complaint-photos")
-      .list(String(row.id), {
-        limit: 10,
-        sortBy: { column: "name", order: "asc" },
-      });
-
-    if (error || !files?.length) return [];
-
-    const imageFiles = files.filter((file) => {
-      const name = String(file.name || "").toLowerCase();
-
-      return (
-        name.endsWith(".jpg") ||
-        name.endsWith(".jpeg") ||
-        name.endsWith(".png") ||
-        name.endsWith(".heic") ||
-        name.endsWith(".heif")
-      );
-    });
-
-    const listedUrls = [];
-
-    for (const file of imageFiles) {
-      const storagePath = `${row.id}/${file.name}`;
-      const resolvedUrl = await createReadableComplaintPhotoUrl(storagePath);
-
-      if (resolvedUrl) {
-        listedUrls.push(resolvedUrl);
-      }
-    }
-
-    return listedUrls;
-  } catch (error) {
-    console.log("List complaint photos error:", error);
-    return [];
-  }
+  return resolveComplaintEvidencePhotoUrls(row);
 }
 
 async function mapComplaintRow(row, profileMap = {}) {
@@ -537,6 +368,7 @@ async function mapComplaintRow(row, profileMap = {}) {
   };
 }
 
+// ===== [DEPT DASHBOARD] Map HTML builder (MapTiler WebView) =====
 function escapeHtml(value = "") {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -569,12 +401,12 @@ function createMapHtml({ latitude, longitude, address = "", title = "" }) {
               height: 100%;
               margin: 0;
               padding: 0;
-              background: #f7faf6;
+              background: rgba(247, 250, 246, 1);
               font-family: Arial, sans-serif;
               display: flex;
               align-items: center;
               justify-content: center;
-              color: #6f776f;
+              color: rgba(111, 119, 111, 1);
               text-align: center;
             }
           </style>
@@ -621,7 +453,7 @@ function createMapHtml({ latitude, longitude, address = "", title = "" }) {
             width: 100%;
             margin: 0;
             padding: 0;
-            background: #f7faf6;
+            background: rgba(247, 250, 246, 1);
           }
 
           .maplibregl-ctrl-attrib {
@@ -640,14 +472,14 @@ function createMapHtml({ latitude, longitude, address = "", title = "" }) {
           .popup-card .popup-title {
             font-size: 12px;
             font-weight: 800;
-            color: #171717;
+            color: rgba(23, 23, 23, 1);
             margin-bottom: 6px;
           }
 
           .popup-card .popup-label {
             font-size: 10px;
             font-weight: 700;
-            color: #087A0D;
+            color: rgba(8, 122, 13, 1);
             text-transform: uppercase;
             letter-spacing: 0.3px;
             margin-bottom: 2px;
@@ -655,14 +487,14 @@ function createMapHtml({ latitude, longitude, address = "", title = "" }) {
 
           .popup-card .popup-address {
             font-size: 12px;
-            color: #333;
+            color: rgba(51, 51, 51, 1);
             line-height: 1.35;
             margin-bottom: 6px;
           }
 
           .popup-card .popup-coords {
             font-size: 10px;
-            color: #6f776f;
+            color: rgba(111, 119, 111, 1);
           }
 
           .complaint-marker {
@@ -690,8 +522,8 @@ function createMapHtml({ latitude, longitude, address = "", title = "" }) {
             text-align: center;
             font-family: Arial, sans-serif;
             font-size: 13px;
-            color: #6f776f;
-            background: #f7faf6;
+            color: rgba(111, 119, 111, 1);
+            background: rgba(247, 250, 246, 1);
           }
         </style>
       </head>
@@ -748,8 +580,8 @@ function createMapHtml({ latitude, longitude, address = "", title = "" }) {
               complaintMarkerElement.className = "complaint-marker";
               complaintMarkerElement.innerHTML =
                 '<svg viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-                '<path d="M14 1.5C7.65 1.5 2.5 6.65 2.5 13c0 8.75 11.5 25.5 11.5 25.5S25.5 21.75 25.5 13C25.5 6.65 20.35 1.5 14 1.5z" fill="#d71920" stroke="#ffffff" stroke-width="2.5" stroke-linejoin="round"/>' +
-                '<circle cx="14" cy="13" r="4.2" fill="#ffffff"/>' +
+                '<path d="M14 1.5C7.65 1.5 2.5 6.65 2.5 13c0 8.75 11.5 25.5 11.5 25.5S25.5 21.75 25.5 13C25.5 6.65 20.35 1.5 14 1.5z" fill="rgba(215, 25, 32, 1)" stroke="rgba(255, 255, 255, 1)" stroke-width="2.5" stroke-linejoin="round"/>' +
+                '<circle cx="14" cy="13" r="4.2" fill="rgba(255, 255, 255, 1)"/>' +
                 "</svg>";
 
               new maplibregl.Marker({
@@ -783,11 +615,13 @@ function createMapHtml({ latitude, longitude, address = "", title = "" }) {
   `;
 }
 
+// ===== [DEPT DASHBOARD] Screen component =====
 export default function DepartmentHeadDashboard() {
   const router = useRouter();
   const pathname = usePathname();
   const { unreadNotificationCount } = useDepartmentHeadUnreadNotifications();
 
+  // --- [DEPT DASHBOARD] State: cached data, counts, filters, modals, avatar ---
   const cachedDashboard = getPageCache(DEPT_DASHBOARD_CACHE_KEY);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [departmentHeadDepartment, setDepartmentHeadDepartment] = useState(
@@ -807,7 +641,9 @@ export default function DepartmentHeadDashboard() {
       completed: 0,
     }
   );
-  const [loadingComplaints, setLoadingComplaints] = useState(!cachedDashboard);
+  const [loadingComplaints, setLoadingComplaints] = useState(
+    !cachedDashboard?.counts
+  );
 
   const [selectedCategory, setSelectedCategory] = useState("All Category");
   const [selectedPriority, setSelectedPriority] = useState("All Priority");
@@ -823,6 +659,7 @@ export default function DepartmentHeadDashboard() {
 
   useHideBottomNav(detailsVisible);
 
+  // --- [DEPT DASHBOARD] Refs and fonts ---
   const navigationLockRef = useRef(false);
   const navigationUnlockTimerRef = useRef(null);
 
@@ -833,6 +670,7 @@ export default function DepartmentHeadDashboard() {
     Poppins_700Bold,
   });
 
+  // --- [DEPT DASHBOARD] Profile avatar subscription ---
   useEffect(() => {
     return subscribeProfileAvatar((url) => {
       setProfilePhotoUrl(url);
@@ -844,6 +682,7 @@ export default function DepartmentHeadDashboard() {
     });
   }, []);
 
+  // --- [DEPT DASHBOARD] Category filter options ---
   const categoryFilters = useMemo(() => {
     const mappedCategories = getCategoriesForDepartment(departmentHeadDepartment);
 
@@ -864,6 +703,7 @@ export default function DepartmentHeadDashboard() {
     }
   }, [categoryFilters, selectedCategory]);
 
+  // --- [DEPT DASHBOARD] Navigation helper (debounced) ---
   const smoothNavigate = useCallback(
     (route, isActive = false) => {
       if (isActive || navigationLockRef.current) return;
@@ -893,6 +733,7 @@ export default function DepartmentHeadDashboard() {
     };
   }, []);
 
+  // --- [DEPT DASHBOARD] Clock tick for greeting ---
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentDate(new Date());
@@ -901,6 +742,7 @@ export default function DepartmentHeadDashboard() {
     return () => clearInterval(timer);
   }, []);
 
+  // --- [DEPT DASHBOARD] Load department head's department from profile ---
   const loadDepartmentHeadDepartment = useCallback(async () => {
     try {
       const {
@@ -987,48 +829,7 @@ export default function DepartmentHeadDashboard() {
     }
   }, []);
 
-  const loadCitizenProfiles = useCallback(async (citizenIds = []) => {
-    const uniqueIds = Array.from(new Set((citizenIds || []).filter(Boolean)));
-
-    if (uniqueIds.length === 0) return {};
-
-    try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id,email,full_name,contact_number,avatar_url")
-        .in("id", uniqueIds);
-
-      if (error) {
-        console.log("Load citizen profiles error:", error);
-        return {};
-      }
-
-      const profileEntries = await Promise.all(
-        (data || []).map(async (profile) => {
-          const readableAvatarUrl = await createReadableAvatarUrl(
-            profile.avatar_url
-          );
-
-          return [
-            profile.id,
-            {
-              id: profile.id,
-              email: profile.email || "",
-              full_name: profile.full_name || "Citizen",
-              contact_number: profile.contact_number || "No contact number",
-              avatar_url: readableAvatarUrl,
-            },
-          ];
-        })
-      );
-
-      return Object.fromEntries(profileEntries);
-    } catch (error) {
-      console.log("Load citizen profiles skipped:", error);
-      return {};
-    }
-  }, []);
-
+  // --- [DEPT DASHBOARD] Load assigned complaints and counts from Supabase ---
   const loadAssignedComplaints = useCallback(
     async (showLoader = true) => {
       try {
@@ -1038,10 +839,20 @@ export default function DepartmentHeadDashboard() {
 
         const department = await loadDepartmentHeadDepartment();
         const departmentKey = normalizeOfficeKey(department);
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const resolvedUserId =
+          session?.user?.id ||
+          currentUserId ||
+          getPageCache(DEPT_DASHBOARD_CACHE_KEY)?.currentUserId;
 
         if (!departmentKey) {
           console.log("Moderator dashboard has no department in profiles table.");
-          if (shouldShowPageLoader(DEPT_DASHBOARD_CACHE_KEY)) {
+          if (
+            shouldShowPageLoader(DEPT_DASHBOARD_CACHE_KEY) &&
+            !getPageCache(DEPT_DASHBOARD_CACHE_KEY)?.counts
+          ) {
             setAssignedComplaintsData([]);
             setDashboardCounts({
               total: 0,
@@ -1083,7 +894,7 @@ export default function DepartmentHeadDashboard() {
           ...prevCounts,
           counts,
           department,
-          currentUserId,
+          currentUserId: resolvedUserId || prevCounts.currentUserId,
         });
 
         const { data, error } = await applyOffsetPagination(
@@ -1129,7 +940,7 @@ export default function DepartmentHeadDashboard() {
           counts,
           complaints: mappedComplaints,
           department,
-          currentUserId,
+          currentUserId: resolvedUserId || prev.currentUserId,
         });
       } catch (error) {
         console.log("Load assigned complaints error:", error);
@@ -1140,20 +951,67 @@ export default function DepartmentHeadDashboard() {
         setLoadingComplaints(false);
       }
     },
-    [currentUserId, loadCitizenProfiles, loadDepartmentHeadDepartment]
+    [currentUserId, loadDepartmentHeadDepartment]
   );
 
+  // --- [DEPT DASHBOARD] On focus: restore cache, refresh, register push token ---
   useFocusEffect(
     useCallback(() => {
-      const cached = getPageCache(DEPT_DASHBOARD_CACHE_KEY);
-      if (cached?.counts) {
-        setDashboardCounts(cached.counts);
-      }
-      loadAssignedComplaints(true);
-      registerPushTokenForCurrentUser();
+      let cancelled = false;
+
+      const restoreAndRefresh = async () => {
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          const userId = session?.user?.id;
+
+          if (userId) {
+            const cached = await ensureDashboardCacheHydrated(
+              userId,
+              DEPT_DASHBOARD_CACHE_KEY
+            );
+            if (cancelled) return;
+
+            if (cached?.counts) {
+              setDashboardCounts(cached.counts);
+              setLoadingComplaints(false);
+            }
+            if (Array.isArray(cached?.complaints) && cached.complaints.length) {
+              setAssignedComplaintsData(cached.complaints);
+            }
+            if (cached?.department) {
+              setDepartmentHeadDepartment(cached.department);
+            }
+            if (cached?.currentUserId) {
+              setCurrentUserId(cached.currentUserId);
+            }
+          } else {
+            const cached = getPageCache(DEPT_DASHBOARD_CACHE_KEY);
+            if (cached?.counts) {
+              setDashboardCounts(cached.counts);
+              setLoadingComplaints(false);
+            }
+          }
+        } catch (error) {
+          console.log("Moderator dashboard cache restore error:", error);
+        }
+
+        if (!cancelled) {
+          loadAssignedComplaints(true);
+          registerPushTokenForCurrentUser();
+        }
+      };
+
+      restoreAndRefresh();
+
+      return () => {
+        cancelled = true;
+      };
     }, [loadAssignedComplaints])
   );
 
+  // --- [DEPT DASHBOARD] Realtime subscriptions ---
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -1197,6 +1055,7 @@ export default function DepartmentHeadDashboard() {
     };
   }, [currentUserId, loadAssignedComplaints]);
 
+  // --- [DEPT DASHBOARD] Derived: greeting, dashboard cards, filtered complaints, map HTML ---
   const greeting = useMemo(() => getGreetingByTime(currentDate), [currentDate]);
 
   const departmentComplaints = assignedComplaintsData;
@@ -1256,6 +1115,7 @@ export default function DepartmentHeadDashboard() {
     });
   }, [selectedComplaint]);
 
+  // --- [DEPT DASHBOARD] Details modal and photo viewer handlers ---
   const openDetails = (complaint) => {
     setSelectedComplaint(complaint);
     setDetailsVisible(true);
@@ -1291,15 +1151,17 @@ export default function DepartmentHeadDashboard() {
     }, 180);
   };
 
-  if (!fontsLoaded && !cachedDashboard) {
+  // --- [DEPT DASHBOARD] Render ---
+  if (!fontsLoaded && !cachedDashboard?.counts) {
     return <PageSkeleton variant="dashboard" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={BG} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [DEPT DASHBOARD UI] Fixed header: logo and profile avatar */}
         <View style={styles.fixedHeader}>
           <View style={styles.logoRow}>
             <Image source={MAIN_LOGO} style={styles.mainLogoImage} />
@@ -1320,7 +1182,7 @@ export default function DepartmentHeadDashboard() {
                 style={styles.avatar}
               />
             ) : (
-              <Ionicons name="person" size={25} color={GREEN} />
+              <Ionicons name="person" size={25} color="rgba(8, 122, 13, 1)" />
             )}
           </TouchableOpacity>
         </View>
@@ -1329,20 +1191,23 @@ export default function DepartmentHeadDashboard() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+          {/* [DEPT DASHBOARD UI] Greeting and department name */}
           <View style={styles.greetingContainer}>
             <Text style={styles.greetingSmall}>{greeting}</Text>
             <Text style={styles.greetingLarge}>Department Head!</Text>
             <Text style={styles.officeText}>{departmentHeadDepartment || "No department assigned"}</Text>
           </View>
 
+          {/* [DEPT DASHBOARD UI] Dashboard status count cards */}
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Dashboard</Text>
           </View>
 
           <View style={styles.dashboardCardsRow}>
             {dashboardCards.map((item, index) => (
-              <View
+              <TouchableOpacity
                 key={item.title}
+                activeOpacity={0.78}
                 style={[
                   styles.dashboardCard,
                   {
@@ -1350,22 +1215,40 @@ export default function DepartmentHeadDashboard() {
                     marginRight:
                       index === dashboardCards.length - 1 ? 0 : CARD_GAP,
                   },
+                  item.background && { backgroundColor: item.background },
+                  item.border && { borderColor: item.border },
                 ]}
+                onPress={() =>
+                  smoothNavigate({
+                    pathname: "/departmentHead/assignedComplaints",
+                    params: { filter: item.filter },
+                  })
+                }
               >
-                <View style={styles.cardIconCircle}>
+                <View
+                  style={[
+                    styles.cardIconCircle,
+                    item.accent && { backgroundColor: item.accent },
+                  ]}
+                >
                   <MaterialCommunityIcons
                     name={item.icon}
                     size={23}
-                    color={WHITE}
+                    color="rgba(255, 255, 255, 1)"
                   />
                 </View>
 
-                <Text style={styles.cardTitle}>{item.title}</Text>
-                <Text style={styles.cardValue}>{item.value}</Text>
-              </View>
+                <Text style={[styles.cardTitle, item.accent && { color: item.accent }]}>
+                  {item.title}
+                </Text>
+                <Text style={[styles.cardValue, item.accent && { color: item.accent }]}>
+                  {item.value}
+                </Text>
+              </TouchableOpacity>
             ))}
           </View>
 
+          {/* [DEPT DASHBOARD UI] Assigned Complaints heading with View All */}
           <View style={styles.sectionRow}>
             <Text style={styles.myComplaintsTitle}>Assigned Complaints</Text>
 
@@ -1375,10 +1258,11 @@ export default function DepartmentHeadDashboard() {
               onPress={() => smoothNavigate("/departmentHead/assignedComplaints")}
             >
               <Text style={styles.viewAllText}>View All</Text>
-              <Feather name="chevron-right" size={17} color={MUTED} />
+              <Feather name="chevron-right" size={17} color="rgba(111, 119, 111, 1)" />
             </TouchableOpacity>
           </View>
 
+          {/* [DEPT DASHBOARD UI] Filters: category and priority dropdowns */}
           <View style={styles.filterRow}>
             <TouchableOpacity
               activeOpacity={0.75}
@@ -1388,7 +1272,7 @@ export default function DepartmentHeadDashboard() {
               <Text style={styles.filterText} numberOfLines={1}>
                 {selectedCategory}
               </Text>
-              <Ionicons name="chevron-down" size={14} color={MUTED} />
+              <Ionicons name="chevron-down" size={14} color="rgba(111, 119, 111, 1)" />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1399,16 +1283,17 @@ export default function DepartmentHeadDashboard() {
               <Text style={styles.filterText} numberOfLines={1}>
                 {selectedPriority}
               </Text>
-              <Ionicons name="chevron-down" size={14} color={MUTED} />
+              <Ionicons name="chevron-down" size={14} color="rgba(111, 119, 111, 1)" />
             </TouchableOpacity>
           </View>
 
+          {/* [DEPT DASHBOARD UI] Complaints list: skeleton, empty state, or cards */}
           <View style={styles.complaintsList}>
             {loadingComplaints && assignedComplaintsData.length === 0 ? (
               <ComplaintListSkeleton count={3} />
             ) : displayedComplaints.length === 0 ? (
               <View style={styles.emptyCard}>
-                <Ionicons name="document-text-outline" size={30} color={MUTED} />
+                <Ionicons name="document-text-outline" size={30} color="rgba(111, 119, 111, 1)" />
                 <Text style={styles.emptyTitle}>No complaints found</Text>
                 <Text style={styles.emptyText}>
                   No assigned complaints are currently routed to your department in the database.
@@ -1425,6 +1310,7 @@ export default function DepartmentHeadDashboard() {
                       activeOpacity={0.8}
                       onPress={() => openDetails(item)}
                     >
+                      {/* [DEPT DASHBOARD UI] Card: title and location */}
                       <View style={styles.complaintHeaderRow}>
                         <View style={styles.complaintTitleBox}>
                           <Text style={styles.complaintTitle} numberOfLines={1}>
@@ -1440,6 +1326,7 @@ export default function DepartmentHeadDashboard() {
                         </View>
                       </View>
 
+                      {/* [DEPT DASHBOARD UI] Card: citizen avatar and contact */}
                       <View style={styles.complaintCitizenRow}>
                         <View style={styles.cardCitizenAvatar}>
                           {item.userPhoto ? (
@@ -1451,7 +1338,7 @@ export default function DepartmentHeadDashboard() {
                             <Ionicons
                               name="person-circle-outline"
                               size={30}
-                              color={GREEN}
+                              color="rgba(8, 122, 13, 1)"
                             />
                           )}
                         </View>
@@ -1469,15 +1356,16 @@ export default function DepartmentHeadDashboard() {
                         </View>
                       </View>
 
+                      {/* [DEPT DASHBOARD UI] Card: date/time and status/priority badges */}
                       <View style={styles.metaAndBadgeRow}>
                         <View style={styles.dateTimeColumn}>
                           <View style={styles.metaItem}>
-                            <Feather name="calendar" size={12} color={MUTED} />
+                            <Feather name="calendar" size={12} color="rgba(111, 119, 111, 1)" />
                             <Text style={styles.metaText}>{item.date}</Text>
                           </View>
 
                           <View style={styles.metaItem}>
-                            <Feather name="clock" size={12} color={MUTED} />
+                            <Feather name="clock" size={12} color="rgba(111, 119, 111, 1)" />
                             <Text style={styles.metaText}>{item.time}</Text>
                           </View>
                         </View>
@@ -1520,6 +1408,7 @@ export default function DepartmentHeadDashboard() {
                       </View>
                     </TouchableOpacity>
 
+                    {/* [DEPT DASHBOARD UI] Card actions: go to Assigned Complaints */}
                     <View style={styles.cardActionRow}>
                       <TouchableOpacity
                         activeOpacity={0.85}
@@ -1533,7 +1422,7 @@ export default function DepartmentHeadDashboard() {
                         <MaterialCommunityIcons
                           name="progress-check"
                           size={15}
-                          color={WHITE}
+                          color="rgba(255, 255, 255, 1)"
                         />
                         <Text style={styles.manageButtonText}>
                           Update Status
@@ -1552,7 +1441,7 @@ export default function DepartmentHeadDashboard() {
                         <MaterialCommunityIcons
                           name="swap-horizontal"
                           size={16}
-                          color={GREEN}
+                          color="rgba(8, 122, 13, 1)"
                         />
                         <Text style={styles.reassignButtonText}>Reassign</Text>
                       </TouchableOpacity>
@@ -1564,6 +1453,7 @@ export default function DepartmentHeadDashboard() {
           </View>
         </ScrollView>
 
+        {/* [DEPT DASHBOARD UI] Filter dropdown modals (category, priority) */}
         <DropdownModal
           visible={categoryDropdownVisible}
           title="Select Category"
@@ -1588,6 +1478,7 @@ export default function DepartmentHeadDashboard() {
           }}
         />
 
+        {/* [DEPT DASHBOARD UI] Complaint details modal */}
         <Modal
           visible={detailsVisible}
           transparent
@@ -1606,7 +1497,7 @@ export default function DepartmentHeadDashboard() {
                   style={styles.modalCloseButton}
                   onPress={closeDetails}
                 >
-                  <Feather name="x" size={21} color={TEXT} />
+                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
                 </TouchableOpacity>
               </View>
 
@@ -1620,6 +1511,7 @@ export default function DepartmentHeadDashboard() {
                     {selectedComplaint.description}
                   </Text>
 
+                  {/* [DEPT DASHBOARD UI] Details: citizen information */}
                   <View style={styles.citizenDetailCard}>
                     <Text style={styles.modalSectionTitle}>
                       Citizen Information
@@ -1643,7 +1535,7 @@ export default function DepartmentHeadDashboard() {
                             <Ionicons
                               name="person-circle-outline"
                               size={48}
-                              color={GREEN}
+                              color="rgba(8, 122, 13, 1)"
                             />
                           )}
                         </View>
@@ -1660,6 +1552,7 @@ export default function DepartmentHeadDashboard() {
                     </View>
                   </View>
 
+                  {/* [DEPT DASHBOARD UI] Details: location and map */}
                   <View style={styles.locationSection}>
                     <Text style={styles.modalSectionTitle}>Location</Text>
 
@@ -1694,6 +1587,7 @@ export default function DepartmentHeadDashboard() {
                     </View>
                   </View>
 
+                  {/* [DEPT DASHBOARD UI] Details: photo evidence */}
                   <View style={styles.photoSection}>
                     <Text style={styles.modalSectionTitle}>Photo Evidence</Text>
 
@@ -1718,7 +1612,7 @@ export default function DepartmentHeadDashboard() {
                       </ScrollView>
                     ) : (
                       <View style={styles.noPhotoBox}>
-                        <Ionicons name="image-outline" size={34} color={MUTED} />
+                        <Ionicons name="image-outline" size={34} color="rgba(111, 119, 111, 1)" />
                         <Text style={styles.noPhotoText}>
                           No photo evidence available
                         </Text>
@@ -1726,6 +1620,7 @@ export default function DepartmentHeadDashboard() {
                     )}
                   </View>
 
+                  {/* [DEPT DASHBOARD UI] Details: complaint information rows */}
                   <View style={styles.modalInfoCard}>
                     <Text style={styles.modalSectionTitle}>
                       Complaint Information
@@ -1767,6 +1662,7 @@ export default function DepartmentHeadDashboard() {
               )}
             </View>
 
+            {/* [DEPT DASHBOARD UI] Photo viewer (inside details modal) */}
             <FullscreenPhotoViewer
               variant="overlay"
               visible={photoViewerVisible && detailsVisible}
@@ -1776,6 +1672,7 @@ export default function DepartmentHeadDashboard() {
           </View>
         </Modal>
 
+        {/* [DEPT DASHBOARD UI] Photo viewer (outside details modal) */}
         <FullscreenPhotoViewer
           visible={photoViewerVisible && !detailsVisible}
           uri={selectedPhoto}
@@ -1786,6 +1683,7 @@ export default function DepartmentHeadDashboard() {
   );
 }
 
+// ===== [DEPT DASHBOARD] Subcomponent: DropdownModal (filter picker) =====
 function DropdownModal({
   visible,
   title,
@@ -1811,7 +1709,7 @@ function DropdownModal({
               style={styles.modalCloseButton}
               onPress={onClose}
             >
-              <Feather name="x" size={21} color={TEXT} />
+              <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
             </TouchableOpacity>
           </View>
 
@@ -1836,7 +1734,7 @@ function DropdownModal({
                 </Text>
 
                 {selectedValue === item && (
-                  <Feather name="check" size={18} color={GREEN} />
+                  <Feather name="check" size={18} color="rgba(8, 122, 13, 1)" />
                 )}
               </TouchableOpacity>
             ))}
@@ -1847,6 +1745,7 @@ function DropdownModal({
   );
 }
 
+// ===== [DEPT DASHBOARD] Subcomponent: InfoRow =====
 function InfoRow({ label, value, last }) {
   return (
     <View style={[styles.infoRow, last && styles.infoRowLast]}>
@@ -1856,24 +1755,27 @@ function InfoRow({ label, value, last }) {
   );
 }
 
+// ===== [DEPT DASHBOARD] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout ---
   safeArea: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   loader: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
 
+  // --- Header: logo and avatar ---
   fixedHeader: {
     height: 46,
     paddingHorizontal: H_PADDING,
@@ -1901,21 +1803,21 @@ const styles = StyleSheet.create({
   logoText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 25,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.1,
   },
 
   logoTextLight: {
-    color: ACCENT_GREEN,
+    color: "rgba(109, 187, 63, 1)",
   },
 
   avatarCircle: {
     width: 43,
     height: 43,
     borderRadius: 22,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -1933,6 +1835,7 @@ const styles = StyleSheet.create({
     paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
+  // --- Greeting and section titles ---
   greetingContainer: {
     marginBottom: 16,
   },
@@ -1940,14 +1843,14 @@ const styles = StyleSheet.create({
   greetingSmall: {
     fontFamily: "Poppins_700Bold",
     fontSize: 19,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.4,
   },
 
   greetingLarge: {
     fontFamily: "Poppins_700Bold",
     fontSize: 29,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     lineHeight: 35,
     letterSpacing: 0.3,
   },
@@ -1955,7 +1858,7 @@ const styles = StyleSheet.create({
   officeText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 13,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 4,
     letterSpacing: 0.4,
   },
@@ -1970,13 +1873,13 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 20,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   myComplaintsTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 22,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     letterSpacing: 0.2,
   },
 
@@ -1988,10 +1891,11 @@ const styles = StyleSheet.create({
   viewAllText: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginRight: 2,
   },
 
+  // --- Dashboard cards ---
   dashboardCardsRow: {
     flexDirection: "row",
     marginBottom: 19,
@@ -2001,11 +1905,11 @@ const styles = StyleSheet.create({
     height: 138,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     paddingTop: 12,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.04,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
@@ -2016,7 +1920,7 @@ const styles = StyleSheet.create({
     width: 43,
     height: 43,
     borderRadius: 22,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 7,
@@ -2025,7 +1929,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.2,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     textAlign: "center",
     lineHeight: 14,
     height: 34,
@@ -2035,11 +1939,12 @@ const styles = StyleSheet.create({
   cardValue: {
     fontFamily: "Poppins_700Bold",
     fontSize: 31,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginTop: 0,
     lineHeight: 36,
   },
 
+  // --- Filters ---
   filterRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2052,8 +1957,8 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
@@ -2065,9 +1970,10 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 10.8,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
+  // --- Complaint cards ---
   complaintsList: {
     marginTop: 3,
     gap: 10,
@@ -2075,12 +1981,12 @@ const styles = StyleSheet.create({
 
   complaintCard: {
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     borderRadius: 14,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 14,
     paddingVertical: 12,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.04,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 2 },
@@ -2099,13 +2005,13 @@ const styles = StyleSheet.create({
   complaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   complaintLocation: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     lineHeight: 15,
     marginTop: 3,
   },
@@ -2117,18 +2023,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 12,
-    backgroundColor: "#FCFFFB",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     borderWidth: 1,
-    borderColor: "#DDEFD8",
+    borderColor: "rgba(221, 239, 216, 1)",
   },
 
   cardCitizenAvatar: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 9,
@@ -2149,13 +2055,13 @@ const styles = StyleSheet.create({
   cardCitizenName: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.2,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   cardCitizenContact: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
   },
 
@@ -2180,7 +2086,7 @@ const styles = StyleSheet.create({
   metaText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginLeft: 6,
   },
 
@@ -2218,6 +2124,7 @@ const styles = StyleSheet.create({
     fontSize: 9.2,
   },
 
+  // --- Card actions ---
   cardActionRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2229,7 +2136,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 35,
     borderRadius: 18,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -2240,15 +2147,15 @@ const styles = StyleSheet.create({
   manageButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   reassignButton: {
     height: 35,
     borderRadius: 18,
     borderWidth: 1.5,
-    borderColor: GREEN,
-    backgroundColor: WHITE,
+    borderColor: "rgba(8, 122, 13, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -2259,15 +2166,16 @@ const styles = StyleSheet.create({
   reassignButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Empty state ---
   emptyCard: {
     minHeight: 130,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18,
@@ -2276,28 +2184,29 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 8,
   },
 
   emptyText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     marginTop: 3,
   },
 
+  // --- Bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: BORDER,
-    shadowColor: "#000000",
+    borderTopColor: "rgba(226, 231, 224, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -2332,9 +2241,9 @@ const styles = StyleSheet.create({
     minWidth: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     borderWidth: 1.5,
-    borderColor: WHITE,
+    borderColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -2343,7 +2252,7 @@ const styles = StyleSheet.create({
   notificationNavBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     lineHeight: 11,
     textAlign: "center",
   },
@@ -2356,6 +2265,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
+  // --- Dropdown modal ---
   centerModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -2368,7 +2278,7 @@ const styles = StyleSheet.create({
     width: "100%",
     maxHeight: "72%",
     borderRadius: 22,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 12,
@@ -2384,7 +2294,7 @@ const styles = StyleSheet.create({
   dropdownTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   dropdownOption: {
@@ -2392,32 +2302,33 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     paddingHorizontal: 12,
     marginBottom: 7,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
 
   dropdownOptionActive: {
-    backgroundColor: LIGHT_GREEN,
-    borderColor: "#BFE3B5",
+    backgroundColor: "rgba(234, 246, 228, 1)",
+    borderColor: "rgba(191, 227, 181, 1)",
   },
 
   dropdownOptionText: {
     flex: 1,
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     paddingRight: 8,
   },
 
   dropdownOptionTextActive: {
     fontFamily: "Poppins_700Bold",
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Details modal ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
@@ -2428,7 +2339,7 @@ const styles = StyleSheet.create({
     maxHeight: "90%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
     paddingBottom: Platform.OS === "ios" ? 30 : 20,
@@ -2438,7 +2349,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "#D7D7D7",
+    backgroundColor: "rgba(215, 215, 215, 1)",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -2453,14 +2364,14 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2468,13 +2379,13 @@ const styles = StyleSheet.create({
   modalComplaintTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 17,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   modalDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 18,
     marginTop: 4,
     marginBottom: 12,
@@ -2483,15 +2394,15 @@ const styles = StyleSheet.create({
   modalSectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
     marginBottom: 8,
   },
 
   citizenDetailCard: {
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     marginBottom: 12,
@@ -2506,9 +2417,9 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 31,
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
     borderWidth: 1,
-    borderColor: "#D9EFD1",
+    borderColor: "rgba(217, 239, 209, 1)",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
@@ -2519,7 +2430,7 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 31,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   citizenTextBox: {
@@ -2529,16 +2440,17 @@ const styles = StyleSheet.create({
   citizenName: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
   },
 
   citizenContact: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 3,
   },
 
+  // --- Location and map ---
   locationSection: {
     marginBottom: 15,
   },
@@ -2546,8 +2458,8 @@ const styles = StyleSheet.create({
   locationBox: {
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
     paddingHorizontal: 13,
     paddingVertical: 12,
     marginBottom: 10,
@@ -2556,21 +2468,21 @@ const styles = StyleSheet.create({
   locationLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   locationValue: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 13.2,
     lineHeight: 18,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 2,
   },
 
   locationCoordinates: {
     fontFamily: "Poppins_500Medium",
     fontSize: 10.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 5,
   },
 
@@ -2579,15 +2491,16 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   mapWebView: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
+  // --- Photo evidence ---
   photoSection: {
     marginBottom: 15,
   },
@@ -2596,8 +2509,8 @@ const styles = StyleSheet.create({
     height: 90,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2605,7 +2518,7 @@ const styles = StyleSheet.create({
   noPhotoText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 3,
   },
 
@@ -2618,16 +2531,17 @@ const styles = StyleSheet.create({
     width: Math.min(185, SCREEN_WIDTH * 0.48),
     height: 125,
     borderRadius: 13,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: "rgba(226, 231, 224, 1)",
   },
 
+  // --- Info rows ---
   modalInfoCard: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: BG,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(247, 250, 246, 1)",
     paddingHorizontal: 13,
     paddingVertical: 11,
     marginBottom: 13,
@@ -2644,17 +2558,18 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   infoValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     lineHeight: 16,
     marginTop: 1,
   },
 
+  // --- Photo viewer ---
   photoViewerOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.92)",

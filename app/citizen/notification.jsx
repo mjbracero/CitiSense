@@ -36,20 +36,12 @@ import { getPageCache, setPageCache, shouldShowPageLoader } from "../../lib/page
 import { writeAuditLog } from "../../lib/auditLogService";
 import { useScreenBottomInset } from "../../hooks/useScreenBottomInset";
 
-const GREEN = "#087A0D";
-const LIGHT_GREEN = "#EAF6E4";
-const BG = "#F7FAF6";
-const WHITE = "#FFFFFF";
-const TEXT = "#171717";
-const MUTED = "#6F776F";
-const BORDER = "#E2E7E0";
-const RED = "#D71920";
-const ORANGE = "#F4A24C";
-const BLUE = "#315A9A";
+// ===== [CITIZEN NOTIFS] Constants: colors, layout, cache key =====
 
 const H_PADDING = 20;
 const CITIZEN_NOTIFICATIONS_CACHE_KEY = "citizen.notifications";
 
+// ===== [CITIZEN NOTIFS] Bottom tab config =====
 const bottomTabs = [
   {
     label: "Home",
@@ -85,6 +77,7 @@ const bottomTabs = [
   },
 ];
 
+// ===== [CITIZEN NOTIFS] Helpers: date, text, metadata, time formatting =====
 function getFormattedDate(date) {
   return new Intl.DateTimeFormat("en-US", {
     weekday: "long",
@@ -143,6 +136,7 @@ function formatNotificationTime(value) {
   });
 }
 
+// ===== [CITIZEN NOTIFS] Notification type -> badge/icon/action style =====
 function isValidationTransition(type, metadata = {}) {
   const normalizedType = normalizeText(type);
   const oldStatus = normalizeText(metadata.old_status);
@@ -162,11 +156,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (actualValidation) {
     return {
-      statusBg: "#F3EAFF",
-      statusColor: "#7A3EA8",
+      statusBg: "rgba(243, 234, 255, 1)",
+      statusColor: "rgba(122, 62, 168, 1)",
       icon: "clipboard-check-outline",
-      iconBg: "#F3EAFF",
-      iconColor: "#7A3EA8",
+      iconBg: "rgba(243, 234, 255, 1)",
+      iconColor: "rgba(122, 62, 168, 1)",
       actionLabel: "Provide Validation",
       actionType: "validation",
     };
@@ -174,11 +168,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (normalizedType === "validation_reminder") {
     return {
-      statusBg: "#F3EAFF",
-      statusColor: "#7A3EA8",
+      statusBg: "rgba(243, 234, 255, 1)",
+      statusColor: "rgba(122, 62, 168, 1)",
       icon: "bell-ring-outline",
-      iconBg: "#F3EAFF",
-      iconColor: "#7A3EA8",
+      iconBg: "rgba(243, 234, 255, 1)",
+      iconColor: "rgba(122, 62, 168, 1)",
       actionLabel: "Validate Now",
       actionType: "validation",
     };
@@ -186,11 +180,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (normalizedType === "routed" || normalizedType === "reassigned") {
     return {
-      statusBg: LIGHT_GREEN,
-      statusColor: GREEN,
+      statusBg: "rgba(234, 246, 228, 1)",
+      statusColor: "rgba(8, 122, 13, 1)",
       icon: "send-check-outline",
-      iconBg: LIGHT_GREEN,
-      iconColor: GREEN,
+      iconBg: "rgba(234, 246, 228, 1)",
+      iconColor: "rgba(8, 122, 13, 1)",
       actionLabel: "View Details",
       actionType: "details",
     };
@@ -198,11 +192,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (normalizedType === "category") {
     return {
-      statusBg: "#E8EEFF",
-      statusColor: BLUE,
+      statusBg: "rgba(232, 238, 255, 1)",
+      statusColor: "rgba(49, 90, 154, 1)",
       icon: "shape-outline",
-      iconBg: "#E8EEFF",
-      iconColor: BLUE,
+      iconBg: "rgba(232, 238, 255, 1)",
+      iconColor: "rgba(49, 90, 154, 1)",
       actionLabel: "View Details",
       actionType: "details",
     };
@@ -210,11 +204,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (normalizedType === "priority") {
     return {
-      statusBg: "#FFF2E8",
-      statusColor: ORANGE,
+      statusBg: "rgba(255, 242, 232, 1)",
+      statusColor: "rgba(244, 162, 76, 1)",
       icon: "flag-outline",
-      iconBg: "#FFF2E8",
-      iconColor: ORANGE,
+      iconBg: "rgba(255, 242, 232, 1)",
+      iconColor: "rgba(244, 162, 76, 1)",
       actionLabel: "View Details",
       actionType: "details",
     };
@@ -222,11 +216,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (normalizedType === "duplicate" || normalizedType === "similar") {
     return {
-      statusBg: "#E8EEFF",
-      statusColor: BLUE,
+      statusBg: "rgba(232, 238, 255, 1)",
+      statusColor: "rgba(49, 90, 154, 1)",
       icon: "alert-circle-outline",
-      iconBg: "#E8EEFF",
-      iconColor: BLUE,
+      iconBg: "rgba(232, 238, 255, 1)",
+      iconColor: "rgba(49, 90, 154, 1)",
       actionLabel: "View Details",
       actionType: "details",
     };
@@ -234,11 +228,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (normalizedType === "completed" || normalizedStatus === "completed") {
     return {
-      statusBg: LIGHT_GREEN,
-      statusColor: GREEN,
+      statusBg: "rgba(234, 246, 228, 1)",
+      statusColor: "rgba(8, 122, 13, 1)",
       icon: "check-circle-outline",
-      iconBg: LIGHT_GREEN,
-      iconColor: GREEN,
+      iconBg: "rgba(234, 246, 228, 1)",
+      iconColor: "rgba(8, 122, 13, 1)",
       actionLabel: "View Details",
       actionType: "details",
     };
@@ -251,22 +245,22 @@ function getNotificationStyle(type, status, metadata = {}) {
 
     if (rejected) {
       return {
-        statusBg: "#FFF0F0",
-        statusColor: RED,
+        statusBg: "rgba(255, 240, 240, 1)",
+        statusColor: "rgba(215, 25, 32, 1)",
         icon: "close-circle-outline",
-        iconBg: "#FFF0F0",
-        iconColor: RED,
+        iconBg: "rgba(255, 240, 240, 1)",
+        iconColor: "rgba(215, 25, 32, 1)",
         actionLabel: "View Details",
         actionType: "details",
       };
     }
 
     return {
-      statusBg: LIGHT_GREEN,
-      statusColor: GREEN,
+      statusBg: "rgba(234, 246, 228, 1)",
+      statusColor: "rgba(8, 122, 13, 1)",
       icon: "check-decagram-outline",
-      iconBg: LIGHT_GREEN,
-      iconColor: GREEN,
+      iconBg: "rgba(234, 246, 228, 1)",
+      iconColor: "rgba(8, 122, 13, 1)",
       actionLabel: "View Details",
       actionType: "details",
     };
@@ -274,11 +268,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (normalizedStatus === "for validation") {
     return {
-      statusBg: "#F3EAFF",
-      statusColor: "#7A3EA8",
+      statusBg: "rgba(243, 234, 255, 1)",
+      statusColor: "rgba(122, 62, 168, 1)",
       icon: "clipboard-check-outline",
-      iconBg: "#F3EAFF",
-      iconColor: "#7A3EA8",
+      iconBg: "rgba(243, 234, 255, 1)",
+      iconColor: "rgba(122, 62, 168, 1)",
       actionLabel: "View Details",
       actionType: "details",
     };
@@ -286,11 +280,11 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (normalizedStatus === "in progress") {
     return {
-      statusBg: "#FFF8D6",
-      statusColor: "#C9A000",
+      statusBg: "rgba(255, 248, 214, 1)",
+      statusColor: "rgba(201, 160, 0, 1)",
       icon: "progress-wrench",
-      iconBg: "#FFF8D6",
-      iconColor: "#C9A000",
+      iconBg: "rgba(255, 248, 214, 1)",
+      iconColor: "rgba(201, 160, 0, 1)",
       actionLabel: "View Details",
       actionType: "details",
     };
@@ -302,11 +296,11 @@ function getNotificationStyle(type, status, metadata = {}) {
     normalizedType === "returned_by_admin"
   ) {
     return {
-      statusBg: "#FFF0F0",
-      statusColor: RED,
+      statusBg: "rgba(255, 240, 240, 1)",
+      statusColor: "rgba(215, 25, 32, 1)",
       icon: "arrow-u-left-top",
-      iconBg: "#FFF0F0",
-      iconColor: RED,
+      iconBg: "rgba(255, 240, 240, 1)",
+      iconColor: "rgba(215, 25, 32, 1)",
       actionLabel: "Resubmit Validation",
       actionType: "details",
     };
@@ -314,27 +308,28 @@ function getNotificationStyle(type, status, metadata = {}) {
 
   if (normalizedType === "submitted") {
     return {
-      statusBg: "#E8EEFF",
-      statusColor: BLUE,
+      statusBg: "rgba(232, 238, 255, 1)",
+      statusColor: "rgba(49, 90, 154, 1)",
       icon: "file-document-outline",
-      iconBg: "#E8EEFF",
-      iconColor: BLUE,
+      iconBg: "rgba(232, 238, 255, 1)",
+      iconColor: "rgba(49, 90, 154, 1)",
       actionLabel: "View Details",
       actionType: "details",
     };
   }
 
   return {
-    statusBg: "#E8EEFF",
-    statusColor: BLUE,
+    statusBg: "rgba(232, 238, 255, 1)",
+    statusColor: "rgba(49, 90, 154, 1)",
     icon: "bell-outline",
-    iconBg: "#E8EEFF",
-    iconColor: BLUE,
+    iconBg: "rgba(232, 238, 255, 1)",
+    iconColor: "rgba(49, 90, 154, 1)",
     actionLabel: "View Details",
     actionType: "details",
   };
 }
 
+// ===== [CITIZEN NOTIFS] Map DB notification row -> UI notification object =====
 function mapNotification(row) {
   const metadata = normalizeMetadata(row.metadata);
   const style = getNotificationStyle(row.type, row.status, metadata);
@@ -355,7 +350,9 @@ function mapNotification(row) {
   };
 }
 
+// ===== [CITIZEN NOTIFS] Screen component =====
 export default function CitizenNotification() {
+  // --- [CITIZEN NOTIFS] State, refs & navigation ---
   const router = useRouter();
   const pathname = usePathname();
   const scrollBottomInset = useScreenBottomInset({ includeNav: false });
@@ -402,6 +399,7 @@ export default function CitizenNotification() {
     router.replace("/citizen/dashboard");
   };
 
+  // --- [CITIZEN NOTIFS] Unread count ---
   const loadUnreadNotificationCount = useCallback(
     async (userId) => {
       try {
@@ -437,6 +435,7 @@ export default function CitizenNotification() {
     notificationsDataRef.current = notifications;
   }, [notifications]);
 
+  // --- [CITIZEN NOTIFS] Load notifications (cached + paginated) ---
   const loadNotifications = useCallback(
     async (options = {}) => {
       const normalized =
@@ -573,6 +572,7 @@ export default function CitizenNotification() {
     loadNotificationsRef.current = loadNotifications;
   }, [loadNotifications]);
 
+  // --- [CITIZEN NOTIFS] Infinite scroll / load more ---
   const loadMoreNotifications = useCallback(() => {
     loadNotifications({ append: true, showLoader: false });
   }, [loadNotifications]);
@@ -595,6 +595,7 @@ export default function CitizenNotification() {
     }
   };
 
+  // --- [CITIZEN NOTIFS] Initial load & reload on focus ---
   useEffect(() => {
     loadNotifications(true);
   }, [loadNotifications]);
@@ -605,6 +606,7 @@ export default function CitizenNotification() {
     }, [loadNotifications])
   );
 
+  // --- [CITIZEN NOTIFS] Realtime: subscribe to notification changes ---
   useEffect(() => {
     if (!currentUserId) return;
 
@@ -682,6 +684,7 @@ export default function CitizenNotification() {
     };
   }, [currentUserId, loadUnreadNotificationCount]);
 
+  // --- [CITIZEN NOTIFS] Mark all as read ---
   const markAllAsRead = async () => {
     if (!currentUserId) return;
 
@@ -724,6 +727,7 @@ export default function CitizenNotification() {
     });
   };
 
+  // --- [CITIZEN NOTIFS] Mark single as read ---
   const markSingleAsRead = async (item) => {
     if (!item?.id || !currentUserId) return;
 
@@ -757,6 +761,7 @@ export default function CitizenNotification() {
     await loadUnreadNotificationCount(currentUserId);
   };
 
+  // --- [CITIZEN NOTIFS] Open related complaint & press handlers ---
   const openRelatedComplaint = (item) => {
     if (!item.complaintId) return;
 
@@ -792,23 +797,27 @@ export default function CitizenNotification() {
     openRelatedComplaint(item);
   };
 
+  // --- [CITIZEN NOTIFS] Loading skeleton ---
   if (!fontsLoaded && !cachedNotifications) {
     return <PageSkeleton variant="notifications" />;
   }
 
+  // --- [CITIZEN NOTIFS] Render ---
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor={WHITE} />
+      <StatusBar barStyle="dark-content" backgroundColor="rgba(255, 255, 255, 1)" />
 
       <View style={styles.mainContainer}>
+        {/* [CITIZEN NOTIFS UI] Sticky header */}
         <View style={styles.stickyHeader}>
+          {/* [CITIZEN NOTIFS UI] Header: back button & title */}
           <View style={styles.headerRow}>
             <TouchableOpacity
               activeOpacity={0.7}
               style={styles.backButton}
               onPress={handleBack}
             >
-              <Feather name="chevron-left" size={26} color={TEXT} />
+              <Feather name="chevron-left" size={26} color="rgba(23, 23, 23, 1)" />
             </TouchableOpacity>
 
             <View style={styles.headerTitleBox}>
@@ -819,9 +828,10 @@ export default function CitizenNotification() {
             </View>
           </View>
 
+          {/* [CITIZEN NOTIFS UI] Summary card: unread count & mark all read */}
           <View style={styles.topSummaryCard}>
             <View style={styles.summaryIconCircle}>
-              <Ionicons name="notifications" size={27} color={WHITE} />
+              <Ionicons name="notifications" size={27} color="rgba(255, 255, 255, 1)" />
 
               {unreadNotificationCount > 0 && (
                 <View style={styles.summaryBadge}>
@@ -857,6 +867,7 @@ export default function CitizenNotification() {
             )}
           </View>
 
+          {/* [CITIZEN NOTIFS UI] Section row: Recent Updates & total */}
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Recent Updates</Text>
             {loadingNotifications && notifications.length === 0 ? (
@@ -869,6 +880,7 @@ export default function CitizenNotification() {
           </View>
         </View>
 
+        {/* [CITIZEN NOTIFS UI] Notification list scroll */}
         <ScrollView
           style={styles.listScroll}
           showsVerticalScrollIndicator={false}
@@ -883,11 +895,12 @@ export default function CitizenNotification() {
           }}
           onContentSizeChange={(_, height) => maybeFillViewport(height)}
         >
+          {/* [CITIZEN NOTIFS UI] Loading skeleton / empty state / notification list */}
           {loadingNotifications && notifications.length === 0 ? (
             <NotificationListSkeleton count={5} />
           ) : notifications.length === 0 ? (
             <View style={styles.emptyCard}>
-              <Ionicons name="notifications-outline" size={38} color={MUTED} />
+              <Ionicons name="notifications-outline" size={38} color="rgba(111, 119, 111, 1)" />
 
               <Text style={styles.emptyTitle}>No notifications yet</Text>
 
@@ -897,6 +910,7 @@ export default function CitizenNotification() {
             </View>
           ) : (
             <View style={styles.notificationList}>
+              {/* [CITIZEN NOTIFS UI] Notification cards */}
               {notifications.map((item) => (
                 <TouchableOpacity
                   key={item.id}
@@ -909,6 +923,7 @@ export default function CitizenNotification() {
                 >
                   {item.unread && <View style={styles.unreadDot} />}
 
+                  {/* [CITIZEN NOTIFS UI] Card icon */}
                   <View
                     style={[
                       styles.notificationIconCircle,
@@ -922,6 +937,7 @@ export default function CitizenNotification() {
                     />
                   </View>
 
+                  {/* [CITIZEN NOTIFS UI] Card body: title, time, message */}
                   <View style={styles.notificationBody}>
                     <View style={styles.notificationTopRow}>
                       <Text style={styles.notificationTitle} numberOfLines={1}>
@@ -935,6 +951,7 @@ export default function CitizenNotification() {
                       {item.message}
                     </Text>
 
+                    {/* [CITIZEN NOTIFS UI] Status badge & action button */}
                     <View style={styles.notificationBottomRow}>
                       <View
                         style={[
@@ -979,6 +996,7 @@ export default function CitizenNotification() {
                   </View>
                 </TouchableOpacity>
               ))}
+              {/* [CITIZEN NOTIFS UI] Load more footer */}
               <ComplaintsLoadMoreFooter
                 loading={loadingMoreNotifications}
                 label="Loading more notifications..."
@@ -992,23 +1010,25 @@ export default function CitizenNotification() {
   );
 }
 
+// ===== [CITIZEN NOTIFS] Styles =====
 const styles = StyleSheet.create({
+  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: BG,
+    backgroundColor: "rgba(247, 250, 246, 1)",
   },
 
   stickyHeader: {
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: H_PADDING,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: BORDER,
+    borderBottomColor: "rgba(226, 231, 224, 1)",
     zIndex: 2,
   },
 
@@ -1018,7 +1038,7 @@ const styles = StyleSheet.create({
 
   loader: {
     flex: 1,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1049,14 +1069,14 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 20,
-    color: "#15651E",
+    color: "rgba(21, 101, 30, 1)",
     lineHeight: 24,
   },
 
   headerDescription: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 1,
     lineHeight: 14,
   },
@@ -1066,16 +1086,17 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
 
+  // --- Summary card ---
   topSummaryCard: {
     minHeight: 88,
     borderRadius: 18,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     paddingHorizontal: 16,
     paddingVertical: 15,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 12,
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.12,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 3 },
@@ -1100,18 +1121,18 @@ const styles = StyleSheet.create({
     minWidth: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 5,
     borderWidth: 2,
-    borderColor: GREEN,
+    borderColor: "rgba(8, 122, 13, 1)",
   },
 
   summaryBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 9,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   summaryTextBox: {
@@ -1121,7 +1142,7 @@ const styles = StyleSheet.create({
   summaryTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 15.5,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     lineHeight: 21,
   },
 
@@ -1136,7 +1157,7 @@ const styles = StyleSheet.create({
   markReadButton: {
     minHeight: 30,
     borderRadius: 15,
-    backgroundColor: WHITE,
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 10,
     alignItems: "center",
     justifyContent: "center",
@@ -1145,9 +1166,10 @@ const styles = StyleSheet.create({
   markReadText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 9.5,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
+  // --- Section row, loading & empty states ---
   sectionRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1158,21 +1180,21 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 20,
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   sectionCount: {
     fontFamily: "Poppins_500Medium",
     fontSize: 11,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   loadingCard: {
     minHeight: 180,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1180,7 +1202,7 @@ const styles = StyleSheet.create({
   loadingText: {
     fontFamily: "Poppins_500Medium",
     fontSize: 12,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     marginTop: 10,
   },
 
@@ -1188,8 +1210,8 @@ const styles = StyleSheet.create({
     minHeight: 180,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 22,
@@ -1198,19 +1220,20 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginTop: 8,
   },
 
   emptyText: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
     textAlign: "center",
     marginTop: 3,
   },
 
   notificationList: {
+  // --- Notification cards ---
     gap: 10,
   },
 
@@ -1218,8 +1241,8 @@ const styles = StyleSheet.create({
     position: "relative",
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: WHITE,
+    borderColor: "rgba(226, 231, 224, 1)",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     paddingHorizontal: 13,
     paddingVertical: 13,
     flexDirection: "row",
@@ -1227,8 +1250,8 @@ const styles = StyleSheet.create({
   },
 
   notificationCardUnread: {
-    borderColor: "#BFE3B5",
-    backgroundColor: "#FCFFFB",
+    borderColor: "rgba(191, 227, 181, 1)",
+    backgroundColor: "rgba(252, 255, 251, 1)",
   },
 
   unreadDot: {
@@ -1238,7 +1261,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
   },
 
   notificationIconCircle: {
@@ -1267,20 +1290,20 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Poppins_700Bold",
     fontSize: 13.5,
-    color: TEXT,
+    color: "rgba(23, 23, 23, 1)",
     marginRight: 8,
   },
 
   notificationTime: {
     fontFamily: "Poppins_400Regular",
     fontSize: 9.2,
-    color: MUTED,
+    color: "rgba(111, 119, 111, 1)",
   },
 
   notificationMessage: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.2,
-    color: "#333333",
+    color: "rgba(51, 51, 51, 1)",
     lineHeight: 17,
     marginTop: 4,
   },
@@ -1310,7 +1333,7 @@ const styles = StyleSheet.create({
   actionButton: {
     minHeight: 28,
     borderRadius: 14,
-    backgroundColor: GREEN,
+    backgroundColor: "rgba(8, 122, 13, 1)",
     paddingHorizontal: 11,
     alignItems: "center",
     justifyContent: "center",
@@ -1319,27 +1342,28 @@ const styles = StyleSheet.create({
   actionButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 9.8,
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
   },
 
   viewDetailsButton: {
-    backgroundColor: LIGHT_GREEN,
+    backgroundColor: "rgba(234, 246, 228, 1)",
   },
 
   viewDetailsButtonText: {
-    color: GREEN,
+    color: "rgba(8, 122, 13, 1)",
   },
 
   bottomNav: {
+  // --- Bottom nav ---
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: "rgba(255, 255, 255, 1)",
     borderTopWidth: 1,
-    borderTopColor: "#E5E5E5",
-    shadowColor: "#000000",
+    borderTopColor: "rgba(229, 229, 229, 1)",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },

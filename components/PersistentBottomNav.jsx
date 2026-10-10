@@ -1,9 +1,9 @@
-import { Ionicons } from "@expo/vector-icons";
 import {
   Poppins_500Medium,
   Poppins_600SemiBold,
   useFonts,
 } from "@expo-google-fonts/poppins";
+import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { usePathname, useRouter } from "expo-router";
@@ -23,13 +23,9 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { getAndroidBlurFallbackColor } from "../lib/platformUi";
 import { isRouteInRole, saveLastRoute } from "../lib/navigationPersistence";
+import { getAndroidBlurFallbackColor } from "../lib/platformUi";
 import { supabase } from "../lib/supabase";
-
-const GREEN = "#087A0D";
-const WHITE = "#FFFFFF";
-const RED = "#D71920";
 
 /** Scroll/list padding so content clears the floating glass tab bar + fade. */
 export const BOTTOM_NAV_CONTENT_INSET = 148;
@@ -42,6 +38,7 @@ export const BOTTOM_NAV_PILL_HEIGHT = 66;
 export const BOTTOM_NAV_DOCK_PAD = 8;
 export const BOTTOM_NAV_ABOVE_GAP = 14;
 
+// ===== [BOTTOM NAV] Global hide store + useHideBottomNav hook =====
 let bottomNavHideCount = 0;
 const bottomNavHideListeners = new Set();
 
@@ -73,6 +70,7 @@ export function useHideBottomNav(hidden) {
   }, [hidden]);
 }
 
+// ===== [BOTTOM NAV] Tab config per role =====
 const ROLE_TABS = {
   citizen: [
     {
@@ -175,6 +173,7 @@ const ROLE_TABS = {
   ],
 };
 
+// ===== [BOTTOM NAV] Routes where the nav is hidden =====
 const HIDDEN_PATH_SNIPPETS = [
   "login",
   "signup",
@@ -187,6 +186,7 @@ const HIDDEN_PATH_SNIPPETS = [
   "citizen/submit",
 ];
 
+// ===== [BOTTOM NAV] Helper: active tab detection =====
 function isTabActive(pathname = "", tab, role) {
   if (pathname?.includes(tab.activePath)) {
     return true;
@@ -211,10 +211,12 @@ function isTabActive(pathname = "", tab, role) {
   return pathname?.includes("departmentHead/dashboard");
 }
 
+// ===== [BOTTOM NAV] Exported floating glass tab bar =====
 export default function PersistentBottomNav({
   role = "citizen",
   unreadNotificationCount = 0,
 }) {
+  // --- [BOTTOM NAV] State, refs & fonts ---
   const router = useRouter();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
@@ -227,12 +229,14 @@ export default function PersistentBottomNav({
     Poppins_600SemiBold,
   });
 
+  // --- [BOTTOM NAV] Subscribe to global hide store ---
   const forceHidden = useSyncExternalStore(
     subscribeBottomNavHide,
     getBottomNavForceHidden,
-    getBottomNavForceHidden
+    getBottomNavForceHidden,
   );
 
+  // --- [BOTTOM NAV] Persist last visited route per role ---
   useEffect(() => {
     if (!pathname || !role || !isRouteInRole(pathname, role)) {
       return;
@@ -250,6 +254,7 @@ export default function PersistentBottomNav({
     };
   }, [pathname, role]);
 
+  // --- [BOTTOM NAV] Hide while keyboard is visible ---
   useEffect(() => {
     const showEvent =
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
@@ -272,6 +277,7 @@ export default function PersistentBottomNav({
     };
   }, []);
 
+  // --- [BOTTOM NAV] Tab navigation (debounced with lock) ---
   const navigateToTab = useCallback(
     (route, isActive) => {
       if (isActive || navigationLockRef.current) {
@@ -298,9 +304,10 @@ export default function PersistentBottomNav({
         navigationLockRef.current = false;
       }, 400);
     },
-    [router, role]
+    [router, role],
   );
 
+  // --- [BOTTOM NAV] Visibility decision ---
   const shouldHide =
     forceHidden ||
     keyboardVisible ||
@@ -313,8 +320,10 @@ export default function PersistentBottomNav({
   const tabs = ROLE_TABS[role] || ROLE_TABS.citizen;
   const bottomPad = Math.max(insets.bottom, 10) + BOTTOM_NAV_DOCK_PAD;
 
+  // --- [BOTTOM NAV] Render ---
   return (
     <View style={styles.dock} pointerEvents="box-none">
+      {/* [BOTTOM NAV UI] Scroll fade behind the pill */}
       {/* Soft scroll fade — rounded so it matches the glass pill, not a square slab */}
       <View style={styles.scrollFadeClip} pointerEvents="none">
         <LinearGradient
@@ -330,6 +339,7 @@ export default function PersistentBottomNav({
         />
       </View>
 
+      {/* [BOTTOM NAV UI] Glass pill container */}
       <View
         style={[styles.pillRow, { paddingBottom: bottomPad }]}
         pointerEvents="box-none"
@@ -337,6 +347,7 @@ export default function PersistentBottomNav({
         {/* Outer shell keeps soft iOS-style shadow (not clipped) */}
         <View style={styles.pillShadow}>
           <View style={styles.pillClip}>
+            {/* [BOTTOM NAV UI] Glass layers: blur, gradient, rim highlights */}
             <View
               pointerEvents="none"
               style={[
@@ -347,9 +358,7 @@ export default function PersistentBottomNav({
 
             <BlurView
               intensity={Platform.OS === "ios" ? 100 : 85}
-              tint={
-                Platform.OS === "ios" ? "systemMaterialLight" : "light"
-              }
+              tint={Platform.OS === "ios" ? "systemMaterialLight" : "light"}
               experimentalBlurMethod={
                 Platform.OS === "android" ? "dimezisBlurView" : undefined
               }
@@ -378,6 +387,7 @@ export default function PersistentBottomNav({
             <View style={styles.glassRim} pointerEvents="none" />
             <View style={styles.glassSpec} pointerEvents="none" />
 
+            {/* [BOTTOM NAV UI] Tab buttons (icon, badge, label) */}
             <View style={styles.pillInner}>
               {tabs.map((tab) => {
                 const isActive = isTabActive(pathname, tab, role);
@@ -395,7 +405,11 @@ export default function PersistentBottomNav({
                       <Ionicons
                         name={isActive ? tab.activeIcon : tab.inactiveIcon}
                         size={23}
-                        color={isActive ? GREEN : "#3A403A"}
+                        color={
+                          isActive
+                            ? "rgba(8, 122, 13, 1)"
+                            : "rgba(58, 64, 58, 1)"
+                        }
                       />
 
                       {showBadge ? (
@@ -413,7 +427,9 @@ export default function PersistentBottomNav({
                       style={[
                         styles.navLabel,
                         {
-                          color: isActive ? GREEN : "#5A615A",
+                          color: isActive
+                            ? "rgba(8, 122, 13, 1)"
+                            : "rgba(90, 97, 90, 1)",
                           fontFamily: fontsLoaded
                             ? isActive
                               ? "Poppins_600SemiBold"
@@ -438,7 +454,9 @@ export default function PersistentBottomNav({
   );
 }
 
+// ===== [BOTTOM NAV] Styles =====
 const styles = StyleSheet.create({
+  // --- Dock & fade ---
   dock: {
     position: "absolute",
     left: 0,
@@ -459,6 +477,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
 
+  // --- Glass pill ---
   pillRow: {
     paddingHorizontal: 18,
     paddingTop: 6,
@@ -467,7 +486,7 @@ const styles = StyleSheet.create({
   pillShadow: {
     borderRadius: 36,
     backgroundColor: "transparent",
-    shadowColor: "#000000",
+    shadowColor: "rgba(0, 0, 0, 1)",
     shadowOpacity: Platform.OS === "ios" ? 0.18 : 0.22,
     shadowRadius: 28,
     shadowOffset: { width: 0, height: 14 },
@@ -519,6 +538,7 @@ const styles = StyleSheet.create({
     minHeight: 66,
   },
 
+  // --- Tab items & badge ---
   navItem: {
     flex: 1,
     alignItems: "center",
@@ -549,7 +569,7 @@ const styles = StyleSheet.create({
     minWidth: 15,
     height: 15,
     borderRadius: 8,
-    backgroundColor: RED,
+    backgroundColor: "rgba(215, 25, 32, 1)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 3,
@@ -558,7 +578,7 @@ const styles = StyleSheet.create({
   },
 
   notificationNavBadgeText: {
-    color: WHITE,
+    color: "rgba(255, 255, 255, 1)",
     fontSize: 8.5,
     fontFamily: "Poppins_600SemiBold",
     includeFontPadding: false,
