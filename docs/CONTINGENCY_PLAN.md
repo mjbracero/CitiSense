@@ -83,8 +83,10 @@ The goal is that **no citizen concern is lost** while the system is down.
    - description
    - assigned office
    - received by
-3. Department heads keep working on known complaints and note status changes on paper (complaint ID, new status, date, name).
-4. **After recovery,** staff encode every manual log into CitiSense within **24 hours**, marked "Encoded from manual log #___".
+3. **Open the latest backup in Excel.** The admin downloads last night's backup from GitHub (**Actions → Nightly Backup → Artifacts**) and opens `excel/complaints.csv` and `excel/department_status.csv`.
+   Each department head filters by their office to see their open complaints, contacts and locations, so work continues during the outage.
+4. Department heads keep working on known complaints and note status changes on paper (complaint ID, new status, date, name).
+5. **After recovery,** staff encode every manual log into CitiSense within **24 hours**, marked "Encoded from manual log #___".
    The Incident Lead checks that the counts match.
 
 ---

@@ -14,12 +14,15 @@ async function measureLatency() {
   const startedAt = Date.now();
 
   try {
-    await fetch(PROBE_URL, {
+    const response = await fetch(PROBE_URL, {
       method: "GET",
       headers: { apikey: SUPABASE_ANON_KEY },
       cache: "no-store",
       signal: controller.signal,
     });
+    if (response.status >= 500) {
+      return { ok: false, serverError: true };
+    }
     return { ok: true, latencyMs: Date.now() - startedAt };
   } catch (error) {
     return { ok: false, timedOut: error?.name === "AbortError" };
@@ -29,14 +32,17 @@ async function measureLatency() {
 }
 
 /**
- * Returns "online" | "slow" | "offline".
+ * Returns "online" | "slow" | "offline" | "server_down".
  * Offline comes from the OS network state; "slow" comes from timing a tiny
- * request to the Supabase backend the app depends on.
+ * request to the Supabase backend the app depends on; "server_down" means the
+ * device has internet but the backend keeps failing (outage / maintenance).
  */
 export default function useConnectionQuality() {
   const network = useNetworkState();
   const [probeStatus, setProbeStatus] = useState("online");
   const failuresRef = useRef(0);
+  const internetReachableRef = useRef(network.isInternetReachable);
+  internetReachableRef.current = network.isInternetReachable;
 
   const osOffline =
     network.isConnected === false || network.isInternetReachable === false;
@@ -61,10 +67,12 @@ export default function useConnectionQuality() {
       }
 
       failuresRef.current += 1;
-      if (result.timedOut) {
+      if (failuresRef.current < 2) {
         setProbeStatus("slow");
+      } else if (result.serverError || internetReachableRef.current === true) {
+        setProbeStatus("server_down");
       } else {
-        setProbeStatus(failuresRef.current >= 2 ? "offline" : "slow");
+        setProbeStatus(result.timedOut ? "slow" : "offline");
       }
     };
 

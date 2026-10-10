@@ -5,7 +5,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/poppins";
 import { useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeInUp, FadeOutUp } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import useConnectionQuality from "../hooks/useConnectionQuality";
@@ -18,6 +18,14 @@ const STATUS_META = {
     background: "rgba(215, 25, 32, 1)",
     title: "No internet connection",
     message: "Check your Wi-Fi or mobile data.",
+  },
+  server_down: {
+    icon: "warning",
+    color: "rgba(255, 255, 255, 1)",
+    background: "rgba(180, 83, 9, 1)",
+    title: "CitiSense is temporarily unavailable",
+    message: "Emergency? Tap to call 911.",
+    dialNumber: "911",
   },
   slow: {
     icon: "cellular",
@@ -65,10 +73,13 @@ export default function NetworkStatusBanner() {
   if (!statusKey) return null;
 
   const meta = STATUS_META[statusKey];
+  const dialEmergency = meta.dialNumber
+    ? () => Linking.openURL(`tel:${meta.dialNumber}`).catch(() => {})
+    : undefined;
 
   return (
     <View
-      pointerEvents="none"
+      pointerEvents={dialEmergency ? "box-none" : "none"}
       style={[styles.host, { top: Math.max(insets.top, 8) + 4 }]}
     >
       {/* [NETWORK BANNER UI] Status pill */}
@@ -76,19 +87,24 @@ export default function NetworkStatusBanner() {
         key={statusKey}
         entering={FadeInUp.duration(220)}
         exiting={FadeOutUp.duration(160)}
-        style={[styles.pill, { backgroundColor: meta.background }]}
       >
-        <Ionicons name={meta.icon} size={18} color={meta.color} />
-        <View style={styles.copy}>
-          <Text style={[styles.title, { color: meta.color }]} numberOfLines={1}>
-            {meta.title}
-          </Text>
-          {meta.message ? (
-            <Text style={[styles.message, { color: meta.color }]} numberOfLines={1}>
-              {meta.message}
+        <Pressable
+          disabled={!dialEmergency}
+          onPress={dialEmergency}
+          style={[styles.pill, { backgroundColor: meta.background }]}
+        >
+          <Ionicons name={meta.icon} size={18} color={meta.color} />
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: meta.color }]} numberOfLines={1}>
+              {meta.title}
             </Text>
-          ) : null}
-        </View>
+            {meta.message ? (
+              <Text style={[styles.message, { color: meta.color }]} numberOfLines={1}>
+                {meta.message}
+              </Text>
+            ) : null}
+          </View>
+        </Pressable>
       </Animated.View>
     </View>
   );
