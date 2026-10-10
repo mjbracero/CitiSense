@@ -8,7 +8,9 @@ If Supabase goes down or loses data, the system can be rebuilt from these files.
 | All tables, data, functions, triggers and RLS policies (public schema) | `db-public.dump` |
 | Login accounts (auth users and identities) | `db-auth-users.sql` |
 | Complaint photos, profile pictures and validation photos | `storage/<bucket>/…` |
+| Readable copies for Excel: complaints, per-department status, users | `excel/*.csv` |
 | What was backed up and when | `manifest.json` |
+| Guide to the files | `READ ME FIRST.txt` |
 
 ## Recovery targets
 

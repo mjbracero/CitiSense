@@ -67,7 +67,8 @@ jobs:
           archive=$(ls "$BACKUP_DIR"/citisense-*.tar.gz | head -n 1)
           id=$(basename "$archive" .tar.gz)
           mkdir -p "$RUNNER_TEMP/upload"
-          7z a -t7z -mhe=on -mx=0 -p"$BACKUP_PASSWORD" \
+          password=$(printf '%s' "$BACKUP_PASSWORD" | tr -d '\r\n')
+          7z a -t7z -mhe=on -mx=0 -p"$password" \
             "$RUNNER_TEMP/upload/$id.7z" "$archive" "$BACKUP_DIR/$id.json" > /dev/null
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
@@ -78,7 +79,9 @@ jobs:
             const mb = (m.sizeBytes / 1048576).toFixed(1);
             const rows = Object.entries(m.storage || {})
               .map(([b, s]) => `| ${b} | ${s.files} files | ${s.failed} failed |`).join("\n");
-            console.log(`## CitiSense backup ${m.status}\n\n- **Backup:** ${m.id}\n- **Size:** ${mb} MB\n- **Duration:** ${Math.round(m.durationMs / 1000)} s\n\n| Bucket | Files | Failed |\n| --- | --- | --- |\n${rows}`);
+            const excel = Object.entries(m.excel || {})
+              .map(([f, r]) => `| ${f} | ${r.error ? "FAILED" : r.rows + " rows"} |`).join("\n");
+            console.log(`## CitiSense backup ${m.status}\n\n- **Backup:** ${m.id}\n- **Size:** ${mb} MB\n- **Duration:** ${Math.round(m.durationMs / 1000)} s\n\n| Bucket | Files | Failed |\n| --- | --- | --- |\n${rows}\n\n| Excel file | Rows |\n| --- | --- |\n${excel}`);
           ' >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v5

@@ -4,8 +4,24 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
 import { getSupabaseAdmin } from "./auth.js";
+import { writeCsvExports } from "./exports.js";
 
 const BACKUP_ID = /^citisense-\d{8}-\d{6}$/;
+
+const README_TEXT = `CITISENSE BACKUP - READ ME FIRST
+
+excel/                 Open these in Excel, Numbers or Google Sheets.
+  complaints.csv         All complaints (one row each) with status, offices, citizen, location, dates.
+  department_status.csv  Each department's own status for every complaint.
+  users.csv              All accounts (no passwords).
+storage/               Photos. "Photo Files" in complaints.csv points to storage/complaint-photos/<file>.
+db-public.dump         Full database, used only to RESTORE the system (see backup-server/README.md).
+db-auth-users.sql      Login accounts, used only to RESTORE the system.
+manifest.json          When this backup was made and what it contains.
+
+CONFIDENTIAL: contains citizens' personal data (Data Privacy Act of 2012).
+Keep it on password-protected devices only. Do not share or upload publicly.
+`;
 let running = null;
 
 function timestampId(date = new Date()) {
@@ -184,6 +200,9 @@ export async function runBackup({ trigger = "manual", requestedBy = null } = {})
 
     await dumpDatabase(workDir);
     manifest.database = { files: ["db-public.dump", "db-auth-users.sql"] };
+
+    manifest.excel = await writeCsvExports(workDir);
+    await fs.writeFile(path.join(workDir, "READ ME FIRST.txt"), README_TEXT);
 
     manifest.storage = await downloadBuckets(workDir);
 
