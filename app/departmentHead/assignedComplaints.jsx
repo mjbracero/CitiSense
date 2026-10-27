@@ -68,6 +68,13 @@ import {
   resolveDepartmentHeadOffice,
 } from "../../lib/complaintCategories";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
+import OfficeStatusBreakdown from "../../components/OfficeStatusBreakdown";
+import {
+  fetchComplaintOfficeStatuses,
+  findOfficeStatusForDepartment,
+  isMultiOfficeComplaint,
+  updateMyOfficeComplaintStatus,
+} from "../../lib/officeStatus";
 
 // ===== [DEPT ASSIGNED] Constants: colors, layout, cache keys, map config =====
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -933,6 +940,7 @@ export default function DepartmentHeadAssignedComplaints() {
     cachedAssigned?.currentUserId ?? null
   );
   const [currentUserEmail, setCurrentUserEmail] = useState(null);
+  const [officeStatusRefreshKey, setOfficeStatusRefreshKey] = useState(0);
 
   const [selectedCategory, setSelectedCategory] = useState(selectedCategoryInit);
   const [selectedStatus, setSelectedStatus] = useState(selectedStatusInit);
@@ -1211,7 +1219,7 @@ export default function DepartmentHeadAssignedComplaints() {
         let complaintsRows = [];
         let queryError = null;
         let total = 0;
-        const matchMode = append ? assignedMatchModeRef.current : "exact";
+        const matchMode = append ? assignedMatchModeRef.current : "loose";
 
         if (matchMode === "visible") {
           const { data: visibleData, error: visibleError } = await supabase
@@ -1247,19 +1255,6 @@ export default function DepartmentHeadAssignedComplaints() {
           } else {
             complaintsRows = pagedData || [];
             total = pagedCount ?? 0;
-          }
-        }
-
-        if (!append && !queryError && complaintsRows.length === 0) {
-          const { data: looseData, error: looseError, count: looseCount } =
-            await runPagedQuery("loose");
-
-          if (looseError) {
-            queryError = looseError;
-          } else if ((looseData || []).length > 0) {
-            complaintsRows = looseData || [];
-            total = looseCount ?? 0;
-            assignedMatchModeRef.current = "loose";
           }
         }
 
@@ -1961,6 +1956,22 @@ export default function DepartmentHeadAssignedComplaints() {
 
     setActionComplaint(complaint);
     setStatusModalVisible(true);
+
+    if (isMultiOfficeComplaint(complaint.department)) {
+      fetchComplaintOfficeStatuses(complaint.rawId)
+        .then((rows) => {
+          const mine = findOfficeStatusForDepartment(rows, departmentHeadDepartment);
+          if (!mine) return;
+          setActionComplaint((prev) =>
+            prev?.rawId === complaint.rawId
+              ? { ...prev, officeStatus: mine.status }
+              : prev
+          );
+        })
+        .catch((error) => {
+          console.log("Office status load error:", error);
+        });
+    }
   };
 
   const selectStatus = async (nextStatus) => {
@@ -1993,19 +2004,31 @@ export default function DepartmentHeadAssignedComplaints() {
     setStatusModalVisible(false);
     setActionComplaint(null);
 
-    if (nextStatus === oldStatus) {
+    // Shared complaints: this department head only updates their own office;
+    // the overall status changes once every office has caught up.
+    const multiOffice = isMultiOfficeComplaint(complaint.department);
+
+    if (
+      multiOffice ? nextStatus === complaint.officeStatus : nextStatus === oldStatus
+    ) {
       return;
     }
+
+    const optimisticStatus = multiOffice
+      ? ["Assigned", "Pending", "Returned"].includes(oldStatus)
+        ? "In Progress"
+        : oldStatus
+      : nextStatus;
 
     setUpdatingStatusId(complaint.rawId);
     updatingStatusIdRef.current = complaint.rawId;
     localStatusUpdateGuardUntilRef.current = Date.now() + 4000;
-    statusOverridesRef.current.set(complaint.rawId, nextStatus);
+    statusOverridesRef.current.set(complaint.rawId, optimisticStatus);
 
     // Optimistic UI — badge updates right away and stays until server confirms.
     const applyLocalStatus = (list) =>
       list.map((item) =>
-        item.rawId === complaint.rawId ? { ...item, status: nextStatus } : item
+        item.rawId === complaint.rawId ? { ...item, status: optimisticStatus } : item
       );
 
     const optimisticList = applyLocalStatus(complaintsRef.current);
@@ -2014,7 +2037,7 @@ export default function DepartmentHeadAssignedComplaints() {
 
     if (selectedComplaint?.rawId === complaint.rawId) {
       setSelectedComplaint((prev) =>
-        prev ? { ...prev, status: nextStatus } : prev
+        prev ? { ...prev, status: optimisticStatus } : prev
       );
     }
 
@@ -2032,17 +2055,28 @@ export default function DepartmentHeadAssignedComplaints() {
     }
 
     try {
-      const { data: updatedComplaint, error } = await supabase
-        .from("complaints")
-        .update({
-          status: nextStatus,
-        })
-        .eq("id", complaint.rawId)
-        .select("id, short_id, citizen_id, status")
-        .maybeSingle();
+      let updatedComplaint = null;
 
-      if (error) {
-        throw error;
+      if (multiOffice) {
+        updatedComplaint = await updateMyOfficeComplaintStatus(
+          complaint.rawId,
+          nextStatus
+        );
+      } else {
+        const { data, error } = await supabase
+          .from("complaints")
+          .update({
+            status: nextStatus,
+          })
+          .eq("id", complaint.rawId)
+          .select("id, short_id, citizen_id, status")
+          .maybeSingle();
+
+        if (error) {
+          throw error;
+        }
+
+        updatedComplaint = data;
       }
 
       if (!updatedComplaint) {
@@ -2071,10 +2105,14 @@ export default function DepartmentHeadAssignedComplaints() {
       setUpdatingStatusId(null);
       updatingStatusIdRef.current = null;
 
+      setOfficeStatusRefreshKey((value) => value + 1);
+
       // Confirm right after the DB write — don't wait for push/notifications.
       notify(
         "Status Updated",
-        `Complaint status changed to ${confirmedStatus}.`
+        multiOffice
+          ? `Your office is now ${nextStatus}. Overall complaint status: ${confirmedStatus}.`
+          : `Complaint status changed to ${confirmedStatus}.`
       );
 
       writeAuditLog({
@@ -2088,6 +2126,9 @@ export default function DepartmentHeadAssignedComplaints() {
           old_status: oldStatus,
           new_status: confirmedStatus,
           assigned_office: complaint.department,
+          ...(multiOffice
+            ? { office: departmentHeadDepartment, office_status: nextStatus }
+            : {}),
           analysis_type: "processing_time",
           milestone:
             confirmedStatus === "In Progress"
@@ -2097,6 +2138,12 @@ export default function DepartmentHeadAssignedComplaints() {
                 : "status_change",
         },
       });
+
+      if (confirmedStatus === oldStatus) {
+        localStatusUpdateGuardUntilRef.current = Date.now() + 2500;
+        statusOverridesRef.current.delete(complaint.rawId);
+        return;
+      }
 
       // Notify citizen/admins in the background.
       const notificationType =
@@ -2943,6 +2990,12 @@ export default function DepartmentHeadAssignedComplaints() {
                     <InfoRow label="Complaint ID" value={selectedComplaint.id} />
                     <InfoRow label="Category" value={selectedComplaint.category} />
                     <InfoRow label="Assigned Office" value={selectedComplaint.department} />
+                    <OfficeStatusBreakdown
+                      complaintId={selectedComplaint.rawId}
+                      assignedOffice={selectedComplaint.department}
+                      refreshKey={`${selectedComplaint.status}-${officeStatusRefreshKey}`}
+                      myOffice={departmentHeadDepartment}
+                    />
                     {!!selectedComplaint.reassignmentReason && (
                       <>
                         <InfoRow
@@ -3034,7 +3087,7 @@ export default function DepartmentHeadAssignedComplaints() {
             sub: null,
             value: status,
           }))}
-          selectedValue={actionComplaint?.status}
+          selectedValue={actionComplaint?.officeStatus ?? actionComplaint?.status}
           onClose={() => {
             setStatusModalVisible(false);
             setActionComplaint(null);
