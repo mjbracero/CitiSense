@@ -1357,7 +1357,7 @@ const styles = StyleSheet.create({
   // --- Profile card ---
   profileHeroCard: {
     borderRadius: 20,
-    backgroundColor: "rgba(8, 122, 13, 1)",
+    backgroundColor: "rgba(122, 8, 105, 1)",
     paddingHorizontal: 16,
     paddingVertical: 18,
     flexDirection: "row",
