@@ -1,5 +1,5 @@
 import "react-native-gesture-handler";
-import { lazy, Suspense, useEffect } from "react";
+import { useEffect } from "react";
 import { Platform } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -23,12 +23,6 @@ import {
   isPasswordResetCallbackUrl,
   markPasswordRecoveryActive,
 } from "../lib/passwordReset";
-
-// ===== [ROOT LAYOUT] Dev-only Cmd+I UI inspector (web dev server only, stripped from production) =====
-const DevUiInspector =
-  process.env.NODE_ENV === "development" && Platform.OS === "web"
-    ? lazy(() => import("../dev/DevUiInspector"))
-    : null;
 
 // ===== [ROOT LAYOUT] Keep native splash visible until mount =====
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -118,11 +112,6 @@ export default function RootLayout() {
         {/* [ROOT LAYOUT UI] Global toast & confirm dialog hosts */}
         <ToastHost />
         <ConfirmDialogHost />
-        {DevUiInspector ? (
-          <Suspense fallback={null}>
-            <DevUiInspector />
-          </Suspense>
-        ) : null}
       </AppKeyboardProvider>
     </SafeAreaProvider>
   );
