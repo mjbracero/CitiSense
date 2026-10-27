@@ -50,6 +50,7 @@ import {
   waitOffsetPageDelay,
 } from "../../lib/complaintPagination";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
+import OfficeStatusBreakdown from "../../components/OfficeStatusBreakdown";
 import { loadCitizenProfiles, loadCitizenProfile } from "../../lib/citizenProfileCache";
 import {
   resolveComplaintEvidencePhotoUrls,
@@ -1958,6 +1959,12 @@ export default function AdminComplaints() {
                       last
                     />
                   </View>
+
+                  <OfficeStatusBreakdown
+                    complaintId={selectedComplaint.rawId}
+                    assignedOffice={selectedComplaint.department}
+                    refreshKey={selectedComplaint.status}
+                  />
 
                   {/* [ADMIN COMPLAINTS UI] Details: photo evidence */}
                   <View style={styles.photoSection}>
