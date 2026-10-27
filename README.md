@@ -140,12 +140,13 @@ Citizens can:
 
 Department Heads can:
 
-- View assigned complaints
-- View complaints on the map
-- Update complaint statuses
-- Reassign complaints to appropriate departments
-- Manage complaint resolution workflows
-- Monitor department-specific concerns
+- View assigned complaints on the Home dashboard and Assigned Complaints screen
+- Open a complaint and view its pinned location on the map, including Street View and routing to the pin
+- Update complaint status to In Progress or For Validation
+- Reassign complaints to another department with a reason
+- Filter assigned complaints by category, status, and priority
+- Receive notifications for assigned, reassigned, and status-related updates
+- Manage their profile, password, and account settings
 
 ### 👨‍💼 Admin
 
