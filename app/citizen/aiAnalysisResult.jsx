@@ -168,8 +168,6 @@ export default function CitizenAIAnalysisResult() {
     params.imageSummary,
     "Photo evidence was reviewed during AI analysis."
   );
-  const detectedSubject = getParam(params.detectedSubject, "");
-  const mismatchReason = getParam(params.mismatchReason, "");
   const urgencyReason = getParam(
     params.urgencyReason,
     "Priority was assigned from complaint urgency and severity."
@@ -331,17 +329,9 @@ export default function CitizenAIAnalysisResult() {
               />
             </View>
 
-            {/* [CITIZEN AI RESULT UI] Photo analysis notes: subject, summary, mismatch */}
-            {detectedSubject ? (
-              <Text style={styles.imageNote}>
-                Photo shows: {detectedSubject}
-              </Text>
-            ) : null}
+            {/* [CITIZEN AI RESULT UI] Photo analysis summary */}
             {imageSummary ? (
               <Text style={styles.imageNote}>{imageSummary}</Text>
-            ) : null}
-            {imageRelevance === "not_relevant" && mismatchReason ? (
-              <Text style={styles.mismatchNote}>{mismatchReason}</Text>
             ) : null}
           </View>
 
@@ -610,13 +600,6 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
     color: "rgba(102, 102, 102, 1)",
-    lineHeight: 17,
-    marginTop: 8,
-  },
-  mismatchNote: {
-    fontFamily: "Poppins_500Medium",
-    fontSize: 11.5,
-    color: "rgba(215, 25, 32, 1)",
     lineHeight: 17,
     marginTop: 8,
   },
