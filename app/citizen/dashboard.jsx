@@ -333,11 +333,13 @@ async function mapDashboardComplaint(row) {
     row.assigned_office || row.assignedOffice || row.department
   );
 
-  const priority = calculatePriorityFromKeywords(
-    row.title,
-    row.description,
-    Boolean(row.is_emergency)
-  );
+  const priority =
+    row.priority ||
+    calculatePriorityFromKeywords(
+      row.title,
+      row.description,
+      Boolean(row.is_emergency)
+    );
 
   const concernType = normalizeConcernType(
     row.complaint_type,
