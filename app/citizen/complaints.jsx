@@ -281,11 +281,13 @@ async function mapDatabaseComplaint(row) {
     row.assigned_office || row.assignedOffice || row.department
   );
 
-  const priority = calculatePriorityFromKeywords(
-    row.title,
-    row.description,
-    Boolean(row.is_emergency)
-  );
+  const priority =
+    row.priority ||
+    calculatePriorityFromKeywords(
+      row.title,
+      row.description,
+      Boolean(row.is_emergency)
+    );
 
   const concernType = normalizeConcernType(
     row.complaint_type,
@@ -954,11 +956,13 @@ export default function CitizenComplaints() {
             row.assigned_office || row.assignedOffice || row.department
           );
 
-        const fixedPriority = calculatePriorityFromKeywords(
-          row.title,
-          row.description,
-          Boolean(row.is_emergency)
-        );
+        const fixedPriority =
+          row.priority ||
+          calculatePriorityFromKeywords(
+            row.title,
+            row.description,
+            Boolean(row.is_emergency)
+          );
 
         return {
           ...row,
