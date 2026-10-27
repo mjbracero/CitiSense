@@ -29,8 +29,8 @@ const LOGO_ORBIT_ICONS = [
     top: 12,
     left: 10,
     amplitude: 8,
-    // duration: 2100,
-    // delay: 0,
+    duration: 2100,
+    delay: 0,
   },
   {
     key: "building",
@@ -41,8 +41,8 @@ const LOGO_ORBIT_ICONS = [
     top: 10,
     right: 8,
     amplitude: 9,
-    // duration: 2400,
-    // delay: 180,
+    duration: 2400,
+    delay: 180,
   },
   {
     key: "location",
@@ -53,8 +53,8 @@ const LOGO_ORBIT_ICONS = [
     bottom: 22,
     left: 4,
     amplitude: 7,
-    // duration: 2300,
-    // delay: 320,
+    duration: 2300,
+    delay: 320,
   },
   {
     key: "construct",
@@ -65,8 +65,8 @@ const LOGO_ORBIT_ICONS = [
     bottom: 18,
     right: 6,
     amplitude: 8,
-    // duration: 2500,
-    // delay: 420,
+    duration: 2500,
+    delay: 420,
   },
   {
     key: "leaf",
@@ -77,8 +77,8 @@ const LOGO_ORBIT_ICONS = [
     top: 78,
     left: -8,
     amplitude: 6,
-    // duration: 2600,
-    // delay: 260,
+    duration: 2600,
+    delay: 260,
   },
   {
     key: "shield",
@@ -89,8 +89,8 @@ const LOGO_ORBIT_ICONS = [
     top: 76,
     right: -6,
     amplitude: 7,
-    // duration: 2200,
-    // delay: 500,
+    duration: 2200,
+    delay: 500,
   },
 ];
 
