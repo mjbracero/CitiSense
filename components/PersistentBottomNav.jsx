@@ -70,106 +70,179 @@ export function useHideBottomNav(hidden) {
   }, [hidden]);
 }
 
-// ===== [BOTTOM NAV] Tab config per role =====
+// ===== [BOTTOM NAV] Tab config — one block per tab =====
+// `enabled: false`  -> tab is removed from the bottom bar.
+// `disabled: true`  -> tab stays visible but is greyed out and can't be tapped.
+// `onPress`         -> runs when the tab is tapped; call goToTab() to open its route.
+
+// --- [BOTTOM NAV] Citizen tabs ---
+const CITIZEN_HOME_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Home",
+  activeIcon: "home",
+  inactiveIcon: "home-outline",
+  route: "/citizen/dashboard",
+  activePath: "citizen/dashboard",
+};
+
+const CITIZEN_SUBMIT_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Submit",
+  activeIcon: "add-circle",
+  inactiveIcon: "add-circle-outline",
+  route: "/citizen/submit",
+  activePath: "citizen/submit",
+};
+
+const CITIZEN_COMPLAINTS_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "My Complaints",
+  activeIcon: "document-text",
+  inactiveIcon: "document-text-outline",
+  route: "/citizen/complaints",
+  activePath: "citizen/complaints",
+};
+
+const CITIZEN_PROFILE_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Profile",
+  activeIcon: "person",
+  inactiveIcon: "person-outline",
+  route: "/citizen/profile",
+  activePath: "citizen/profile",
+};
+
+// --- [BOTTOM NAV] Admin tabs ---
+const ADMIN_HOME_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Home",
+  activeIcon: "home",
+  inactiveIcon: "home-outline",
+  route: "/admin/dashboard",
+  activePath: "admin/dashboard",
+};
+
+const ADMIN_COMPLAINTS_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Complaints",
+  activeIcon: "document-text",
+  inactiveIcon: "document-text-outline",
+  route: "/admin/complaints",
+  activePath: "admin/complaints",
+};
+
+const ADMIN_ANALYTICS_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Analytics",
+  activeIcon: "analytics",
+  inactiveIcon: "analytics-outline",
+  route: "/admin/analytics",
+  activePath: "admin/analytics",
+};
+
+const ADMIN_NOTIFICATIONS_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Notifications",
+  activeIcon: "notifications",
+  inactiveIcon: "notifications-outline",
+  route: "/admin/notification",
+  activePath: "admin/notification",
+  showBadge: true,
+};
+
+const ADMIN_PROFILE_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Profile",
+  activeIcon: "person",
+  inactiveIcon: "person-outline",
+  route: "/admin/profile",
+  activePath: "admin/profile",
+};
+
+// --- [BOTTOM NAV] Department head tabs ---
+const DEPT_HEAD_HOME_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Home",
+  activeIcon: "home",
+  inactiveIcon: "home-outline",
+  route: "/departmentHead/dashboard",
+  activePath: "departmentHead/dashboard",
+};
+
+const DEPT_HEAD_ASSIGNED_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Assigned",
+  activeIcon: "document-text",
+  inactiveIcon: "document-text-outline",
+  route: "/departmentHead/assignedComplaints",
+  activePath: "departmentHead/assignedComplaints",
+};
+
+const DEPT_HEAD_NOTIFICATIONS_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Notifications",
+  activeIcon: "notifications",
+  inactiveIcon: "notifications-outline",
+  route: "/departmentHead/notification",
+  activePath: "departmentHead/notification",
+  showBadge: true,
+};
+
+const DEPT_HEAD_PROFILE_TAB = {
+  enabled: true,
+  disabled: false,
+  onPress: (goToTab) => goToTab(),
+  label: "Profile",
+  activeIcon: "person",
+  inactiveIcon: "person-outline",
+  route: "/departmentHead/profile",
+  activePath: "departmentHead/profile",
+};
+
+// --- [BOTTOM NAV] Tab order per role ---
 const ROLE_TABS = {
   citizen: [
-    {
-      label: "Home",
-      activeIcon: "home",
-      inactiveIcon: "home-outline",
-      route: "/citizen/dashboard",
-      activePath: "citizen/dashboard",
-    },
-    {
-      label: "Submit",
-      activeIcon: "add-circle",
-      inactiveIcon: "add-circle-outline",
-      route: "/citizen/submit",
-      activePath: "citizen/submit",
-    },
-    {
-      label: "My Complaints",
-      activeIcon: "document-text",
-      inactiveIcon: "document-text-outline",
-      route: "/citizen/complaints",
-      activePath: "citizen/complaints",
-    },
-    {
-      label: "Profile",
-      activeIcon: "person",
-      inactiveIcon: "person-outline",
-      route: "/citizen/profile",
-      activePath: "citizen/profile",
-    },
+    CITIZEN_HOME_TAB,
+    CITIZEN_SUBMIT_TAB,
+    CITIZEN_COMPLAINTS_TAB,
+    CITIZEN_PROFILE_TAB,
   ],
   admin: [
-    {
-      label: "Home",
-      activeIcon: "home",
-      inactiveIcon: "home-outline",
-      route: "/admin/dashboard",
-      activePath: "admin/dashboard",
-    },
-    {
-      label: "Complaints",
-      activeIcon: "document-text",
-      inactiveIcon: "document-text-outline",
-      route: "/admin/complaints",
-      activePath: "admin/complaints",
-    },
-    {
-      label: "Analytics",
-      activeIcon: "analytics",
-      inactiveIcon: "analytics-outline",
-      route: "/admin/analytics",
-      activePath: "admin/analytics",
-    },
-    {
-      label: "Notifications",
-      activeIcon: "notifications",
-      inactiveIcon: "notifications-outline",
-      route: "/admin/notification",
-      activePath: "admin/notification",
-      showBadge: true,
-    },
-    {
-      label: "Profile",
-      activeIcon: "person",
-      inactiveIcon: "person-outline",
-      route: "/admin/profile",
-      activePath: "admin/profile",
-    },
+    ADMIN_HOME_TAB,
+    ADMIN_COMPLAINTS_TAB,
+    ADMIN_ANALYTICS_TAB,
+    ADMIN_NOTIFICATIONS_TAB,
+    ADMIN_PROFILE_TAB,
   ],
   departmentHead: [
-    {
-      label: "Home",
-      activeIcon: "home",
-      inactiveIcon: "home-outline",
-      route: "/departmentHead/dashboard",
-      activePath: "departmentHead/dashboard",
-    },
-    {
-      label: "Assigned",
-      activeIcon: "document-text",
-      inactiveIcon: "document-text-outline",
-      route: "/departmentHead/assignedComplaints",
-      activePath: "departmentHead/assignedComplaints",
-    },
-    {
-      label: "Notifications",
-      activeIcon: "notifications",
-      inactiveIcon: "notifications-outline",
-      route: "/departmentHead/notification",
-      activePath: "departmentHead/notification",
-      showBadge: true,
-    },
-    {
-      label: "Profile",
-      activeIcon: "person",
-      inactiveIcon: "person-outline",
-      route: "/departmentHead/profile",
-      activePath: "departmentHead/profile",
-    },
+    DEPT_HEAD_HOME_TAB,
+    DEPT_HEAD_ASSIGNED_TAB,
+    DEPT_HEAD_NOTIFICATIONS_TAB,
+    DEPT_HEAD_PROFILE_TAB,
   ],
 };
 
@@ -317,7 +390,9 @@ export default function PersistentBottomNav({
     return null;
   }
 
-  const tabs = ROLE_TABS[role] || ROLE_TABS.citizen;
+  const tabs = (ROLE_TABS[role] || ROLE_TABS.citizen).filter(
+    (tab) => tab.enabled !== false,
+  );
   const bottomPad = Math.max(insets.bottom, 10) + BOTTOM_NAV_DOCK_PAD;
 
   // --- [BOTTOM NAV] Render ---
@@ -397,9 +472,14 @@ export default function PersistentBottomNav({
                 return (
                   <Pressable
                     key={tab.label}
-                    style={styles.navItem}
+                    style={[styles.navItem, tab.disabled && styles.navItemDisabled]}
                     android_ripple={{ color: "transparent" }}
-                    onPress={() => navigateToTab(tab.route, isActive)}
+                    disabled={tab.disabled}
+                    accessibilityState={{ disabled: Boolean(tab.disabled) }}
+                    onPress={() => {
+                      if (tab.disabled || typeof tab.onPress !== "function") return;
+                      tab.onPress(() => navigateToTab(tab.route, isActive));
+                    }}
                   >
                     <View style={styles.navIconBubble}>
                       <Ionicons
@@ -544,6 +624,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 2,
+  },
+
+  navItemDisabled: {
+    opacity: 0.35,
   },
 
   navIconBubble: {
