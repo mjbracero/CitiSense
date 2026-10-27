@@ -14,12 +14,10 @@ import { useFocusEffect, usePathname, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Dimensions,
   Image,
   Keyboard,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -27,17 +25,16 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import AuditLogsModal from "../../components/AuditLogsModal";
-import PrivacySecurityModal from "../../components/PrivacySecurityModal";
 import { PageSkeleton } from "../../components/skeletons";
 import { writeAuditLog } from "../../lib/auditLogService";
 import { clearPageCache, getPageCache, setPageCache } from "../../lib/pageDataCache";
 import { setProfileAvatarUrl } from "../../lib/profileAvatarStore";
-import { syncOwnProfileRow } from "../../lib/syncOwnProfile";
 import { supabase } from "../../lib/supabase";
 import { notify } from "../../lib/toast";
 import {
@@ -53,10 +50,18 @@ import {
 import useDepartmentHeadUnreadNotifications from "../../hooks/useDepartmentHeadUnreadNotifications";
 import { BOTTOM_NAV_CONTENT_INSET, useHideBottomNav } from "../../components/PersistentBottomNav";
 
-// ===== [DEPT PROFILE] Constants: colors, layout, storage, defaults =====
+const GREEN = "#087A0D";
+const LIGHT_GREEN = "#EAF6E4";
+const ACCENT_GREEN = "#6DBB3F";
+const BG = "#F7FAF6";
+const WHITE = "#FFFFFF";
+const TEXT = "#171717";
+const MUTED = "#6F776F";
+const BORDER = "#E2E7E0";
+const RED = "#D71920";
+const BLUE = "#315A9A";
 
 const H_PADDING = 20;
-const PROFILE_SHEET_MAX_HEIGHT = Math.round(Dimensions.get("screen").height * 0.9);
 const AVATAR_BUCKET = "avatars";
 const DEPT_PROFILE_CACHE_KEY = "departmentHead.profile";
 
@@ -73,12 +78,10 @@ const DEFAULT_PROFILE_INFO = {
   avatarUrl: null,
 };
 
-// ===== [DEPT PROFILE] Module-level caches (persist across remounts) =====
 let cachedDepartmentHeadProfile = DEFAULT_PROFILE_INFO;
 let cachedLocationEnabled = false;
 let hasCheckedLocationPermission = false;
 
-// ===== [DEPT PROFILE] Bottom tab config =====
 const bottomTabs = [
   {
     label: "Home",
@@ -114,7 +117,6 @@ const bottomTabs = [
   },
 ];
 
-// ===== [DEPT PROFILE] Helpers: image extension, build profile info =====
 function getImageExtension(asset) {
   const fileName = asset?.fileName?.toLowerCase() || "";
   const uri = asset?.uri?.toLowerCase() || "";
@@ -185,16 +187,11 @@ function buildDepartmentHeadProfileInfo(currentUser, databaseProfile = null) {
   };
 }
 
-// ===== [DEPT PROFILE] Screen component =====
 export default function DepartmentHeadProfile() {
-  // --- [DEPT PROFILE] Navigation, insets & unread count ---
   const router = useRouter();
   const pathname = usePathname();
-  const insets = useSafeAreaInsets();
-  const sheetBottomPad = Math.max(insets.bottom, 8);
   const { unreadNotificationCount } = useDepartmentHeadUnreadNotifications();
 
-  // --- [DEPT PROFILE] State: profile, modals, drafts, toggles ---
   const cachedPage = getPageCache(DEPT_PROFILE_CACHE_KEY);
   const [user, setUser] = useState(cachedPage?.user ?? null);
   const [profileInfo, setProfileInfo] = useState(
@@ -208,11 +205,8 @@ export default function DepartmentHeadProfile() {
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [passwordModalVisible, setPasswordModalVisible] = useState(false);
   const [auditLogsVisible, setAuditLogsVisible] = useState(false);
-  const [privacyVisible, setPrivacyVisible] = useState(false);
 
-  useHideBottomNav(
-    editModalVisible || passwordModalVisible || privacyVisible
-  );
+  useHideBottomNav(editModalVisible || passwordModalVisible);
 
   const [fullNameDraft, setFullNameDraft] = useState("");
   const [emailDraft, setEmailDraft] = useState("");
@@ -241,7 +235,6 @@ export default function DepartmentHeadProfile() {
   const displayDepartment = profileInfo.department;
   const avatarUrl = profileInfo.avatarUrl;
 
-  // --- [DEPT PROFILE] Load profile (auth user + profiles table) ---
   const loadUser = useCallback(async () => {
     try {
       const {
@@ -299,7 +292,6 @@ export default function DepartmentHeadProfile() {
     }
   }, []);
 
-  // --- [DEPT PROFILE] Location preference check ---
   const checkLocationPermission = useCallback(async () => {
     if (!user?.id) {
       return;
@@ -320,7 +312,6 @@ export default function DepartmentHeadProfile() {
     }
   }, [user?.id]);
 
-  // --- [DEPT PROFILE] Reload on focus ---
   useFocusEffect(
     useCallback(() => {
       loadUser();
@@ -328,7 +319,6 @@ export default function DepartmentHeadProfile() {
     }, [loadUser, checkLocationPermission])
   );
 
-  // --- [DEPT PROFILE] Realtime: profile row changes ---
   useEffect(() => {
     const authEmail = user?.email;
 
@@ -364,7 +354,6 @@ export default function DepartmentHeadProfile() {
 
   const metadata = user?.user_metadata || {};
 
-  // --- [DEPT PROFILE] Edit / password modal open & close ---
   const openEditProfile = () => {
     setFullNameDraft(displayName === "Department Head User" ? "" : displayName);
     setEmailDraft(displayEmail === "departmenthead@example.com" ? "" : displayEmail);
@@ -384,7 +373,6 @@ export default function DepartmentHeadProfile() {
     setConfirmPassword("");
   };
 
-  // --- [DEPT PROFILE] Location permission toggle ---
   const handleLocationToggle = async (value) => {
     if (value) {
       try {
@@ -455,7 +443,6 @@ export default function DepartmentHeadProfile() {
     });
   };
 
-  // --- [DEPT PROFILE] Profile photo upload ---
   const pickProfilePhoto = async () => {
     try {
       if (!user?.id) {
@@ -546,17 +533,26 @@ export default function DepartmentHeadProfile() {
       setProfileInfo(nextProfileInfo);
       setProfileAvatarUrl(publicUrl);
 
-      await syncOwnProfileRow({
-        userId: user.id,
-        fullName: nextProfileInfo.name,
-        email: nextProfileInfo.email,
-        contactNumber:
-          nextProfileInfo.contact === "Not set"
-            ? null
-            : nextProfileInfo.contact,
-        department: nextProfileInfo.department,
-        avatarUrl: publicUrl,
-      });
+      try {
+        await supabase.from(PROFILE_TABLE).upsert(
+          {
+            id: user.id,
+            full_name: nextProfileInfo.name,
+            email: nextProfileInfo.email,
+            contact_number:
+              nextProfileInfo.contact === "Not set"
+                ? null
+                : nextProfileInfo.contact,
+            department: nextProfileInfo.department,
+            avatar_url: publicUrl,
+            role: "departmentHead",
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "id" }
+        );
+      } catch (profileSyncError) {
+        console.log("Profiles avatar sync skipped:", profileSyncError);
+      }
 
       try {
         await supabase.from("moderator_profiles").upsert({
@@ -590,7 +586,6 @@ export default function DepartmentHeadProfile() {
     }
   };
 
-  // --- [DEPT PROFILE] Edit profile: save changes ---
   const saveProfileChanges = async () => {
     const cleanName = fullNameDraft.trim();
     const cleanEmail = emailDraft.trim();
@@ -651,14 +646,23 @@ export default function DepartmentHeadProfile() {
       setProfileInfo(nextProfileInfo);
       setUser(data?.user || user);
 
-      await syncOwnProfileRow({
-        userId: user?.id,
-        fullName: cleanName,
-        email: cleanEmail,
-        contactNumber: cleanContact || null,
-        department: displayDepartment,
-        avatarUrl: avatarUrl || null,
-      });
+      try {
+        await supabase.from(PROFILE_TABLE).upsert(
+          {
+            id: user?.id,
+            full_name: cleanName,
+            email: cleanEmail,
+            contact_number: cleanContact || null,
+            department: displayDepartment,
+            avatar_url: avatarUrl || null,
+            role: "moderator", // stored role in profiles
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "id" }
+        );
+      } catch (profileSyncError) {
+        console.log("Profiles profile sync skipped:", profileSyncError);
+      }
 
       try {
         await supabase.from("moderator_profiles").upsert({
@@ -699,7 +703,6 @@ export default function DepartmentHeadProfile() {
     }
   };
 
-  // --- [DEPT PROFILE] Change password ---
   const handleChangePassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
       notify("Password Required", "Please enter and confirm your password.");
@@ -751,7 +754,6 @@ export default function DepartmentHeadProfile() {
     }
   };
 
-  // --- [DEPT PROFILE] Push notifications toggle ---
   const handlePushToggle = async (value) => {
     if (!user?.id) {
       setPushEnabled(value);
@@ -784,9 +786,14 @@ export default function DepartmentHeadProfile() {
     }
   };
 
-  // --- [DEPT PROFILE] Settings handlers: privacy, logout ---
   const handlePrivacy = () => {
-    setPrivacyVisible(true);
+    notify(
+      "Privacy & Security",
+      "CitiSense protects department head accounts by allowing only authorized department heads to access assigned complaint records.\n\n" +
+        "Your profile information such as name, email, contact number, department, and profile photo is used for account identification and LGU complaint coordination.\n\n" +
+        "Your location permission may be used for map routing, pinned complaint navigation, and viewing your current location while handling assigned complaints.\n\n" +
+        "For security, keep your password private, use a strong password, and always log out when using a shared device."
+    );
   };
 
   const handleLogout = () => {
@@ -829,17 +836,15 @@ export default function DepartmentHeadProfile() {
     ]);
   };
 
-  // --- [DEPT PROFILE] Render ---
   if (!fontsLoaded && !cachedPage) {
     return <PageSkeleton variant="profile" />;
   }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor="rgba(247, 250, 246, 1)" />
+      <StatusBar barStyle="dark-content" backgroundColor={BG} />
 
       <View style={styles.mainContainer}>
-        {/* [DEPT PROFILE UI] Header: CitiSense logo */}
         <View style={styles.fixedHeader}>
           <View style={styles.logoRow}>
             <Image source={MAIN_LOGO} style={styles.mainLogoImage} />
@@ -850,19 +855,17 @@ export default function DepartmentHeadProfile() {
           </View>
         </View>
 
-        {/* [DEPT PROFILE UI] Scrollable profile content */}
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
-          {/* [DEPT PROFILE UI] Profile card: avatar, name, edit button */}
           <View style={styles.profileHeroCard}>
             <View style={styles.avatarOuter}>
               <View style={styles.avatarCircle}>
                 {avatarUrl ? (
                   <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
                 ) : (
-                  <Ionicons name="person" size={42} color="rgba(8, 122, 13, 1)" />
+                  <Ionicons name="person" size={42} color={GREEN} />
                 )}
               </View>
 
@@ -873,18 +876,21 @@ export default function DepartmentHeadProfile() {
                 disabled={uploadingAvatar}
               >
                 {uploadingAvatar ? (
-                  <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
+                  <ActivityIndicator size="small" color={WHITE} />
                 ) : (
-                  <Ionicons name="camera" size={15} color="rgba(255, 255, 255, 1)" />
+                  <Ionicons name="camera" size={15} color={WHITE} />
                 )}
               </TouchableOpacity>
             </View>
 
             <View style={styles.profileMainInfo}>
-              <Text style={styles.profileName} numberOfLines={2}>
+              <Text style={styles.profileName} numberOfLines={1}>
                 {displayName}
               </Text>
               <Text style={styles.profileRole}>Department Head</Text>
+              <Text style={styles.profileEmail} numberOfLines={1}>
+                {displayEmail}
+              </Text>
             </View>
 
             <TouchableOpacity
@@ -892,12 +898,11 @@ export default function DepartmentHeadProfile() {
               style={styles.editButton}
               onPress={openEditProfile}
             >
-              <Feather name="edit-2" size={15} color="rgba(8, 122, 13, 1)" />
+              <Feather name="edit-2" size={15} color={GREEN} />
               <Text style={styles.editButtonText}>Edit</Text>
             </TouchableOpacity>
           </View>
 
-          {/* [DEPT PROFILE UI] Account information rows */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Account Information</Text>
 
@@ -919,7 +924,6 @@ export default function DepartmentHeadProfile() {
             </View>
           </View>
 
-          {/* [DEPT PROFILE UI] Notifications settings */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Notifications</Text>
 
@@ -935,7 +939,6 @@ export default function DepartmentHeadProfile() {
             </View>
           </View>
 
-          {/* [DEPT PROFILE UI] Location services settings */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Location Services</Text>
 
@@ -951,14 +954,13 @@ export default function DepartmentHeadProfile() {
             </View>
           </View>
 
-          {/* [DEPT PROFILE UI] Settings list: password, audit logs, privacy */}
           <View style={styles.sectionBlock}>
             <Text style={styles.sectionTitle}>Settings</Text>
 
             <View style={styles.settingsCard}>
               <ActionRow
                 icon="lock"
-                iconColor="rgba(49, 90, 154, 1)"
+                iconColor={BLUE}
                 title="Change Password"
                 subtitle="Update your department head password."
                 onPress={() => setPasswordModalVisible(true)}
@@ -966,7 +968,7 @@ export default function DepartmentHeadProfile() {
 
               <ActionRow
                 icon="activity"
-                iconColor="rgba(49, 90, 154, 1)"
+                iconColor={BLUE}
                 title="Audit Logs"
                 subtitle="View your recent account activity."
                 onPress={() => setAuditLogsVisible(true)}
@@ -974,7 +976,7 @@ export default function DepartmentHeadProfile() {
 
               <ActionRow
                 icon="shield"
-                iconColor="rgba(8, 122, 13, 1)"
+                iconColor={GREEN}
                 title="Privacy & Security"
                 subtitle="Manage your account protection."
                 onPress={handlePrivacy}
@@ -983,215 +985,180 @@ export default function DepartmentHeadProfile() {
             </View>
           </View>
 
-          {/* [DEPT PROFILE UI] Log out button */}
           <TouchableOpacity
             activeOpacity={0.8}
             style={styles.logoutButton}
             onPress={handleLogout}
           >
-            <Ionicons name="log-out-outline" size={22} color="rgba(215, 25, 32, 1)" />
+            <Ionicons name="log-out-outline" size={22} color={RED} />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
         </ScrollView>
 
-        {/* [DEPT PROFILE UI] Edit profile modal */}
+
         <Modal
           visible={editModalVisible}
           animationType="slide"
           transparent
           onRequestClose={closeEditProfile}
         >
-          <View style={styles.modalOverlay}>
-            <Pressable
-              style={StyleSheet.absoluteFill}
-              onPress={Keyboard.dismiss}
-            />
-            <View
-              style={[styles.editSheet, { paddingBottom: sheetBottomPad }]}
-            >
-              <View style={styles.modalHandle} />
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+            <View style={styles.modalOverlay}>
+                <View style={styles.editSheet}>
+                  <View style={styles.modalHandle} />
 
-              <View style={styles.modalHeaderRow}>
-                <Text style={styles.modalTitle}>Edit Profile</Text>
+                  <View style={styles.modalHeaderRow}>
+                    <Text style={styles.modalTitle}>Edit Profile</Text>
 
-                <TouchableOpacity
-                  activeOpacity={0.75}
-                  style={styles.modalCloseButton}
-                  onPress={closeEditProfile}
-                >
-                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
-                </TouchableOpacity>
-              </View>
+                    <TouchableOpacity
+                      activeOpacity={0.75}
+                      style={styles.modalCloseButton}
+                      onPress={closeEditProfile}
+                    >
+                      <Feather name="x" size={21} color={TEXT} />
+                    </TouchableOpacity>
+                  </View>
 
-              <KeyboardAwareScrollView
-                modal
-                bottomOffset={24}
-                style={styles.editSheetScroll}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode={
-                  Platform.OS === "ios" ? "interactive" : "on-drag"
-                }
-                contentContainerStyle={styles.modalScrollContent}
-              >
-                <Text style={styles.inputLabel}>Full Name</Text>
-                <TextInput
-                  style={styles.input}
-                  value={fullNameDraft}
-                  onChangeText={setFullNameDraft}
-                  placeholder="Enter full name"
-                  placeholderTextColor="rgba(154, 154, 154, 1)"
-                />
+                  <KeyboardAwareScrollView
+                    modal
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.modalScrollContent}
+                  >
+                    <Text style={styles.inputLabel}>Full Name</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={fullNameDraft}
+                      onChangeText={setFullNameDraft}
+                      placeholder="Enter full name"
+                      placeholderTextColor="#9A9A9A"
+                    />
 
-                <Text style={styles.inputLabel}>Email Address</Text>
-                <TextInput
-                  style={styles.input}
-                  value={emailDraft}
-                  onChangeText={setEmailDraft}
-                  placeholder="Enter email address"
-                  placeholderTextColor="rgba(154, 154, 154, 1)"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
+                    <Text style={styles.inputLabel}>Email Address</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={emailDraft}
+                      onChangeText={setEmailDraft}
+                      placeholder="Enter email address"
+                      placeholderTextColor="#9A9A9A"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
 
-                <Text style={styles.inputLabel}>Contact Number</Text>
-                <TextInput
-                  style={styles.input}
-                  value={contactDraft}
-                  onChangeText={setContactDraft}
-                  placeholder="Enter contact number"
-                  placeholderTextColor="rgba(154, 154, 154, 1)"
-                  keyboardType="phone-pad"
-                />
+                    <Text style={styles.inputLabel}>Contact Number</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={contactDraft}
+                      onChangeText={setContactDraft}
+                      placeholder="Enter contact number"
+                      placeholderTextColor="#9A9A9A"
+                      keyboardType="phone-pad"
+                    />
 
-                <View style={styles.readOnlyInfoBox}>
-                  <Text style={styles.readOnlyLabel}>Department</Text>
-                  <Text style={styles.readOnlyValue}>{displayDepartment}</Text>
+                    <View style={styles.readOnlyInfoBox}>
+                      <Text style={styles.readOnlyLabel}>Department</Text>
+                      <Text style={styles.readOnlyValue}>
+                        {displayDepartment}
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={styles.saveButton}
+                      onPress={saveProfileChanges}
+                      disabled={savingProfile}
+                    >
+                      {savingProfile ? (
+                        <ActivityIndicator size="small" color={WHITE} />
+                      ) : (
+                        <Text style={styles.saveButtonText}>Save Changes</Text>
+                      )}
+                    </TouchableOpacity>
+                  </KeyboardAwareScrollView>
                 </View>
-
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  style={styles.saveButton}
-                  onPress={saveProfileChanges}
-                  disabled={savingProfile}
-                >
-                  {savingProfile ? (
-                    <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
-                  ) : (
-                    <Text style={styles.saveButtonText}>Save Changes</Text>
-                  )}
-                </TouchableOpacity>
-              </KeyboardAwareScrollView>
             </View>
-          </View>
+          </TouchableWithoutFeedback>
         </Modal>
 
-        {/* [DEPT PROFILE UI] Change password modal */}
         <Modal
           visible={passwordModalVisible}
           animationType="slide"
           transparent
           onRequestClose={closePasswordModal}
         >
-          <View style={styles.modalOverlay}>
-            <Pressable
-              style={StyleSheet.absoluteFill}
-              onPress={Keyboard.dismiss}
-            />
-            <View
-              style={[styles.passwordSheet, { paddingBottom: sheetBottomPad }]}
-            >
-              <View style={styles.modalHandle} />
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+            <View style={styles.modalOverlay}>
+                <View style={styles.passwordSheet}>
+                  <View style={styles.modalHandle} />
 
-              <View style={styles.modalHeaderRow}>
-                <Text style={styles.modalTitle}>Change Password</Text>
+                  <View style={styles.modalHeaderRow}>
+                    <Text style={styles.modalTitle}>Change Password</Text>
 
-                <TouchableOpacity
-                  activeOpacity={0.75}
-                  style={styles.modalCloseButton}
-                  onPress={closePasswordModal}
-                >
-                  <Feather name="x" size={21} color="rgba(23, 23, 23, 1)" />
-                </TouchableOpacity>
-              </View>
+                    <TouchableOpacity
+                      activeOpacity={0.75}
+                      style={styles.modalCloseButton}
+                      onPress={closePasswordModal}
+                    >
+                      <Feather name="x" size={21} color={TEXT} />
+                    </TouchableOpacity>
+                  </View>
 
-              <KeyboardAwareScrollView
-                modal
-                bottomOffset={24}
-                style={styles.editSheetScroll}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode={
-                  Platform.OS === "ios" ? "interactive" : "on-drag"
-                }
-                contentContainerStyle={styles.modalScrollContent}
-              >
-                <Text style={styles.inputLabel}>New Password</Text>
-                <TextInput
-                  style={styles.input}
-                  value={newPassword}
-                  onChangeText={setNewPassword}
-                  placeholder="Enter new password"
-                  placeholderTextColor="rgba(154, 154, 154, 1)"
-                  keyboardType="default"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  secureTextEntry
-                />
+                  <KeyboardAwareScrollView
+                    modal
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.modalScrollContent}
+                  >
+                  <Text style={styles.inputLabel}>New Password</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={newPassword}
+                    onChangeText={setNewPassword}
+                    placeholder="Enter new password"
+                    placeholderTextColor="#9A9A9A"
+                    secureTextEntry
+                  />
 
-                <Text style={styles.inputLabel}>Confirm Password</Text>
-                <TextInput
-                  style={styles.input}
-                  value={confirmPassword}
-                  onChangeText={setConfirmPassword}
-                  placeholder="Confirm new password"
-                  placeholderTextColor="rgba(154, 154, 154, 1)"
-                  keyboardType="default"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  secureTextEntry
-                />
+                  <Text style={styles.inputLabel}>Confirm Password</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    placeholder="Confirm new password"
+                    placeholderTextColor="#9A9A9A"
+                    secureTextEntry
+                  />
 
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  style={styles.saveButton}
-                  onPress={handleChangePassword}
-                  disabled={changingPassword}
-                >
-                  {changingPassword ? (
-                    <ActivityIndicator size="small" color="rgba(255, 255, 255, 1)" />
-                  ) : (
-                    <Text style={styles.saveButtonText}>Update Password</Text>
-                  )}
-                </TouchableOpacity>
-              </KeyboardAwareScrollView>
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    style={styles.saveButton}
+                    onPress={handleChangePassword}
+                    disabled={changingPassword}
+                  >
+                    {changingPassword ? (
+                      <ActivityIndicator size="small" color={WHITE} />
+                    ) : (
+                      <Text style={styles.saveButtonText}>Update Password</Text>
+                    )}
+                  </TouchableOpacity>
+                  </KeyboardAwareScrollView>
+                </View>
             </View>
-          </View>
+          </TouchableWithoutFeedback>
         </Modal>
 
-        {/* [DEPT PROFILE UI] Audit logs modal */}
         <AuditLogsModal
           visible={auditLogsVisible}
           onClose={() => setAuditLogsVisible(false)}
-        />
-
-        {/* [DEPT PROFILE UI] Privacy & security modal */}
-        <PrivacySecurityModal
-          visible={privacyVisible}
-          onClose={() => setPrivacyVisible(false)}
-          role="departmentHead"
         />
       </View>
     </SafeAreaView>
   );
 }
 
-// ===== [DEPT PROFILE] Subcomponents: InfoRow, SwitchRow, ActionRow =====
 function InfoRow({ icon, label, value, last }) {
   return (
     <View style={[styles.infoRow, last && styles.noBorder]}>
       <View style={styles.infoIconCircle}>
-        <Feather name={icon} size={15} color="rgba(8, 122, 13, 1)" />
+        <Feather name={icon} size={15} color={GREEN} />
       </View>
 
       <View style={styles.infoTextBox}>
@@ -1208,7 +1175,7 @@ function SwitchRow({ icon, label, description, value, onValueChange, last }) {
   return (
     <View style={[styles.settingRow, last && styles.noBorder]}>
       <View style={styles.settingIconCircle}>
-        <Feather name={icon} size={15} color="rgba(8, 122, 13, 1)" />
+        <Feather name={icon} size={15} color={GREEN} />
       </View>
 
       <View style={styles.settingTextBox}>
@@ -1219,9 +1186,9 @@ function SwitchRow({ icon, label, description, value, onValueChange, last }) {
       <Switch
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: "rgba(213, 218, 211, 1)", true: "rgba(191, 227, 181, 1)" }}
-        thumbColor={value ? "rgba(8, 122, 13, 1)" : "rgba(244, 244, 244, 1)"}
-        ios_backgroundColor="rgba(213, 218, 211, 1)"
+        trackColor={{ false: "#D5DAD3", true: "#BFE3B5" }}
+        thumbColor={value ? GREEN : "#F4F4F4"}
+        ios_backgroundColor="#D5DAD3"
       />
     </View>
   );
@@ -1234,7 +1201,7 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, last }) {
       style={[styles.settingRow, last && styles.noBorder]}
       onPress={onPress}
     >
-      <View style={[styles.settingIconCircle, { backgroundColor: "rgba(247, 250, 246, 1)" }]}>
+      <View style={[styles.settingIconCircle, { backgroundColor: "#F7FAF6" }]}>
         <Feather name={icon} size={15} color={iconColor} />
       </View>
 
@@ -1243,29 +1210,27 @@ function ActionRow({ icon, iconColor, title, subtitle, onPress, last }) {
         <Text style={styles.settingSubtitle}>{subtitle}</Text>
       </View>
 
-      <Feather name="chevron-right" size={20} color="rgba(111, 119, 111, 1)" />
+      <Feather name="chevron-right" size={20} color={MUTED} />
     </TouchableOpacity>
   );
 }
 
-// ===== [DEPT PROFILE] Styles =====
 const styles = StyleSheet.create({
-  // --- Layout & header ---
   safeArea: {
     flex: 1,
-    backgroundColor: "rgba(247, 250, 246, 1)",
+    backgroundColor: BG,
   },
 
   mainContainer: {
     flex: 1,
-    backgroundColor: "rgba(247, 250, 246, 1)",
+    backgroundColor: BG,
   },
 
   loader: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(247, 250, 246, 1)",
+    backgroundColor: BG,
   },
 
   fixedHeader: {
@@ -1296,12 +1261,12 @@ const styles = StyleSheet.create({
   logoText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 25,
-    color: "rgba(8, 122, 13, 1)",
+    color: GREEN,
     letterSpacing: 0.1,
   },
 
   logoTextLight: {
-    color: "rgba(109, 187, 63, 1)",
+    color: ACCENT_GREEN,
   },
 
   scrollContent: {
@@ -1310,17 +1275,15 @@ const styles = StyleSheet.create({
     paddingBottom: BOTTOM_NAV_CONTENT_INSET,
   },
 
-  // --- Profile card ---
   profileHeroCard: {
     borderRadius: 20,
-    backgroundColor: "rgba(9, 122, 14, 1)",
+    backgroundColor: GREEN,
     paddingHorizontal: 16,
     paddingVertical: 18,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 14,
-    position: "relative",
-    shadowColor: "rgba(0, 0, 0, 1)",
+    shadowColor: "#000000",
     shadowOpacity: 0.12,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 3 },
@@ -1342,7 +1305,7 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: "rgba(255, 255, 255, 1)",
+    backgroundColor: WHITE,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -1361,22 +1324,21 @@ const styles = StyleSheet.create({
     width: 25,
     height: 25,
     borderRadius: 13,
-    backgroundColor: "rgba(215, 25, 32, 1)",
+    backgroundColor: RED,
     borderWidth: 2,
-    borderColor: "rgba(255, 255, 255, 1)",
+    borderColor: WHITE,
     alignItems: "center",
     justifyContent: "center",
   },
 
   profileMainInfo: {
     flex: 1,
-    paddingRight: 70,
   },
 
   profileName: {
     fontFamily: "Poppins_700Bold",
     fontSize: 17,
-    color: "rgba(255, 255, 255, 1)",
+    color: WHITE,
     lineHeight: 22,
   },
 
@@ -1387,29 +1349,31 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
+  profileEmail: {
+    fontFamily: "Poppins_400Regular",
+    fontSize: 10.5,
+    color: "rgba(255,255,255,0.78)",
+    marginTop: 2,
+  },
+
   editButton: {
-    position: "absolute",
-    top: 12,
-    right: 12,
     minWidth: 58,
     height: 31,
     borderRadius: 16,
-    backgroundColor: "rgba(255, 255, 255, 1)",
+    backgroundColor: WHITE,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 9,
-    zIndex: 2,
   },
 
   editButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 10.5,
-    color: "rgba(8, 122, 13, 1)",
+    color: GREEN,
     marginLeft: 4,
   },
 
-  // --- Sections & info rows ---
   sectionBlock: {
     marginBottom: 15,
   },
@@ -1417,15 +1381,15 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: "rgba(8, 122, 13, 1)",
+    color: GREEN,
     marginBottom: 9,
   },
 
   infoCard: {
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: "rgba(226, 231, 224, 1)",
-    backgroundColor: "rgba(255, 255, 255, 1)",
+    borderColor: BORDER,
+    backgroundColor: WHITE,
     paddingHorizontal: 13,
     paddingVertical: 3,
   },
@@ -1435,14 +1399,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(237, 241, 235, 1)",
+    borderBottomColor: "#EDF1EB",
   },
 
   infoIconCircle: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: "rgba(234, 246, 228, 1)",
+    backgroundColor: LIGHT_GREEN,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -1455,22 +1419,21 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11.5,
-    color: "rgba(8, 122, 13, 1)",
+    color: GREEN,
   },
 
   infoValue: {
     fontFamily: "Poppins_400Regular",
     fontSize: 11.5,
-    color: "rgba(23, 23, 23, 1)",
+    color: TEXT,
     marginTop: 1,
   },
 
-  // --- Settings rows ---
   settingsCard: {
     borderRadius: 17,
     borderWidth: 1,
-    borderColor: "rgba(226, 231, 224, 1)",
-    backgroundColor: "rgba(255, 255, 255, 1)",
+    borderColor: BORDER,
+    backgroundColor: WHITE,
     paddingHorizontal: 13,
     paddingVertical: 3,
   },
@@ -1480,14 +1443,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(237, 241, 235, 1)",
+    borderBottomColor: "#EDF1EB",
   },
 
   settingIconCircle: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: "rgba(234, 246, 228, 1)",
+    backgroundColor: LIGHT_GREEN,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
@@ -1501,13 +1464,13 @@ const styles = StyleSheet.create({
   settingTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12.5,
-    color: "rgba(23, 23, 23, 1)",
+    color: TEXT,
   },
 
   settingSubtitle: {
     fontFamily: "Poppins_400Regular",
     fontSize: 10.3,
-    color: "rgba(111, 119, 111, 1)",
+    color: MUTED,
     marginTop: 1,
   },
 
@@ -1515,13 +1478,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
   },
 
-  // --- Log out ---
   logoutButton: {
     height: 50,
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "rgba(242, 196, 196, 1)",
-    backgroundColor: "rgba(255, 244, 244, 1)",
+    borderColor: "#F2C4C4",
+    backgroundColor: "#FFF4F4",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -1531,21 +1493,20 @@ const styles = StyleSheet.create({
   logoutText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 13,
-    color: "rgba(215, 25, 32, 1)",
+    color: RED,
     marginLeft: 8,
   },
 
-  // --- Legacy bottom nav ---
   bottomNav: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: Platform.OS === "ios" ? -38 : -32,
     height: Platform.OS === "ios" ? 108 : 100,
-    backgroundColor: "rgba(255, 255, 255, 1)",
+    backgroundColor: WHITE,
     borderTopWidth: 1,
-    borderTopColor: "rgba(226, 231, 224, 1)",
-    shadowColor: "rgba(0, 0, 0, 1)",
+    borderTopColor: BORDER,
+    shadowColor: "#000000",
     shadowOpacity: 0.16,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: -3 },
@@ -1580,9 +1541,9 @@ const styles = StyleSheet.create({
     minWidth: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: "rgba(215, 25, 32, 1)",
+    backgroundColor: RED,
     borderWidth: 1.5,
-    borderColor: "rgba(255, 255, 255, 1)",
+    borderColor: WHITE,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
@@ -1591,7 +1552,7 @@ const styles = StyleSheet.create({
   notificationNavBadgeText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 8.5,
-    color: "rgba(255, 255, 255, 1)",
+    color: WHITE,
     lineHeight: 11,
     textAlign: "center",
   },
@@ -1604,45 +1565,40 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 
-  // --- Modals & form inputs ---
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",
     justifyContent: "flex-end",
   },
 
-  editSheet: {
-    maxHeight: PROFILE_SHEET_MAX_HEIGHT,
+  keyboardView: {
     width: "100%",
+  },
+
+  editSheet: {
+    maxHeight: "90%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: "rgba(255, 255, 255, 1)",
+    backgroundColor: WHITE,
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
-    overflow: "hidden",
+    paddingBottom: Platform.OS === "ios" ? 28 : 18,
   },
 
   passwordSheet: {
-    maxHeight: PROFILE_SHEET_MAX_HEIGHT,
-    width: "100%",
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    backgroundColor: "rgba(255, 255, 255, 1)",
+    backgroundColor: WHITE,
     paddingHorizontal: H_PADDING,
     paddingTop: 10,
-    overflow: "hidden",
-  },
-
-  editSheetScroll: {
-    flexShrink: 1,
-    minHeight: 0,
+    paddingBottom: Platform.OS === "ios" ? 28 : 18,
   },
 
   modalHandle: {
     width: 44,
     height: 5,
     borderRadius: 5,
-    backgroundColor: "rgba(215, 215, 215, 1)",
+    backgroundColor: "#D7D7D7",
     alignSelf: "center",
     marginBottom: 14,
   },
@@ -1657,26 +1613,26 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontFamily: "Poppins_700Bold",
     fontSize: 18,
-    color: "rgba(8, 122, 13, 1)",
+    color: GREEN,
   },
 
   modalCloseButton: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: "rgba(247, 250, 246, 1)",
+    backgroundColor: BG,
     alignItems: "center",
     justifyContent: "center",
   },
 
   modalScrollContent: {
-    paddingBottom: 0,
+    paddingBottom: 12,
   },
 
   inputLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 12,
-    color: "rgba(8, 122, 13, 1)",
+    color: GREEN,
     marginBottom: 7,
   },
 
@@ -1684,13 +1640,13 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "rgba(226, 231, 224, 1)",
-    backgroundColor: "rgba(247, 250, 246, 1)",
+    borderColor: BORDER,
+    backgroundColor: BG,
     paddingHorizontal: 13,
     paddingVertical: 10,
     fontFamily: "Poppins_400Regular",
     fontSize: 12,
-    color: "rgba(23, 23, 23, 1)",
+    color: TEXT,
     marginBottom: 13,
   },
 
@@ -1698,8 +1654,8 @@ const styles = StyleSheet.create({
     minHeight: 54,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "rgba(191, 227, 181, 1)",
-    backgroundColor: "rgba(252, 255, 251, 1)",
+    borderColor: "#BFE3B5",
+    backgroundColor: "#FCFFFB",
     paddingHorizontal: 13,
     paddingVertical: 10,
     marginBottom: 13,
@@ -1708,20 +1664,20 @@ const styles = StyleSheet.create({
   readOnlyLabel: {
     fontFamily: "Poppins_700Bold",
     fontSize: 11,
-    color: "rgba(8, 122, 13, 1)",
+    color: GREEN,
   },
 
   readOnlyValue: {
     fontFamily: "Poppins_600SemiBold",
     fontSize: 12,
-    color: "rgba(23, 23, 23, 1)",
+    color: TEXT,
     marginTop: 2,
   },
 
   saveButton: {
     height: 50,
     borderRadius: 14,
-    backgroundColor: "rgba(8, 122, 13, 1)",
+    backgroundColor: GREEN,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 4,
@@ -1730,6 +1686,6 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontFamily: "Poppins_700Bold",
     fontSize: 14,
-    color: "rgba(255, 255, 255, 1)",
+    color: WHITE,
   },
 });
