@@ -136,11 +136,12 @@ Citizens can:
 - Validate resolved complaints
 - Provide feedback and supporting photo evidence
 
-### 🏢 Department Moderator
+### 🏢 Department Head
 
-Department Moderators can:
+Department Heads can:
 
 - View assigned complaints
+- View complaints on the map
 - Update complaint statuses
 - Reassign complaints to appropriate departments
 - Manage complaint resolution workflows
@@ -164,7 +165,7 @@ Administrators can:
 2. **AI verifies and classifies the complaint**
 3. **Complaint is assigned to the appropriate department**
 4. **AI determines complaint priority**
-5. **Department Moderator processes the complaint**
+5. **Department Head processes the complaint**
 6. **Citizen validates the resolution**
 7. **Admin reviews validation and confirms completion**
 
