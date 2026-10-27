@@ -29,65 +29,97 @@ This project aims to address common challenges faced by Local Government Units i
 
 ## ⚙️ Setup Instructions
 
+CitiSense is an Expo SDK 54 / React Native mobile app. Use the steps below to install and run it from the project source.
+
 ### Prerequisites
 
-Before running the project, ensure the following are installed:
+Install the following before setup:
 
-- **Node.js** (Latest LTS Version)
-- **npm** or **Yarn**
-- **Git**
-- **Expo CLI**
-- **Supabase Project Configuration**
+- **Node.js** (LTS, v20 or newer recommended)
+- **npm** (included with Node.js)
+- **Git** (optional, if cloning from a repository)
+- **Expo Go** on an Android phone, or Android Studio for a local emulator / native build
+- A `.env` file in the project root with the API keys listed below
 
-### Installation
+### 1. Open the Project Folder
 
-#### 1. Clone the Repository
+If you received the project on a flash drive:
+
+```bash
+cd CitiSense
+```
+
+If you are cloning from a repository:
 
 ```bash
 git clone <repository-url>
 cd CitiSense
 ```
 
-#### 2. Install Dependencies
+### 2. Install Dependencies
 
 ```bash
 npm install
 ```
 
-or
+This creates the `node_modules` folder. It is required every time you set up the project on a new computer.
 
-```bash
-yarn install
-```
+### 3. Configure Environment Variables
 
-#### 3. Configure Environment Variables
-
-Create a `.env` file in the project root:
+Create a `.env` file in the project root (same folder as `package.json`) with:
 
 ```env
-EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+EXPO_PUBLIC_MAPTILER_API_KEY=your_maptiler_api_key
+EXPO_PUBLIC_GEMINI_API_KEY=your_gemini_api_key
+EXPO_PUBLIC_DEEPGRAM_API_KEY=your_deepgram_api_key
+EXPO_PUBLIC_ROBOFLOW_API_KEY=your_roboflow_api_key
 ```
 
-#### 4. Start the Development Server
+What each key is for:
+
+| Variable | Used for |
+| --- | --- |
+| `EXPO_PUBLIC_MAPTILER_API_KEY` | Maps, geotagging, and static map previews |
+| `EXPO_PUBLIC_GEMINI_API_KEY` | AI complaint classification, prioritization, voice transcription, and resolution checks |
+| `EXPO_PUBLIC_DEEPGRAM_API_KEY` | Optional speech-to-text fallback |
+| `EXPO_PUBLIC_ROBOFLOW_API_KEY` | Privacy blurring on complaint photos |
+
+If a `.env` file was already included with the submission, keep it and skip this step.
+
+After changing `.env`, restart Metro with a cleared cache:
+
+```bash
+npx expo start -c
+```
+
+### 4. Start the Development Server
+
+```bash
+npm start
+```
+
+or
 
 ```bash
 npx expo start
 ```
 
-#### 5. Run the Application
+Then:
 
-**Android**
+- Scan the QR code with **Expo Go** on Android, or
+- Press `a` to open an Android emulator if Android Studio is installed
+
+### 5. Run a Native Android Build (Optional)
+
+Use this when you need a development build instead of Expo Go:
 
 ```bash
 npx expo run:android
 ```
 
-**iOS**
+### 6. Sign In
 
-```bash
-npx expo run:ios
-```
+Use the accounts in `CitiSense User Credentials.txt` (Admin, Department Head, and Citizen) on the login screen.
 
 ---
 
@@ -140,7 +172,7 @@ Administrators can:
 
 ## 🛠️ Tech Stack
 
-- **Frontend (Mobile):** React Native (Expo)
+- **Frontend (Mobile):** React Native (Expo SDK 54)
 - **Backend:** Supabase (PostgreSQL + Row-Level Security)
 - **Authentication:** Supabase Auth
 - **Storage:** Supabase Storage (complaint images and evidence)
