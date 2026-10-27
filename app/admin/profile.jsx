@@ -32,6 +32,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import KeyboardAwareScrollView from "../../components/KeyboardAwareScrollView";
 import AuditLogsModal from "../../components/AuditLogsModal";
 import PrivacySecurityModal from "../../components/PrivacySecurityModal";
+import SystemBackupModal, { BACKUP_API_CONFIGURED } from "../../components/SystemBackupModal";
 import SystemLogAnalysisModal from "../../components/SystemLogAnalysisModal";
 import { PageSkeleton } from "../../components/skeletons";
 import { writeAuditLog } from "../../lib/auditLogService";
@@ -222,12 +223,14 @@ export default function AdminProfile() {
   const [auditLogsVisible, setAuditLogsVisible] = useState(false);
   const [systemLogAnalysisVisible, setSystemLogAnalysisVisible] =
     useState(false);
+  const [systemBackupVisible, setSystemBackupVisible] = useState(false);
   const [privacyVisible, setPrivacyVisible] = useState(false);
 
   useHideBottomNav(
     editModalVisible ||
       passwordModalVisible ||
       systemLogAnalysisVisible ||
+      systemBackupVisible ||
       privacyVisible
   );
 
@@ -916,6 +919,16 @@ export default function AdminProfile() {
                 onPress={() => setSystemLogAnalysisVisible(true)}
               />
 
+              {BACKUP_API_CONFIGURED ? (
+                <ActionRow
+                  icon="database"
+                  iconColor="rgba(49, 90, 154, 1)"
+                  title="System Backup"
+                  subtitle="Nightly backups, recovery status, and downloads."
+                  onPress={() => setSystemBackupVisible(true)}
+                />
+              ) : null}
+
               <ActionRow
                 icon="shield"
                 iconColor="rgba(8, 122, 13, 1)"
@@ -1136,6 +1149,12 @@ export default function AdminProfile() {
         <SystemLogAnalysisModal
           visible={systemLogAnalysisVisible}
           onClose={() => setSystemLogAnalysisVisible(false)}
+        />
+
+        {/* [ADMIN PROFILE UI] System Backup modal */}
+        <SystemBackupModal
+          visible={systemBackupVisible}
+          onClose={() => setSystemBackupVisible(false)}
         />
 
         {/* [ADMIN PROFILE UI] Privacy & Security modal */}
